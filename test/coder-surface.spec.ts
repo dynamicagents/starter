@@ -235,3 +235,19 @@ describe("the container config", () => {
     expect(shape(a)).toEqual(shape(b));
   });
 });
+
+describe("what the main agent asks a person before doing", () => {
+  it("holds everything that publishes to GitHub, and nothing else", async () => {
+    // The coder is the agent that pushes, so it is the one that has to ask. An
+    // allowlist rename that dropped a rule would let a push through unasked.
+    const surface = await parent().mainAgentSurface({
+      session: { getCompactions: async () => [] } as never
+    });
+
+    expect(Object.keys(surface.toolApproval).sort()).toEqual([
+      "repo_open_pr",
+      "repo_pr_comment",
+      "repo_push"
+    ]);
+  });
+});

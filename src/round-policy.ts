@@ -1,7 +1,15 @@
 import type { AgentLimits } from "@dynamicagents/core";
-import { FINAL_REPLY_TOOL_NAME } from "@dynamicagents/core/agent";
+import {
+  ASK_USER_TOOL_NAME,
+  FINAL_REPLY_TOOL_NAME
+} from "@dynamicagents/core/agent";
 import { DELEGATE_TOOL_NAME } from "@dynamicagents/core/subtasks";
-import type { FinalRoundReason, RoundPolicy } from "@dynamicagents/core/round";
+import type {
+  ApprovalCall,
+  FinalRoundReason,
+  RoundPolicy,
+  TaskFailureKind
+} from "@dynamicagents/core/round";
 
 /**
  * The words a round agent says — the one part of the round loop core does not
@@ -15,11 +23,11 @@ import type { FinalRoundReason, RoundPolicy } from "@dynamicagents/core/round";
  * refusal `validateRecipe` makes about a subagent soul, and for the same reason:
  * no run should execute under an identity, or a contract, nobody chose.
  *
- * Shared by both round agents in this Worker (reactive and arc-player), which is
+ * Shared by every round agent in this Worker, which is
  * why it sits at the top level rather than in one of their directories — an agent
  * importing a *sibling's* module is what `npm run verify:isolation` fails on.
  * There is nothing agent-specific here: the contract is about how a round ends,
- * and both end the same way. What each agent is told about its *domain* is
+ * and every one ends the same way. What each agent is told about its *domain* is
  * declared by the plugin that owns it (`SubtaskTypeSpec.delegationGuidance`) and
  * appended by core, so no domain is named in this file.
  */
@@ -37,8 +45,8 @@ export function roundContract(ctx: {
 
 # Answering this request
 
-You are replying to the user yourself. You have two ways to end this round, and the
-choice is yours:
+You are replying to the user yourself. Two calls end this round with an outcome,
+and the choice between them is yours:
 
 **1. Answer directly.** Call the \`${FINAL_REPLY_TOOL_NAME}\` tool with your reply. Do
 this whenever the request is yours to answer — anything about this conversation,
@@ -54,7 +62,7 @@ then decide again: answer, or delegate once more.
 Do not delegate work you can simply do. Do not answer from thin air work that
 genuinely needs doing.
 
-**Every round must end in one of those two calls.** Prose on its own does not reach
+**Every round must end in a call.** Prose on its own does not reach
 the user and does not start any work — if you decide to do something, make the call
 that does it in the same turn rather than describing what you are about to do.
 
@@ -101,7 +109,7 @@ yours to use. Speak in your own voice — do not paste results verbatim, introdu
 them as "subtask output", or mention subtasks, subagents, or delegation. The user
 asked you.
 
-Then end the round the same two ways as any other, and the choice is still yours:
+Then end the round the same way as any other, and the choice is still yours:
 \`${FINAL_REPLY_TOOL_NAME}\` if what came back finishes the request,
 \`${DELEGATE_TOOL_NAME}\` if it does not. Results arriving is not itself a reason to
 answer. Anything the user asked for that is still undone — a later step of a plan
@@ -193,6 +201,65 @@ after this message, and saying otherwise leaves them waiting for something that 
 not coming.`;
 }
 
+/**
+ * What a round is told about where a person comes into it: a question the model
+ * asks, and a call a plugin holds for the person to approve.
+ *
+ * Every agent here takes both. Any of them can reach a point only the person can
+ * settle, and the coding agents' pushes are held for approval by the plugin that
+ * makes them. Appended to the round contract, so it opens on a blank line like the
+ * other prompt strings in this file.
+ */
+export const askGuidance = `
+
+## When only the person can tell you
+
+One more call ends a round: \`${ASK_USER_TOOL_NAME}\`, which puts a question to the
+person who made this request and waits for their answer. It is in the conversation
+when your next round starts, and you carry on from there.
+
+Ask when you cannot go on well without something only they can give you: a choice
+between options that would each change what you do, a fact that is not anywhere
+you can look, or a go-ahead for something they may not want. Do not ask what you
+can look up, work out, or reasonably assume — say what you assumed instead. Do not
+ask them to confirm a plan they already gave you. Ask one question with everything
+you need in it, and offer options when the possible answers are few.
+
+## Calls the person approves
+
+Some tools wait for the person's approval before they run. One that comes back
+declined was decided against: do not make that call again for this request. Say
+what you would have done, and carry on with the rest.`;
+
+/**
+ * What the person reads when a round holds calls for their approval. The plugin
+ * that gates a call words what the call does; this frames the calls as one
+ * decision, because a single Approve or Reject answers them all.
+ */
+export function approvalPrompt(calls: readonly ApprovalCall[]): string {
+  const lines = calls.map(
+    (call) => `• ${call.reason ?? `\`${call.toolName}\``}`
+  );
+  return `Before I go ahead, I need your approval for this:\n\n${lines.join("\n")}`;
+}
+
+/**
+ * What the user reads when a Task ends because a question it asked went
+ * unanswered. Nothing failed: the agent stopped rather than guess.
+ */
+export const UNANSWERED_COPY =
+  "I stopped here: I asked you a question and didn't hear back in time. Send the request again whenever you're ready.";
+
+/**
+ * Failure copy every round agent here shares: words for a question nobody
+ * answered, and `undefined` for everything else, which `runHandleTask` answers
+ * with `copy.taskFailed`. An agent with failures of its own to word handles those
+ * first and falls through to this — see `src/agents/coder/workflow.ts`.
+ */
+export function failureCopy(kind: TaskFailureKind): string | undefined {
+  return kind === "unanswered" ? UNANSWERED_COPY : undefined;
+}
+
 /** The round policy this Worker's delegating agents run under. */
 export const roundPolicy: RoundPolicy = {
   roundContract,
@@ -211,5 +278,9 @@ export const roundPolicy: RoundPolicy = {
     partialNote:
       "Some parts of this request could not be completed, so this answer covers " +
       "only what succeeded."
+  },
+  human: {
+    askGuidance,
+    approvalPrompt
   }
 };

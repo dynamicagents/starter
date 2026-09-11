@@ -1,7 +1,18 @@
 import { describe, it, expect } from "vitest";
-import { FINAL_REPLY_TOOL_NAME } from "@dynamicagents/core/agent";
+import {
+  ASK_USER_TOOL_NAME,
+  FINAL_REPLY_TOOL_NAME
+} from "@dynamicagents/core/agent";
 import { DELEGATE_TOOL_NAME } from "@dynamicagents/core/subtasks";
-import { finalRoundNote, roundContract, roundPolicy } from "@/round-policy";
+import {
+  approvalPrompt,
+  askGuidance,
+  failureCopy,
+  finalRoundNote,
+  roundContract,
+  roundPolicy,
+  UNANSWERED_COPY
+} from "@/round-policy";
 
 /**
  * The repo-owned half of the round loop: the words, not the mechanism.
@@ -98,5 +109,47 @@ describe("roundPolicy", () => {
     expect(roundPolicy.copy.taskFailed.length).toBeGreaterThan(0);
     expect(roundPolicy.copy.recoveredReply.length).toBeGreaterThan(0);
     expect(roundPolicy.copy.partialNote.length).toBeGreaterThan(0);
+  });
+});
+
+describe("where the person comes in", () => {
+  it("does not tell the model its two endings are the only ones", () => {
+    // `ask_user` ends a round too wherever it is offered, and every agent here
+    // offers it, so a contract counting two calls would be false.
+    const contract = roundContract({ typeKeys: ["general"], maxSubtasks: 8 });
+    expect(contract).not.toContain("two ways to end this round");
+    expect(contract).not.toContain("one of those two calls");
+    expect(askGuidance).toContain(ASK_USER_TOOL_NAME);
+  });
+
+  it("tells the model not to make a declined call again", () => {
+    expect(askGuidance).toContain("do not make that call again");
+  });
+
+  it("frames held calls as one decision, in each gating plugin's words", () => {
+    const prompt = approvalPrompt([
+      {
+        toolName: "repo_push",
+        input: {},
+        reason: "Push the branch `fix` of web to its remote."
+      },
+      { toolName: "repo_pr_comment", input: {} }
+    ]);
+
+    expect(prompt).toContain("Push the branch `fix` of web to its remote.");
+    // A rule that gave no words still names the call, so the person knows what
+    // they are allowing.
+    expect(prompt).toContain("repo_pr_comment");
+  });
+
+  it("words a question that went unanswered, and leaves the rest to the policy", () => {
+    expect(failureCopy("unanswered")).toBe(UNANSWERED_COPY);
+    expect(failureCopy("exhausted")).toBeUndefined();
+    expect(failureCopy("credential")).toBeUndefined();
+  });
+
+  it("gives the round agents the person's part of the round", () => {
+    expect(roundPolicy.human?.askGuidance).toBe(askGuidance);
+    expect(roundPolicy.human?.approvalPrompt).toBe(approvalPrompt);
   });
 });

@@ -32,22 +32,29 @@ import type { TriageTuning } from "@dynamicagents/plugins/triage";
  * model calls a control tool, and one that answers in prose instead burns the
  * whole budget reaching no ending.
  *
- * The fallback is a **different vendor and family**, deliberately. What makes a
- * primary throw — an outage, a rate limit, a deprecation, a bad deploy of one
- * vendor's serving stack — is correlated within a family, so a same-family
- * fallback is a retry wearing a costume. Core refuses an identical pair outright.
+ * The fallback here is the primary's **full-size sibling**, not another vendor
+ * (`PROACTIVE_CONFIG` replaces it with its own), and that is a trade. It buys
+ * depth: a round the flash model failed to hold together is retried on a
+ * stronger model. It gives up independence: what makes a primary throw — an
+ * outage, a rate limit, a deprecation, a bad deploy of one vendor's serving
+ * stack — is correlated within a family and takes both down together. Core
+ * refuses only an identical pair; if a vendor-wide failure costs more here than
+ * a weaker second attempt, point the fallback at another family.
  *
  * Both must support function calling and tolerate a long system prompt. After
  * changing either, re-read `mainAgentLimits.maxTurns`: a model needing more steps
  * to reach an ending spends the same budget faster.
  */
 const MODEL = {
-  chatModelId: "@cf/zai-org/glm-5.2",
-  fallbackChatModelId: "@cf/moonshotai/kimi-k2.7-code",
+  chatModelId: "@cf/zai-org/glm-5.3-flash",
+  fallbackChatModelId: "@cf/zai-org/glm-5.3",
   /** AI Gateway slug; `"default"` auto-provisions on first request. */
   aiGatewayId: "default",
-  maxOutputTokens: 16_384,
-  reasoningEffort: "medium"
+  // Generous, and coupled to `reasoningEffort`: reasoning is spent against this
+  // before the tool call that ends a round, and a coding round writes a file and
+  // a test on top of it. A truncated round or patch reads as a finished one.
+  maxOutputTokens: 32_000,
+  reasoningEffort: "high"
 } as const;
 
 /**
@@ -92,31 +99,6 @@ export const ARC_PLAYER_CONFIG: CoreConfigOverrides = {
 };
 
 /**
- * The coder's models — a distinct pair from the shared `MODEL` above.
- *
- * Same provider and same primary as every other agent here, so what this block
- * actually expresses is one difference: **a much larger output ceiling**. A
- * coding round writes a file and a test in the same turn, and a truncated patch
- * reads as a finished one, so 32k rather than reactive's 16k. Everything else
- * is deliberately the house default, and the pair is chosen on the same grounds
- * as `MODEL` — read that first.
- *
- * Do not point this at a Claude model. Reaching one on a subscription
- * credential is what `claude-coder` exists for and needs a whole container to
- * do safely; see `src/agents/claude-coder/agent.ts`.
- */
-const CODER_MODEL = {
-  chatModelId: "@cf/zai-org/glm-5.2",
-  fallbackChatModelId: "@cf/moonshotai/kimi-k2.7-code",
-  /** AI Gateway slug; `"default"` auto-provisions on first request. */
-  aiGatewayId: "default",
-  // Generous: a round that writes a file and a test spends output tokens on both,
-  // and a truncated patch reads as a finished one.
-  maxOutputTokens: 32_000,
-  reasoningEffort: "high"
-} as const;
-
-/**
  * The coder: long rounds, few subtasks, and a real container underneath.
  *
  * Every budget here is larger than reactive's except `maxSubtasks`, and that
@@ -131,9 +113,13 @@ const CODER_MODEL = {
  * sequence of rounds against one checkout, so what the round before last found —
  * a failing test, a refused clone, a missing manifest — is still true, and
  * rediscovering it costs a container round trip rather than a token.
+ *
+ * The model is the shared `MODEL`. Do not point it at a Claude model: reaching
+ * one on a subscription credential is what `claude-coder` exists for and needs
+ * a whole container to do safely; see `src/agents/claude-coder/agent.ts`.
  */
 export const CODER_CONFIG: CoreConfigOverrides = {
-  model: CODER_MODEL,
+  model: MODEL,
   mainAgentLimits: { maxTurns: 60, maxWallMs: 3 * 60 * 60_000 },
   subagentLimits: { maxTurns: 80, maxWallMs: 90 * 60_000 },
   toolOutputWindow: 6,

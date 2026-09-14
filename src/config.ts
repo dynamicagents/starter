@@ -32,22 +32,25 @@ import type { TriageTuning } from "@dynamicagents/plugins/triage";
  * model calls a control tool, and one that answers in prose instead burns the
  * whole budget reaching no ending.
  *
- * The fallback is a **different vendor and family**, deliberately. What makes a
- * primary throw — an outage, a rate limit, a deprecation, a bad deploy of one
- * vendor's serving stack — is correlated within a family, so a same-family
- * fallback is a retry wearing a costume. Core refuses an identical pair outright.
+ * The fallback is the primary's **full-size sibling**, not another vendor, and
+ * that is a trade. It buys depth: a round the flash model failed to hold
+ * together is retried on a stronger model. It gives up independence: what makes
+ * a primary throw — an outage, a rate limit, a deprecation, a bad deploy of one
+ * vendor's serving stack — is correlated within a family and takes both down
+ * together. Core refuses only an identical pair; if a vendor-wide failure costs
+ * more here than a weaker second attempt, point the fallback at another family.
  *
  * Both must support function calling and tolerate a long system prompt. After
  * changing either, re-read `mainAgentLimits.maxTurns`: a model needing more steps
  * to reach an ending spends the same budget faster.
  */
 const MODEL = {
-  chatModelId: "@cf/zai-org/glm-5.2",
-  fallbackChatModelId: "@cf/moonshotai/kimi-k2.7-code",
+  chatModelId: "@cf/zai-org/glm-5.3-flash",
+  fallbackChatModelId: "@cf/zai-org/glm-5.3",
   /** AI Gateway slug; `"default"` auto-provisions on first request. */
   aiGatewayId: "default",
   maxOutputTokens: 16_384,
-  reasoningEffort: "medium"
+  reasoningEffort: "high"
 } as const;
 
 /**
@@ -106,8 +109,8 @@ export const ARC_PLAYER_CONFIG: CoreConfigOverrides = {
  * do safely; see `src/agents/claude-coder/agent.ts`.
  */
 const CODER_MODEL = {
-  chatModelId: "@cf/zai-org/glm-5.2",
-  fallbackChatModelId: "@cf/moonshotai/kimi-k2.7-code",
+  chatModelId: "@cf/zai-org/glm-5.3-flash",
+  fallbackChatModelId: "@cf/zai-org/glm-5.3",
   /** AI Gateway slug; `"default"` auto-provisions on first request. */
   aiGatewayId: "default",
   // Generous: a round that writes a file and a test spends output tokens on both,

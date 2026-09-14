@@ -149,7 +149,10 @@ describe("where the person comes in", () => {
   });
 
   it("gives the round agents the person's part of the round", () => {
-    expect(roundPolicy.human?.askGuidance).toBe(askGuidance);
-    expect(roundPolicy.human?.approvalPrompt).toBe(approvalPrompt);
+    // Asking is not an agent setting: the contract carries when to ask, and the
+    // copy carries what the person reads for an approval.
+    const contract = roundContract({ typeKeys: ["general"], maxSubtasks: 8 });
+    expect(contract.endsWith(askGuidance)).toBe(true);
+    expect(roundPolicy.copy.approvalPrompt).toBe(approvalPrompt);
   });
 });

@@ -34,7 +34,7 @@ import type {
 
 /**
  * The round contract: how a round ends, and what `delegate` takes. True of every
- * request.
+ * request. It ends with {@link askGuidance}.
  */
 export function roundContract(ctx: {
   typeKeys: readonly string[];
@@ -131,7 +131,7 @@ There are two ways to actually do it, and you must pick one before replying:
 If some work failed or was skipped, say plainly what you could not do, in one
 short sentence, without diagnostics or blame — then give them everything you did
 manage. Never present a partial answer as complete, and never invent a result for
-work that failed.`;
+work that failed.${askGuidance}`;
 }
 
 /**
@@ -205,10 +205,11 @@ not coming.`;
  * What a round is told about where a person comes into it: a question the model
  * asks, and a call a plugin holds for the person to approve.
  *
- * Every agent here takes both. Any of them can reach a point only the person can
- * settle, and the coding agents' pushes are held for approval by the plugin that
- * makes them. Appended to the round contract, so it opens on a blank line like the
- * other prompt strings in this file.
+ * Every round agent takes both — every gatekeeper can put either in front of a
+ * person. Any of them can reach a point only the person can settle, and the coding
+ * agents' pushes are held for approval by the plugin that makes them. The last
+ * part of {@link roundContract}, so it opens on a blank line like the other prompt
+ * strings in this file.
  */
 export const askGuidance = `
 
@@ -277,10 +278,7 @@ export const roundPolicy: RoundPolicy = {
     /** Appended when a deterministic join has to disclose gaps. */
     partialNote:
       "Some parts of this request could not be completed, so this answer covers " +
-      "only what succeeded."
-  },
-  human: {
-    askGuidance,
+      "only what succeeded.",
     approvalPrompt
   }
 };

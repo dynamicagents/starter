@@ -122,6 +122,18 @@ describe("where the person comes in", () => {
     expect(askGuidance).toContain(ASK_USER_TOOL_NAME);
   });
 
+  it("keeps asking open once results have come back", () => {
+    // Returned work is exactly where a choice only the person can make shows up,
+    // and a section naming only answering and delegating steers the model away
+    // from asking there.
+    const contract = roundContract({ typeKeys: ["general"], maxSubtasks: 8 });
+    const afterResults = contract.slice(
+      contract.indexOf("## Using results that have come back"),
+      contract.indexOf("**Announcing is not doing.**")
+    );
+    expect(afterResults).toContain(ASK_USER_TOOL_NAME);
+  });
+
   it("tells the model not to make a declined call again", () => {
     expect(askGuidance).toContain("do not make that call again");
   });

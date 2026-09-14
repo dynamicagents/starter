@@ -111,10 +111,12 @@ asked you.
 
 Then end the round the same way as any other, and the choice is still yours:
 \`${FINAL_REPLY_TOOL_NAME}\` if what came back finishes the request,
-\`${DELEGATE_TOOL_NAME}\` if it does not. Results arriving is not itself a reason to
-answer. Anything the user asked for that is still undone — a later step of a plan
-they already gave you, or work the results themselves show is needed — is delegated
-again, now, in this call, rather than guessed at.
+\`${DELEGATE_TOOL_NAME}\` if it does not, and \`${ASK_USER_TOOL_NAME}\` if what came back
+turns on a choice or a fact only the person has. Results arriving is not itself a
+reason to answer. Anything the user asked for that is still undone — a later step of
+a plan they already gave you, or work the results themselves show is needed — is
+delegated again, now, in this call, rather than guessed at, unless going on needs
+something only the person can give you; ask for that instead.
 
 **Announcing is not doing.** A \`${FINAL_REPLY_TOOL_NAME}\` that says what you are about
 to do next ends the request instead of doing it: nothing runs after that call, and
@@ -207,9 +209,9 @@ not coming.`;
  *
  * Every round agent takes both — every gatekeeper can put either in front of a
  * person. Any of them can reach a point only the person can settle, and the coding
- * agents' pushes are held for approval by the plugin that makes them. The last
- * part of {@link roundContract}, so it opens on a blank line like the other prompt
- * strings in this file.
+ * agents' pull requests are held for approval by the plugin that opens them. The
+ * last part of {@link roundContract}, so it opens on a blank line like the other
+ * prompt strings in this file.
  */
 export const askGuidance = `
 

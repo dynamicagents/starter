@@ -235,3 +235,16 @@ describe("the container config", () => {
     expect(shape(a)).toEqual(shape(b));
   });
 });
+
+describe("what the main agent asks a person before doing", () => {
+  it("holds opening a pull request, and nothing else", async () => {
+    // The coder is the agent that opens pull requests, so it is the one that has
+    // to ask. A rename that dropped the rule would let one through unasked, and a
+    // rule added for a push or a comment would stop a round that should not wait.
+    const surface = await parent().mainAgentSurface({
+      session: { getCompactions: async () => [] } as never
+    });
+
+    expect(Object.keys(surface.toolApproval)).toEqual(["repo_open_pr"]);
+  });
+});

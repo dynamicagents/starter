@@ -8,7 +8,7 @@ import {
   type TaskVerdict
 } from "@dynamicagents/core/round";
 import { CODER_CONFIG } from "@/config";
-import { roundPolicy } from "@/round-policy";
+import { failureCopy, roundPolicy } from "@/round-policy";
 import { coder } from "./definition";
 
 /**
@@ -101,9 +101,11 @@ export class CoderWorkflow extends WorkflowEntrypoint<Env, HandleTaskParams> {
       // were tried and could not do it, which is a thing that happened to one
       // request rather than a thing an operator can fix, and
       // `roundPolicy.copy.taskFailed` already says it — so it takes the
-      // `undefined` fallback rather than a worse paraphrase.
+      // `undefined` fallback rather than a worse paraphrase. `unanswered` takes
+      // the words every round agent here shares.
       failureCopy: (kind, detail) => {
-        if (kind === "exhausted") return undefined;
+        if (kind === "exhausted" || kind === "unanswered")
+          return failureCopy(kind);
         console.error("[coder] credential refused", {
           taskId: event.payload.taskId,
           kind,

@@ -34,8 +34,8 @@
     "@a2a-js/sdk": "^1.1.0",
     "@cloudflare/computer": "^0.2.1",
     "@cloudflare/shell": "0.4.3",
-    "@dynamicagents/core": "git+https://github.com/dynamicagents/core.git#next",
-    "@dynamicagents/plugins": "git+https://github.com/dynamicagents/plugins.git#next",
+    "@dynamicagents/core": "^0.11.0",
+    "@dynamicagents/plugins": "^0.11.0",
     "@platformatic/vfs": "^0.4.0",
     "agents": "^0.22.0",
     "ai": "^7.0.93",
@@ -60,8 +60,6 @@
     "node": ">=24"
   },
   "allowScripts": {
-    "@dynamicagents/core": true,
-    "@dynamicagents/plugins": true,
     "esbuild": false,
     "fsevents": false,
     "sharp": false,

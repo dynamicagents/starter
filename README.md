@@ -123,7 +123,7 @@ are defaults, and both are options on `createA2AWorker`:
 ```ts
 createA2AWorker<Env>({
   manifest: hostManifest,
-  tenants: { … },
+  agents: [ … ],
   rpcPath: "/rpc",                     // default "/a2a"
   jwksPath: "/.well-known/keys.json"   // default "/.well-known/jwks.json"
 });

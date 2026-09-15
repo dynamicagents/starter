@@ -67,9 +67,12 @@ Register each agent with your gatekeeper using the **same endpoint** and its own
 live](#where-the-endpoints-live). Register whatever path this deployment actually serves.
 
 > **The default models need a paid Workers plan**, or prepaid AI Gateway credits. Every
-> Workers AI agent runs on the models `MODEL` names in [`src/config.ts`](src/config.ts),
-> and they are not served on Workers Free. On the free tier, point its `chatModelId` and
-> `fallbackChatModelId` at models that are, and that support function calling.
+> Workers AI agent takes its models from `MODEL` in [`src/config.ts`](src/config.ts),
+> and those are not served on Workers Free. On the free tier, point `MODEL`'s
+> `chatModelId` and `fallbackChatModelId` at models that are, and that support function
+> calling. Then check `PROACTIVE_CONFIG` in the same file: it sets its own
+> `fallbackChatModelId` over `MODEL`'s, and core refuses a fallback identical to the
+> primary.
 
 > **Browser Rendering needs a paid Workers plan.** On the free tier, remove `browser()`
 > from the agents' `plugins.ts` and the `browser` binding from `wrangler.jsonc`.

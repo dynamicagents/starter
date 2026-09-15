@@ -1,9 +1,4 @@
-import type {
-  LanguageModel,
-  PrepareStepFunction,
-  StopCondition,
-  ToolSet
-} from "ai";
+import type { PrepareStepFunction, StopCondition, ToolSet } from "ai";
 import { generateText, isStepCount } from "ai";
 import type { SessionMessage } from "agents/experimental/memory/session";
 import {
@@ -11,6 +6,7 @@ import {
   isTransientAiError,
   sessionMessage,
   toModelMessages,
+  withFallback,
   type ModelPair,
   type OnContent,
   type SessionLike
@@ -108,11 +104,12 @@ export interface RunTurnArgs {
 }
 
 /**
- * Run a single agent turn against the DO's continuous Session: a Workers-AI
- * `generateText` tool loop over the history (primary → fallback model on any
- * error), persisting the assistant reply and returning its text. The inbound text
- * keeps its `<turn>` provenance wrapper verbatim for the model and for recall to
- * read.
+ * Run a single agent turn against the DO's continuous Session: one `generateText`
+ * tool loop over the history, on the model pair as a single model — a step the
+ * primary cannot take is taken by the fallback, keeping everything the turn has
+ * already done (see `withFallback` in `@dynamicagents/core/agent`). Persists the
+ * assistant reply and returns its text. The inbound text keeps its `<turn>`
+ * provenance wrapper verbatim for the model and for recall to read.
  *
  * **Never throws**: a transient (capacity/timeout) failure resolves to a friendly
  * "try again" message, an unexpected failure to `unexpectedReply`, so the DO's
@@ -128,6 +125,9 @@ export async function runTurn(args: RunTurnArgs): Promise<TurnOutcome> {
     maxSteps,
     onContent
   } = args;
+  // Who a log line is about. The pair moves it when the fallback takes a step,
+  // and again when it reports a failure, since the error it reports may be
+  // either slot's.
   let modelId = models.primaryId();
 
   try {
@@ -140,8 +140,8 @@ export async function runTurn(args: RunTurnArgs): Promise<TurnOutcome> {
     // Whether the agent has streamed any user-facing content this turn. Flipped
     // by the tracked `onContent` below and read live by `prepareStep`/`stopWhen`.
     // It is the single signal behind `no_reply`: available until we speak, then
-    // withdrawn. Turn-level (not per attempt), so a primary→fallback re-run after
-    // the primary streamed inherits it and the fallback cannot go silent.
+    // withdrawn. Read per step rather than per model, so a fallback that takes
+    // over after the primary spoke is bound by it and cannot go silent.
     let repliedAny = false;
     const tracked: OnContent | undefined = onContent
       ? async (content, i) => {
@@ -175,49 +175,39 @@ export async function runTurn(args: RunTurnArgs): Promise<TurnOutcome> {
         ? { activeTools: withoutNoReply, instructions }
         : { instructions: instructions + NO_REPLY_GUIDANCE };
 
-    // One attempt against one model. Built per call rather than shared so each
-    // attempt gets a fresh content handler: the 0-based stepIndex counter resets,
-    // a primary→fallback re-run reuses the same index per position, and the
-    // gatekeeper dedupes by id.
-    //
-    // `no_reply` is passed as a suppressed tool: a step that calls it ends the
-    // turn with no reply, so text the model wrote alongside it must not leak out
-    // as a `working` push — which would also mark us as having spoken. This is
-    // the only place it can be caught, since the SDK fires the step callback
-    // *before* it evaluates `stopWhen`.
-    const attempt = (model: LanguageModel) =>
-      generateText({
-        model,
-        instructions,
-        messages: toModelMessages(history),
-        tools,
-        stopWhen,
-        prepareStep,
-        // We do our own primary → fallback recovery below, so disable the SDK's
-        // per-model exponential-backoff retries — they'd only add latency on a
-        // hard failure and duplicate our fallback.
-        maxRetries: 0,
-        onStepEnd: tracked
-          ? buildIntermediateContentHandler(tracked, [NO_REPLY_TOOL_NAME])
-          : undefined
-      });
-
-    let result: Awaited<ReturnType<typeof attempt>>;
-    try {
-      result = await attempt(models.primary());
-    } catch (primaryErr) {
-      // The fallback re-runs the whole turn, but `repliedAny` is turn-level and
-      // survives the re-run: if the primary already streamed a `working` push,
-      // the fallback inherits `repliedAny === true` and cannot go silent, so it
-      // must deliver a final reply. If nothing had streamed yet, the fallback is
-      // free to decline just as the primary was.
-      console.warn(
-        "[agent-loop] AI error on primary model, retrying with fallback",
-        { model: modelId, error: String(primaryErr) }
-      );
-      modelId = models.fallbackId();
-      result = await attempt(models.fallback());
-    }
+    const result = await generateText({
+      // No ladder here: a failed call is the pair's to recover, inside the call,
+      // so step indices run on across the swap and nothing is streamed twice.
+      model: withFallback(models, {
+        onFallback: ({ modelId: failed, error }) => {
+          modelId = models.fallbackId();
+          console.warn(
+            "[agent-loop] model call failed, trying the other slot",
+            {
+              model: failed,
+              error: String(error)
+            }
+          );
+        },
+        onFailure: ({ modelId: failed }) => {
+          modelId = failed;
+        }
+      })(),
+      instructions,
+      messages: toModelMessages(history),
+      tools,
+      stopWhen,
+      prepareStep,
+      // `no_reply` is passed as a suppressed tool: a step that calls it ends the
+      // turn with no reply, so text the model wrote alongside it must not leak
+      // out as a `working` push — which would also mark us as having spoken.
+      // This is the only place it can be caught, since the SDK fires the step
+      // callback *before* it evaluates `stopWhen`.
+      onStepEnd: tracked
+        ? buildIntermediateContentHandler(tracked, [NO_REPLY_TOOL_NAME])
+        : undefined
+    });
+    modelId = result.finalStep.response.modelId;
 
     // Before the empty-text check below, which a no-reply turn would otherwise
     // trip: its step is `finishReason:"tool-calls"` with (usually) no text, and

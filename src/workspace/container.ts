@@ -1,7 +1,30 @@
-import { MAX_TOOL_CALL_MS } from "@dynamicagents/core";
+import { MAX_TOOL_CALL_MS, TOOL_CALL_GRACE_MS } from "@dynamicagents/core";
 import type { ComputerConfig } from "@dynamicagents/plugins/computer";
 import type { WorkspaceObjectBase } from "./object";
 import { WORKSPACE_DIR } from "./object";
+
+/**
+ * How long `sb_exec` waits on an install in flight before running the command
+ * anyway. See `installGateMs` below for why it is above the plugin's default.
+ */
+const INSTALL_GATE_MS = 180_000;
+
+/**
+ * What one container command may run for — derived, because the install gate and
+ * the command share a single tool call, and core aborts that call's signal
+ * `TOOL_CALL_GRACE_MS` short of `MAX_TOOL_CALL_MS` from its start. Core's
+ * `MAX_TOOL_CALL_MS` explains what that ceiling protects, and `TOOL_CALL_GRACE_MS`
+ * why the signal comes first.
+ *
+ * Staying under the signal is what keeps the container's own kill the one that
+ * lands, and the difference is what the model gets back: the container's kill
+ * returns every line the command wrote, while `sb_exec` stopping at the signal
+ * returns only that it stopped. The margin covers the Worker-side work around the
+ * command — opening the workspace, the gate's last read, starting the process — so
+ * the two cannot race at the boundary. It is sized generously rather than measured.
+ */
+const COMMAND_TIMEOUT_MS =
+  MAX_TOOL_CALL_MS - TOOL_CALL_GRACE_MS - INSTALL_GATE_MS - 15_000;
 
 /**
  * The container settings every path into a workspace shares.
@@ -54,30 +77,21 @@ export function workspaceContainer(
      * short, report "nothing was run — call again in a moment", and spend a turn
      * on it.
      *
-     * Three minutes covers a measured install with room, and stays far inside both
-     * `MAX_TOOL_CALL_MS` and `CHUNK_SOFT_MS` — the wait happens inside one
-     * `sb_exec`, so those are the ceilings that matter.
+     * Three minutes covers a measured install with room. It is not free: the wait
+     * happens inside the same tool call as the command, so every second of it
+     * comes out of {@link COMMAND_TIMEOUT_MS}.
      */
-    installGateMs: 180_000,
+    installGateMs: INSTALL_GATE_MS,
     /**
-     * Stated rather than defaulted, because it is half of an invariant that spans
-     * two packages and used to be enforced by neither.
-     *
-     * `CHUNK_SOFT_MS` is a *soft* deadline checked between turns, so the chunk a
-     * command runs in can overrun by however long that command takes. Core sizes
-     * the headroom under its step timeout against `MAX_TOOL_CALL_MS` — and can
-     * only do that if the tools a host installs actually honour it. Core installs
-     * no tools, so nothing but this line makes that true here.
-     *
-     * The plugin's own default happens to be the same ten minutes today. Writing
-     * it out means a future change to either number is caught by the assertion in
-     * core's `platform.spec.ts` rather than by a `WorkflowTimeoutError` in
-     * production, which is how the previous version of this was found.
+     * Stated rather than defaulted, because it is one side of an invariant held
+     * with core's tool deadline and the computer plugin's install gate. See
+     * {@link COMMAND_TIMEOUT_MS} for why it sits below the call's signal rather
+     * than at `MAX_TOOL_CALL_MS`.
      *
      * Note the other end of the same command: `CONTAINER_IDLE_MS` in `./object.ts`
      * must stay above this, or the idle sweeper destroys the container out from
      * under a command still running in it.
      */
-    timeoutMs: MAX_TOOL_CALL_MS
+    timeoutMs: COMMAND_TIMEOUT_MS
   };
 }

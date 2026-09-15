@@ -105,6 +105,31 @@ repo is always briefly behind. `PLUGIN_CONTRACT_VERSION` is asserted at DO start
 a skew fails with a sentence naming the plugin rather than a structural-type error
 several frames away.
 
+### The branches, and what each installs
+
+This repo is not versioned and publishes nothing, but it still has a released line:
+**`main` is what a fork builds.** It pins published versions of core and plugins, and
+nothing on it may depend on a commit that is not released. Development lands on
+`next`, by squash-merged PR.
+
+**`next` pins published versions too, by default.** A change that needs core or
+plugins work not yet published may point `next` at their `main` by git ref for as long
+as it needs to, which is how a contract change is exercised end-to-end before any of it
+ships. The ref installs only because those repos carry a `prepare` that builds and
+because `allowScripts` here lets npm run it — drop either and every subpath resolves
+to a missing file. npm pins the ref to a SHA in the lockfile, so a merge upstream does
+not reach this repo until someone reinstalls; a plain reinstall of the lockfile keeps
+the old commit.
+
+**A release is a PR from `next` into `main`, merged with a merge commit.** Before it,
+once core and plugins are published, a PR into `next` pins the new versions and removes
+any git ref; Test fails a PR into `main` that still names one. Nothing reaches `main`
+any other way, a fix included, so `main` only ever gains merges of `next` and a release
+never needs merging back.
+
+Use `npm run link:local` for work that is not committed anywhere yet; a git ref only
+reaches what is on a branch.
+
 ---
 
 ## Comments

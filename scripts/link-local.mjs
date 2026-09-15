@@ -16,9 +16,8 @@
  *   locally and 404s for everyone else.
  *
  * A tarball is what npm actually publishes, so if it works here it works from the
- * registry. Nothing is written to `package.json` — this leaves the manifest's
- * published semver ranges alone, so a plain `npm install` (and CI, which never
- * runs this) always builds against the real packages.
+ * registry. Nothing is written to `package.json`, so a plain `npm install` (and CI,
+ * which never runs this) builds against whatever the branch declares.
  *
  * Re-run it after changing either sibling; `npm install` alone will not pick the
  * change up.
@@ -124,7 +123,7 @@ try {
    *
    * Restoring is safe precisely because the linked install is meant to be
    * throwaway: `node_modules` keeps the local tarballs, the lockfile keeps
-   * describing the registry, and a plain `npm install` puts the two back in step.
+   * describing the manifest, and a plain `npm install` puts the two back in step.
    *
    * *Any* difference is reverted, not just a `file:` path. Everything npm writes
    * here is an artifact of a throwaway install — a dropped `integrity`, a

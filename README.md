@@ -123,7 +123,7 @@ are defaults, and both are options on `createA2AWorker`:
 ```ts
 createA2AWorker<Env>({
   manifest: hostManifest,
-  tenants: { … },
+  agents: [ … ],
   rpcPath: "/rpc",                     // default "/a2a"
   jwksPath: "/.well-known/keys.json"   // default "/.well-known/jwks.json"
 });
@@ -449,7 +449,7 @@ type level. A tarball is what npm actually publishes, so if it works here it wor
 registry.
 
 Nothing is written to `package.json`, so a plain `npm install` — and CI, which never runs
-this — always builds against the real packages.
+this — builds against whatever the branch declares, never a local checkout.
 
 `--no-save` protects the manifest, not the lockfile: npm can still pin both packages to
 `file:/var/folders/…/da-pack-*.tgz`, and those paths do not exist on a CI runner — or

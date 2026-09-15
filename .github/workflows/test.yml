@@ -1,12 +1,17 @@
 name: Test
 
+# `next` needs the suite or a PR into it merges unchecked, and `main` needs it
+# because it is what a fork builds. What each branch installs is AGENTS.md's to
+# say, not this file's.
 on:
   push:
     branches:
       - main
+      - next
   pull_request:
     branches:
       - main
+      - next
 
 jobs:
   test:
@@ -21,9 +26,30 @@ jobs:
         with:
           node-version: 24
 
-      # Always from the registry, never from a sibling checkout. `npm run
-      # link:local` is a development convenience, and a build that only works
-      # with it must never be able to ship.
+      # What reaches `main` is what a fork installs, so it names only published
+      # versions. A git ref onto core or plugins may sit on `next` while it needs
+      # unreleased work, and the PR that pins a release removes it; this is what
+      # stops one reaching `main` when that is missed. A range never contains
+      # `:`, `/` or `#`, and every git, GitHub and file spec does. Each field is
+      # read on its own, because a package named in both would have one spec hide
+      # the other in a merged object.
+      - name: main names only published core and plugins
+        if: github.base_ref == 'main' || github.ref == 'refs/heads/main'
+        run: |
+          node -e '
+            const pkg = require("./package.json");
+            const refs = ["dependencies", "devDependencies"].flatMap((field) =>
+              Object.entries(pkg[field] ?? {})
+                .filter(([name, spec]) => name.startsWith("@dynamicagents/") && /[:/#]/.test(spec))
+                .map(([name, spec]) => `${field}: ${name} is "${spec}"`));
+            for (const ref of refs)
+              console.error(`${ref} — main installs published versions only`);
+            process.exit(refs.length ? 1 : 0);
+          '
+
+      # From the committed lockfile, never from a sibling checkout.
+      # `npm run link:local` is a development convenience, and a build that only
+      # works with it must never be able to ship.
       - run: npm ci
 
       - run: npm run check

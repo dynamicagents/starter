@@ -1,6 +1,11 @@
 import { describe, it, expect } from "vitest";
 import { env } from "cloudflare:workers";
-import { createAgentRuntime, validateRecipe } from "@dynamicagents/core";
+import {
+  createAgentRuntime,
+  MAX_TOOL_CALL_MS,
+  TOOL_CALL_GRACE_MS,
+  validateRecipe
+} from "@dynamicagents/core";
 import type { PluginHost } from "@dynamicagents/core/host";
 import {
   SANDBOX_FAMILY,
@@ -208,10 +213,13 @@ describe("the container config", () => {
     expect(config.shell).toBe("bash");
     expect(config.cwd).toBe("/workspace");
     expect(config.workspaceName()).toBe("caller|owner/repo");
-    // Bounded at or below core's MAX_TOOL_CALL_MS, which core cannot enforce
-    // because core installs no tools.
-    expect(config.timeoutMs).toBe(10 * 60_000);
+    // Why the pair must stay under the call's signal: see COMMAND_TIMEOUT_MS in
+    // src/workspace/container.ts.
     expect(config.installGateMs).toBeGreaterThan(0);
+    expect(config.timeoutMs).toBeGreaterThan(0);
+    expect(
+      (config.installGateMs ?? Infinity) + (config.timeoutMs ?? Infinity)
+    ).toBeLessThan(MAX_TOOL_CALL_MS - TOOL_CALL_GRACE_MS);
   });
 
   it("is the same shape whichever name it is given", () => {
@@ -225,5 +233,18 @@ describe("the container config", () => {
       ...rest
     }: ComputerConfig) => rest;
     expect(shape(a)).toEqual(shape(b));
+  });
+});
+
+describe("what the main agent asks a person before doing", () => {
+  it("holds opening a pull request, and nothing else", async () => {
+    // The coder is the agent that opens pull requests, so it is the one that has
+    // to ask. A rename that dropped the rule would let one through unasked, and a
+    // rule added for a push or a comment would stop a round that should not wait.
+    const surface = await parent().mainAgentSurface({
+      session: { getCompactions: async () => [] } as never
+    });
+
+    expect(Object.keys(surface.toolApproval)).toEqual(["repo_open_pr"]);
   });
 });

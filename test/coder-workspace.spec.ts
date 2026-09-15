@@ -5,7 +5,7 @@ import { makeDoHelpers } from "@dynamicagents/core/testing";
 import { getWorkspace } from "@cloudflare/computer";
 import type { InstallState } from "@dynamicagents/plugins/computer";
 import { INSTALL_PLAN } from "@/workspace/install-plan";
-import { TRUST_CA_COMMAND } from "@/workspace/object";
+import { TRUST_CA_COMMAND } from "@/workspace/ca-trust";
 import { SCRATCH_DIR } from "@/workspace/scratch";
 
 /**
@@ -76,13 +76,18 @@ async function seedGitCheckout(stub: DurableObjectStub, dir: string) {
 }
 
 /** A checkout the install resolver will act on: git, plus a lockfile. */
-async function seedNodeCheckout(stub: DurableObjectStub, dir: string) {
+async function seedNodeCheckout(
+  stub: DurableObjectStub,
+  dir: string,
+  options: { tree?: boolean } = {}
+) {
   await seedGitCheckout(stub, dir);
   using ws = await getWorkspace(
     stub as unknown as Parameters<typeof getWorkspace>[0]
   );
   await ws.fs.writeFile(`${dir}/package.json`, '{"name":"probe"}');
   await ws.fs.writeFile(`${dir}/package-lock.json`, '{"lockfileVersion":3}');
+  if (options.tree) await ws.fs.mkdir(`${dir}/node_modules`);
 }
 
 describe("the install gate", () => {
@@ -250,25 +255,6 @@ describe("the install gate", () => {
 });
 
 /**
- * Arming the install the moment a cold container is seen.
- *
- * This is the *ordinary* second task, not an edge case. `node_modules` lives in
- * the container and dies with it; the install record lives in this object's
- * storage and does not. So once the container is reclaimed for idleness, a `done`
- * record describes a tree that is gone — and `startInstall` is only ever reached
- * from `repo_clone`, which a follow-up task never calls, because its checkout is
- * already here.
- *
- * That gap cost 99 seconds of `npm ci` inside a round. Closing it by probing from
- * the gate cost far more: the install was started from a poll that returned in
- * milliseconds, its drain died with that invocation, and the half-written tree
- * took a nine-minute task to unpick.
- *
- * So detection is a boolean read here, and the install itself belongs to the
- * alarm. These tests cover the detection; the alarm's own handler needs a
- * container and is covered end to end.
- */
-/**
  * Where the work is — the question `checkoutDir()` answers, and the invariants
  * that make its answer worth acting on.
  *
@@ -374,19 +360,51 @@ describe("where the work is", () => {
   });
 });
 
-describe("arming a reinstall for a cold container", () => {
+/**
+ * Arming the install when the workspace has no dependency tree.
+ *
+ * The signal is the tree, and it used to be the container. `node_modules` is
+ * synced into this object's storage now, so a container that went away takes no
+ * dependencies with it and a replacement is handed them back — a cold container
+ * is no longer evidence of anything. What is left is the workspace that
+ * genuinely has none: one whose install never ran, one whose pull never
+ * finished, or one written before any of this synced.
+ *
+ * It still has to be caught here rather than left to `repo_clone`, which is the
+ * gap that cost 99 seconds of `npm ci` inside a round: a follow-up task never
+ * calls it, because its checkout is already here. Closing it by probing from the
+ * gate cost far more — the install started from a poll that returned in
+ * milliseconds, its drain died with that invocation, and the half-written tree
+ * took a nine-minute task to unpick.
+ *
+ * So detection is a local read here, and the install itself belongs to the
+ * alarm. These tests cover the detection; the alarm's own handler needs a
+ * container and is covered end to end.
+ */
+describe("arming an install when the tree is missing", () => {
   const armed = (stub: DurableObjectStub) =>
     runInDurableObject(stub, (_instance, state) =>
       state.storage.get<number>("install:armed")
     );
 
-  /** A workspace that installed successfully, before its container went away. */
-  async function seedInstalled(stub: DurableObjectStub, dir: string) {
+  /**
+   * A workspace that installed successfully, before its container went away.
+   *
+   * `tree` seeds what that install left behind. It is written **with** the
+   * checkout rather than afterwards, because opening the workspace at all runs
+   * the arming check — so a tree created in a second `getWorkspace` block lands
+   * after the decision it was meant to inform.
+   */
+  async function seedInstalled(
+    stub: DurableObjectStub,
+    dir: string,
+    options: { tree?: boolean } = {}
+  ) {
     // The checkout has to be here too, or the resolver finds no `package.json`,
     // answers `skip`, and the armed install proves nothing by never reaching a
     // spawn — which is exactly how the first draft of this passed while testing
     // half of what it claimed.
-    await seedNodeCheckout(stub, dir);
+    await seedNodeCheckout(stub, dir, options);
     await runInDurableObject(stub, async (_instance, state) => {
       await state.storage.put("install", {
         state: "done",
@@ -448,12 +466,12 @@ describe("arming a reinstall for a cold container", () => {
   /**
    * The bound on retrying, and it has to exist.
    *
-   * Arming is naturally once-only for an install that *succeeds*: it leaves
-   * `done` with the container up, so the `container.running` check short-circuits
-   * everything after. A failing one has no such property — it lands back on
-   * `failed` with the container still down, and `__getWorkspaceStub` is the
-   * busiest entry point in the object, so without a cooldown it would re-arm on
-   * essentially every tool call.
+   * Arming is naturally once-only for an install that *succeeds*: it leaves a
+   * tree in the workspace, so the probe short-circuits everything after. A
+   * failing one has no such property — it lands back on `failed` with the tree
+   * still absent, and `__getWorkspaceStub` is the busiest entry point in the
+   * object, so without a cooldown it would re-arm on essentially every tool
+   * call.
    *
    * This test is the one that caught that: extending arming to `failed` made it
    * fail, which is the whole reason `INSTALL_ARM_COOLDOWN_MS` exists.
@@ -476,11 +494,6 @@ describe("arming a reinstall for a cold container", () => {
     expect(await armed(stub)).toBeUndefined();
   });
 
-  /**
-   * A caller's very first task: nothing has ever been installed, so there is no
-   * record of *where* to install. `repo_clone` and its `afterCheckout` hook own
-   * this case, exactly as they always have.
-   */
   /**
    * A failed install must not poison the workspace forever.
    *
@@ -528,6 +541,36 @@ describe("arming a reinstall for a cold container", () => {
     expect(await armed(stub)).toBeUndefined();
   });
 
+  /**
+   * The case the old signal could not express, and the reason for the new one.
+   *
+   * A container that has gone away says nothing about the dependencies now: they
+   * are in this object's storage, and the next container is handed them. Arming
+   * on a cold container would therefore re-run `npm ci` against a tree that is
+   * already correct — and that install starts by deleting the tree, so it does
+   * not merely waste the time, it writes the deletion and the rebuild back
+   * through the sync as well.
+   */
+  it("arms nothing when the tree is already in the workspace", async () => {
+    const stub = freshWorkspace("arm-tree-present");
+    const dir = "/workspace/probe";
+    // What a finished install leaves behind, as this side sees it: a directory
+    // under the checkout. The probe asks for exactly that and nothing more.
+    await seedInstalled(stub, dir, { tree: true });
+
+    await touchWorkspace(stub);
+
+    // Still `done`, untouched, with nothing armed: the record it was seeded with
+    // describes a tree that is right there.
+    expect(await armed(stub)).toBeUndefined();
+    expect((await storedInstall(stub))?.state).toBe("done");
+  });
+
+  /**
+   * A caller's very first task: nothing has ever been installed, so there is no
+   * record of *where* to install. `repo_clone` and its `afterCheckout` hook own
+   * this case, exactly as they always have.
+   */
   it("arms nothing when no install has ever run", async () => {
     const stub = freshWorkspace("arm-first-task");
 
@@ -549,6 +592,72 @@ describe("arming a reinstall for a cold container", () => {
  * again and logging a reclaim that did not happen. Both the candidate table and
  * the RPC work grew for the lifetime of the caller.
  */
+/**
+ * Keeping the workspace level with the container, which nothing else will do.
+ *
+ * A command's own bracket pulls its writes back when it exits, and that pull can
+ * fail while the command succeeds. The runtime reports it and schedules nothing:
+ * the cursor is durable, so a later `pull()` resumes the same operation, and
+ * driving that later `pull()` is the host's half of syncing.
+ *
+ * These assert the two places the host has to act on it. Both run without a
+ * container, which is the case the drain has to survive rather than the case it
+ * exists for — with none running there is nothing left to pull, because whatever
+ * a container held that never arrived went with it.
+ */
+describe("draining an outstanding pull", () => {
+  /**
+   * The drain must never start a container.
+   *
+   * Opening a backend handle would launch one, and a pull against a replacement
+   * finds an empty filesystem rather than the writes it was after. Launching a
+   * container to discover that is pure cost — and on the idle path it would
+   * restart the very container the deadline had just decided to stop.
+   */
+  it("starts no container when none is running", async () => {
+    const stub = freshWorkspace("drain-no-container");
+    await seedGitCheckout(stub, "/workspace/probe");
+
+    await runInDurableObject(stub, async (instance, state) => {
+      // The idle handler's own path, with the clock far enough back that it
+      // decides to stop. It reaches the drain first, which must decline.
+      await state.storage.put("lastUsedAt", Date.now() - 24 * 60 * 60_000);
+      await instance.alarm?.();
+      expect(state.container?.running ?? false).toBe(false);
+    });
+  });
+
+  /**
+   * Git runs **here**, against this object's storage, so it reads a tree that is
+   * only as current as the last pull. A commit made in the container that has
+   * not arrived is a commit `git push` cannot see — and pushing anyway publishes
+   * a tree the agent did not produce, which reports success and shows an older
+   * branch on the forge.
+   *
+   * With no container there is nothing outstanding, so this asserts the other
+   * half: the check does not stand between a workspace and its own git.
+   */
+  it("lets git run when there is nothing outstanding", async () => {
+    const stub = freshWorkspace("drain-git-clear");
+    const dir = "/workspace/probe";
+    await seedGitCheckout(stub, dir);
+
+    // Refused for want of an allowed host, which is a decision made *after* the
+    // sync check — so reaching it at all proves the check passed.
+    const result = await stub.gitPush({
+      url: "https://github.example/acme/api.git",
+      dir,
+      branch: "main",
+      allowedHosts: []
+    });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.message).not.toMatch(/reached the workspace/);
+    }
+  });
+});
+
 describe("reclaiming an idle workspace", () => {
   it("reports nothing to do for a workspace nothing has ever used", async () => {
     const stub = freshWorkspace("never-used");

@@ -7,7 +7,10 @@ import { browser } from "@dynamicagents/plugins/browser";
 import { recall } from "@dynamicagents/plugins/recall";
 import { RECALL } from "@/config";
 import { activeRepo } from "@/workspace/active-repo";
-import { workspaceContainer } from "@/workspace/container";
+import {
+  DEPENDENCY_TREE_NOTE,
+  workspaceContainer
+} from "@/workspace/container";
 import { workspaceGit } from "@/workspace/git";
 import { workspaceName } from "@/workspace/object";
 import { hostScratch } from "@/workspace/scratch";
@@ -51,7 +54,7 @@ const PARENT_SANDBOX_CAPABILITY = [
   "You can read the workspace the Claude Code sessions work in, but not change it:",
   "- `sb_read` reads a file, `sb_ls` lists a directory, `sb_exists` checks a path.",
   "Use these to check a session's report against what is actually on disk — read the file it says it changed. You cannot run commands, write, or edit.",
-  "`node_modules` is not in the workspace — it lives in the container only — so these tools cannot see inside it. That is expected and not a sign anything is missing."
+  DEPENDENCY_TREE_NOTE
 ].join("\n");
 
 /**

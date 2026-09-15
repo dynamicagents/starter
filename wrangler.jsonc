@@ -143,10 +143,9 @@
   //
   // Nothing replaces it, because nothing needs to: the checkout now lives in the
   // workspace object's own SQLite storage, which survives the container and
-  // costs no credential at all. `node_modules` does not — it stays in the
-  // container and is reinstalled when one starts — but that is reproducible from
-  // the lockfile in a few minutes, which is exactly what a snapshot was ever
-  // worth. See `src/workspace/install-plan.ts`.
+  // costs no credential at all — dependencies included, since those sync like
+  // any other file. A snapshot was only ever worth what it saved rebuilding, and
+  // there is nothing left to rebuild. See `src/workspace/install-plan.ts`.
 
   // `@dynamicagents/plugins/browser` — used by reactive and arc-player.
   // NOTE: requires a PAID Workers plan; Browser Rendering is not on the free

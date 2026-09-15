@@ -29,9 +29,9 @@ export type WorkspaceNamespace = DurableObjectNamespace<WorkspaceObjectBase>;
  * otherwise be handed to the *next* task as its starting point.
  *
  * **Not by throwing the container away.** The checkout lives in a Durable Object
- * and survives the container, so `destroy()` would discard `node_modules` — the
- * one genuinely expensive thing — and leave the abandoned edits exactly where
- * they were. Exactly backwards. The reset happens in the checkout instead.
+ * and survives the container, and so do its dependencies — so `destroy()` would
+ * cost a container start and leave the abandoned edits exactly where they were.
+ * Exactly backwards. The reset happens in the checkout instead.
  *
  * **`-x` is the load-bearing flag, and `-e node_modules` is what makes it safe.**
  * Without `-x`, `git clean -fd` leaves ignored files in place: a half-built

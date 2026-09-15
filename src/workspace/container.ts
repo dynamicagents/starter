@@ -27,6 +27,23 @@ const COMMAND_TIMEOUT_MS =
   MAX_TOOL_CALL_MS - TOOL_CALL_GRACE_MS - INSTALL_GATE_MS - 15_000;
 
 /**
+ * What a parent agent has to know about the dependency tree to read a report.
+ *
+ * Here rather than in either agent's `plugins.ts` because both say it and it has
+ * to stay one sentence: two copies drift, and the drift is invisible — nothing
+ * fails, the model is simply told two different things about the same workspace
+ * depending on which agent it is.
+ *
+ * It is about the **parent's** read-only tools. What a subagent is told about
+ * working in the tree belongs to `@dynamicagents/plugins/computer`, which owns
+ * that domain and states it in its own capability text.
+ */
+export const DEPENDENCY_TREE_NOTE =
+  "Recursive listings leave out `node_modules`, which is a dependency tree of " +
+  "tens of thousands of files rather than anything a report should turn on. " +
+  "Naming a path inside it reads it.";
+
+/**
  * The container settings every path into a workspace shares.
  *
  * Exported and shared because a partial copy of this has already caused an
@@ -43,8 +60,9 @@ const COMMAND_TIMEOUT_MS =
  * cancellation path.
  *
  * A caller's checkout **outlives the task**, which is why `repo_clone` fetches
- * and resets an existing one rather than assuming an empty directory. What does
- * *not* outlive the container is `node_modules`; see `./install-plan.ts`.
+ * and resets an existing one rather than assuming an empty directory. Its
+ * dependencies outlive it too; see `./install-plan.ts` for what still makes an
+ * install run.
  */
 export function workspaceContainer(
   binding: DurableObjectNamespace<WorkspaceObjectBase>,
@@ -69,9 +87,10 @@ export function workspaceContainer(
      * Above the plugin's 90-second default, because this deployment starts its
      * installs *early* rather than on demand.
      *
-     * The workspace object arms a reinstall the moment it sees a cold container,
-     * so by the time a command that needs `node_modules` arrives, the install is
-     * usually part-done and the gate only has to absorb the remainder. But "usually"
+     * The workspace object arms an install the moment it sees a checkout with no
+     * dependency tree, so by the time a command that needs one arrives, the
+     * install is usually part-done and the gate only has to absorb the
+     * remainder. But "usually"
      * is not "always": a model that reaches for `npm` immediately meets a fresh
      * ~85-second `npm ci`, and at 90 seconds the gate would give up a few seconds
      * short, report "nothing was run — call again in a moment", and spend a turn

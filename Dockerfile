@@ -35,7 +35,7 @@
 # A single layer over `scratch` holding one file: the 126 MB SEA binary at
 # /usr/local/bin/computerd. Nothing else is in this image, so it is a staging
 # stage and never a base.
-FROM ghcr.io/cloudflare/computer-computerd-linux-x64:0.2.1 AS computerd
+FROM ghcr.io/cloudflare/computer-computerd-linux-x64:0.3.0 AS computerd
 
 # `debian:stable-slim`, matching the upstream reference recipe
 # (examples/container/Dockerfile) exactly — and the base is the load-bearing
@@ -181,6 +181,17 @@ RUN node -e "const m=Number(process.versions.node.split('.')[0]); if (m < 24) { 
 # `sb_exec` truncates to a byte budget, so every byte spent on an ANSI colour
 # code or an npm progress bar is a byte not spent on the error message.
 #
+# **The COMPUTER_VAR_ prefix is what makes any of it reach a command**, and its
+# absence fails silently. A command spawned by the workspace inherits PATH, HOME,
+# TMPDIR, TZ, LANG, TERM and the LC_* family from `computerd` and nothing else —
+# the allowlist that keeps the daemon's own secret out of a cloned repository's
+# `postinstall`. Anything else arrives only as COMPUTER_VAR_<NAME>, which the
+# daemon strips on the way through, so COMPUTER_VAR_CI=1 is what a command sees
+# as CI=1. An unprefixed ENV here configures `computerd` and stops there.
+#
+# LANG is the exception below, and deliberately unprefixed: it is on the
+# allowlist already, so it passes as itself.
+#
 # CI=1 does double duty: it is also what stops wrangler and friends from
 # blocking on an interactive prompt that nobody is there to answer — a hang,
 # which is a worse failure than an error.
@@ -195,33 +206,32 @@ RUN node -e "const m=Number(process.versions.node.split('.')[0]); if (m < 24) { 
 #
 # DISABLE_AUTOUPDATER=1 belongs in the image as well as in the exec environment
 # the plugin passes. The plugin's copy covers the sessions it launches; this one
-# covers anything else that ever runs `claude` in here — a debugging shell, a
-# repo script — and an autoupdate is exactly the event the pin above exists to
-# prevent. Harmless in the image without the CLI.
+# covers anything else that ever runs `claude` in here — a repo script, a command
+# the model writes — and an autoupdate is exactly the event the pin above exists
+# to prevent. Harmless in the image without the CLI.
 #
 # IS_SANDBOX=1 is here for the same reason, and it is load-bearing for the same
 # clients. **This container runs as root**, and the CLI refuses to bypass its
 # permission checks under uid 0 without it — `process.exit(1)` before the first
 # JSON line, with the only explanation on stderr. The plugin sets it alongside
 # `--permission-mode bypassPermissions` so the two cannot drift; this copy is
-# what makes a hand-run `claude` in a debugging shell behave the same way as the
-# sessions do, which is the whole point of debugging in here.
+# what makes any other `claude` in here behave the same way the sessions do.
 #
 # It says what it means: a container with no persistent identity, holding no
 # credential, running a cloned repository's `postinstall` by design. If this
 # image is ever changed to exec as a non-root user, delete this line — the guard
 # it clears will no longer be firing.
-ENV CI=1 \
-    HUSKY=0 \
-    DISABLE_AUTOUPDATER=1 \
-    IS_SANDBOX=1 \
-    NO_COLOR=1 \
-    FORCE_COLOR=0 \
-    NPM_CONFIG_FUND=false \
-    NPM_CONFIG_AUDIT=false \
-    NPM_CONFIG_PROGRESS=false \
-    NPM_CONFIG_UPDATE_NOTIFIER=false \
-    WRANGLER_SEND_METRICS=false \
+ENV COMPUTER_VAR_CI=1 \
+    COMPUTER_VAR_HUSKY=0 \
+    COMPUTER_VAR_DISABLE_AUTOUPDATER=1 \
+    COMPUTER_VAR_IS_SANDBOX=1 \
+    COMPUTER_VAR_NO_COLOR=1 \
+    COMPUTER_VAR_FORCE_COLOR=0 \
+    COMPUTER_VAR_NPM_CONFIG_FUND=false \
+    COMPUTER_VAR_NPM_CONFIG_AUDIT=false \
+    COMPUTER_VAR_NPM_CONFIG_PROGRESS=false \
+    COMPUTER_VAR_NPM_CONFIG_UPDATE_NOTIFIER=false \
+    COMPUTER_VAR_WRANGLER_SEND_METRICS=false \
     LANG=C.UTF-8
 
 # Node reads the OS trust store instead of the one it bundles.
@@ -239,10 +249,14 @@ ENV CI=1 \
 # with its own lifetime — and getting it wrong anywhere fails as a TLS error
 # that names no cause.
 #
+# The prefix carries the same weight as the flag: unprefixed, this configures
+# `computerd`, which makes no outbound TLS connection and does not need it, while
+# every client that does keeps failing.
+#
 # Safe because `ca-certificates` is installed above, so the OS store already
 # holds the normal public roots — verified: `npm ping` reaches the registry with
 # this set and no extra CA present.
-ENV NODE_OPTIONS=--use-openssl-ca
+ENV COMPUTER_VAR_NODE_OPTIONS=--use-openssl-ca
 
 # computerd's own configuration. `CloudflareContainerBackend` passes PORT and
 # MOUNT_POINT in the container env when it starts the container, so these two

@@ -45,9 +45,9 @@ import type { PluginHost } from "@dynamicagents/core/host";
  * assumption.
  *
  * The workspace itself should stay keyed on `(caller, repo)` even then: per-task
- * workspaces would mean a cold container and a fresh `node_modules` every time,
- * which is the cost this whole design exists to avoid. It is the *routing* that
- * needs task scope, not the storage.
+ * workspaces would mean a fresh checkout and a fresh install every time, which is
+ * the cost this whole design exists to avoid. It is the *routing* that needs task
+ * scope, not the storage.
  */
 
 const TABLE = "coder_active_repo";

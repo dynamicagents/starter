@@ -184,9 +184,14 @@ const AGENTS = [
     // too tight for the ~8% every other entry here runs with, so it would have
     // gone red on the next dependency bump for no real reason.
     //
-    // Measured 5976 KiB. One of the two entries that also carries `/alarm` and
+    // Measured 6075 KiB. One of the two entries that also carries `/alarm` and
     // `/job`; see "What every agent carries" above for the rest.
-    maxBytes: 6_610_000
+    //
+    // The last 99 KiB of that is the container client growing under the two
+    // agents that embed it — a bigger sync engine and a newer capnweb. It is the
+    // whole of the difference, and `forbidden` stayed clean through it, which is
+    // the check that would have caught a leak instead.
+    maxBytes: 6_720_000
   },
   {
     name: "claude-coder",
@@ -217,10 +222,11 @@ const AGENTS = [
     // is `/recall` and `/claude-code`, and what it drops is nothing.
     // Re-baseline against a measurement, never to make a red build green.
     //
-    // Measured 5877 KiB, and sized with the same ~8% headroom as the rest: the
+    // Measured 5976 KiB, and sized with the same ~8% headroom as the rest: the
     // tighter margin the coder's comment above describes is what sends a build
-    // red on the next bump for no real reason.
-    maxBytes: 6_500_000
+    // red on the next bump for no real reason. It carries the same 99 KiB of
+    // container client the coder does, for the same reason.
+    maxBytes: 6_610_000
   }
 ];
 

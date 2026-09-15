@@ -30,26 +30,61 @@ import type { Deadline } from "@dynamicagents/core/alarm";
  */
 export const SYNC_DRAIN_BUDGET_MS = 60_000;
 
-/** How soon an unfinished drain comes back for the next block. */
+/** How soon a drain that is making progress comes back for the next block. */
 export const SYNC_DRAIN_RESUME_MS = 1_000;
+
+/**
+ * The ceiling on the wait after a pull that failed.
+ *
+ * A failure is not a slow success: whatever broke — a container that stopped
+ * answering, a transport that will not open — is usually still broken a second
+ * later, and coming back at the resume interval would be an alarm and an error
+ * line every second for as long as the workspace stays up. Backing off turns
+ * that into a handful of attempts an hour, which is the rate a recoverable
+ * fault actually clears at.
+ *
+ * Bounded rather than abandoned, because the cursor is durable and the cost of
+ * one more attempt is one round trip: a container that comes back should be
+ * drained without anyone asking.
+ */
+export const SYNC_DRAIN_MAX_BACKOFF_MS = 5 * 60_000;
+
+/** How long to wait before a retry, after this many consecutive failures. */
+export function syncRetryDelayMs(attempt: number): number {
+  return Math.min(
+    SYNC_DRAIN_RESUME_MS * 2 ** Math.max(0, attempt),
+    SYNC_DRAIN_MAX_BACKOFF_MS
+  );
+}
 
 /**
  * What one drain achieved.
  *
- * `unavailable` is not a failure: it is the answer when there is no container to
- * pull from, which also means there is nothing outstanding that could still be
- * recovered. Kept distinct from `complete` so a caller deciding whether to act
- * on the workspace — a git push, say — can tell "nothing to move" from "nothing
- * reachable".
+ * `incomplete` and `failed` are separated because they want opposite responses.
+ * `incomplete` is a healthy drain that ran out of budget with the cursor moved,
+ * and the right answer is to come straight back. `failed` is a pull that threw
+ * with nothing to show for it, and coming straight back would spin against
+ * whatever is broken — see {@link syncRetryDelayMs}.
+ *
+ * `unavailable` is not a failure either: it is the answer when there is no
+ * container to pull from, which also means there is nothing outstanding that
+ * could still be recovered. Kept distinct from `complete` so a caller deciding
+ * whether to act on the workspace — a git push, say — can tell "nothing to move"
+ * from "nothing reachable".
  */
-export type DrainOutcome = "complete" | "incomplete" | "unavailable";
+export type DrainOutcome = "complete" | "incomplete" | "failed" | "unavailable";
+
+/** What a scheduled drain carries: how many times it has failed in a row. */
+export interface SyncDrainIntent {
+  attempt: number;
+}
 
 export interface WorkspaceSyncDeps {
   workspace: () => Workspace;
   /** Whether a container is up. A drain must never start one — see {@link drain}. */
   containerRunning: () => boolean;
   /** Where the next block is scheduled. */
-  deadline: () => Deadline;
+  deadline: () => Deadline<SyncDrainIntent | undefined>;
   tag: () => string;
   id: () => string;
 }
@@ -65,8 +100,10 @@ export class WorkspaceSync {
    * request. `set` replaces whatever stood before, so arming twice is one
    * schedule rather than two.
    */
-  async arm(): Promise<void> {
-    await this.deps.deadline().set(new Date(Date.now() + SYNC_DRAIN_RESUME_MS));
+  async arm(attempt = 0): Promise<void> {
+    await this.deps
+      .deadline()
+      .set(new Date(Date.now() + syncRetryDelayMs(attempt)), { attempt });
   }
 
   /**
@@ -114,15 +151,14 @@ export class WorkspaceSync {
       return "complete";
     } catch (err) {
       // Left outstanding rather than retried here: the cursor is durable, so the
-      // next drain resumes it, and a failing pull that this loop re-entered
-      // immediately would spin against whatever is broken.
+      // next drain resumes whatever this one committed before it threw.
       console.error(`[${this.deps.tag()}] a pull could not be drained`, {
         id: this.deps.id(),
         blocks,
         entries,
         err: String(err)
       });
-      return "incomplete";
+      return "failed";
     }
   }
 }

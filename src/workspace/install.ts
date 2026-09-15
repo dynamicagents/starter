@@ -36,7 +36,7 @@ function execWasLost(err: unknown): boolean {
  * can act on. So a `running` record must never outlive the command it describes,
  * and the ways it can are not all reachable from one place — the spawn can fail
  * before a drain is attached, a drain can be cut short by an eviction, `getExec`
- * can hand back a handle to a container that never answers, and two installs can
+ * can hand back a handle to a container that never answers, and installs can
  * displace each other. Each guard below names the one it closes; the staleness
  * bound in {@link InstallJob.state} is the proof that covers the rest.
  *
@@ -61,13 +61,13 @@ const INSTALL_KEY = "install";
 /**
  * How long after arming an install before arming another.
  *
- * The bound on a *failing* install. A successful one is self-limiting — it ends
- * `done` with the container up, so `container.running` short-circuits every
- * later call — but a failure lands back on `failed` with the container still
- * down, and `__getWorkspaceStub` is the busiest entry point in the object, so
- * it would re-arm on essentially every tool call. Five minutes is far longer
- * than an install (88s measured), so a broken container retries at roughly the
- * rate a human would and a later task still gets a fresh attempt.
+ * The bound on a *failing* install. A successful one is self-limiting — it
+ * leaves a tree in the workspace, so the arming probe short-circuits every later
+ * call — but a failure lands back on `failed` with the tree still absent, and
+ * `__getWorkspaceStub` is the busiest entry point in the object, so it would
+ * re-arm on essentially every tool call. Five minutes is far longer than an
+ * install (88s measured), so a broken install retries at roughly the rate a
+ * human would and a later task still gets a fresh attempt.
  */
 const INSTALL_ARM_COOLDOWN_MS = 5 * 60_000;
 
@@ -99,6 +99,33 @@ interface InstallContext extends JobContext {
   fingerprint: string | null;
   command: string;
 }
+
+/**
+ * Where an install records that its tree has not finished arriving.
+ *
+ * An install ends when its command exits, and the tree it wrote reaches this
+ * object on the pull that follows — which can still be in flight, or waiting on
+ * a drain, well after the record says `done`. Between those two moments the
+ * workspace looks exactly like one that never installed anything: the record is
+ * terminal and there is no `node_modules` to find.
+ *
+ * Without this marker the arming check reads that as a missing tree and starts a
+ * second install *while the first one's tree is still crossing* — which deletes
+ * the tree the pull is delivering and installs it again.
+ */
+const TREE_IN_FLIGHT_KEY = "install:syncing";
+
+/**
+ * How long a tree may be in flight before the marker stops being believed.
+ *
+ * The marker is cleared by the drain, on the pull completing or on the container
+ * turning out to be gone. This is the bound for the case where neither happens —
+ * an isolate that died between the install and the drain, say — because a marker
+ * nothing clears would suppress every future install for the life of the
+ * workspace. Generous, since what it is waiting on is a dependency tree crossing
+ * the wire in blocks.
+ */
+const TREE_IN_FLIGHT_STALE_MS = 30 * 60_000;
 
 /**
  * The exec id an install runs under.
@@ -138,9 +165,9 @@ export class InstallJob {
    * The dependency install, as a job this object owns through its alarm.
    *
    * `JobLifecycle` is core's, and what it owns is the choreography that is wrong
-   * in the same four ways every time: arming before anything runs, one job at a
-   * time under a staleness bound, a drain that can outlive its job, and a job
-   * nobody is draining. The three timings below are this install's. The **drain
+   * the same ways every time: arming before anything runs, one job at a time
+   * under a staleness bound, a drain that can outlive its job, and a job nobody
+   * is draining. The timings below are this install's. The **drain
    * loop stays here**, because an install runs to completion and writes a single
    * verdict rather than reporting progress between bounded windows.
    *
@@ -209,6 +236,11 @@ export class InstallJob {
     // The branch that runs on almost every call, and it costs one local read.
     if (await this.treePresent(context.dir)) return;
 
+    // A tree that is on its way is not a missing one. Installing again here
+    // would delete what the pull is in the middle of delivering and rebuild it,
+    // and both halves of that cross the wire a second time.
+    if (await this.#treeInFlight()) return;
+
     /**
      * `done` **or** `failed`, matching core's `isRearmable`, and narrowed to the
      * pair that carries a `state.command` — the placeholder needs one, since the
@@ -224,7 +256,7 @@ export class InstallJob {
      * and permanent; `idle` means nothing has ever been installed, so there is
      * no `install:context` naming where to do it.
      *
-     * `#installState()` rather than the lifecycle's raw `read()`, so a `running`
+     * {@link state} rather than the lifecycle's raw `read()`, so a `running`
      * record left by a dead isolate is repaired to `failed` here and can arm.
      */
     const state = await this.state();
@@ -286,6 +318,55 @@ export class InstallJob {
   }
 
   /**
+   * Note that this install's tree is still crossing, and suppress arming until
+   * it lands or is given up on.
+   */
+  async #markTreeInFlight(): Promise<void> {
+    await this.deps.storage.put(TREE_IN_FLIGHT_KEY, { at: Date.now() });
+  }
+
+  /** Whether a tree is still believed to be on its way. */
+  async #treeInFlight(): Promise<boolean> {
+    const marker = await this.deps.storage.get<{ at: number }>(
+      TREE_IN_FLIGHT_KEY
+    );
+    if (!marker) return false;
+    if (Date.now() - marker.at < TREE_IN_FLIGHT_STALE_MS) return true;
+    // Past the bound, and what it means is that nobody came back to clear it.
+    // Dropping it here is what lets the next access arm an install rather than
+    // wait forever on a pull that is not coming.
+    console.warn(`[${this.deps.tag()}] a tree never finished arriving`, {
+      id: this.deps.id(),
+      minutes: Math.round((Date.now() - marker.at) / 60_000)
+    });
+    await this.deps.storage.delete(TREE_IN_FLIGHT_KEY);
+    return false;
+  }
+
+  /**
+   * A drain finished the pull: the tree is here, so record what produced it.
+   *
+   * The fingerprint is written **here** rather than when the install exited,
+   * because what the skip condition needs to know is that this object holds the
+   * tree — see {@link promoteFingerprint}.
+   */
+  async onSyncComplete(): Promise<void> {
+    await this.deps.storage.delete(TREE_IN_FLIGHT_KEY);
+    await this.promoteFingerprint();
+  }
+
+  /**
+   * A drain found nothing to pull from: whatever had not arrived is gone.
+   *
+   * The marker goes, and deliberately without a fingerprint — the tree this
+   * install produced is not here and never will be, so the next access should
+   * find a missing tree and arm an install rather than skip one.
+   */
+  async onSyncUnrecoverable(): Promise<void> {
+    await this.deps.storage.delete(TREE_IN_FLIGHT_KEY);
+  }
+
+  /**
    * Where the install last ran, for a caller that needs the path rather than the
    * state — `checkoutDir` falls back to it for a workspace that predates the
    * checkout record.
@@ -314,9 +395,9 @@ export class InstallJob {
    * for slack-gatekeeper, against a chunk step that dies at ten minutes.
    *
    * That caller is a model turn, which lives long enough to hold the drain handed
-   * to `ctx.waitUntil` below. **A short-lived caller cannot**, which is why the
-   * cold-container path goes through the alarm and {@link #installAwaited} rather
-   * than calling this.
+   * to `ctx.waitUntil` below. **A short-lived caller cannot**, which is why an
+   * install the alarm drives is awaited inside that alarm rather than calling
+   * this.
    */
   async start(req: { dir: string; repo?: string }): Promise<InstallState> {
     return this.#beginInstall(req, (handle) => {
@@ -366,7 +447,7 @@ export class InstallJob {
      * through `ctx.waitUntil` — then wrote *its* outcome over a record
      * describing an install still running perfectly well.
      *
-     * `#installState()` rather than the lifecycle's raw `read()`, so a `running`
+     * {@link state} rather than the lifecycle's raw `read()`, so a `running`
      * record left by a dead isolate is resolved here rather than blocking a
      * legitimate retry forever.
      *
@@ -418,11 +499,11 @@ export class InstallJob {
       return current;
     }
 
-    // The CA is not installed here any more. It moved up into `#ready`, above
-    // the two early returns this used to sit below — an install already in
-    // flight, and a full workspace — because neither of those means the
-    // container can speak TLS. It still lands before the resolver, and now it
-    // lands before them too.
+    // Nothing trusts the interception CA here, deliberately: the workspace's own
+    // `ready` does it, above every early return in this method. An install
+    // already in flight and a full workspace both return before this line, and
+    // neither of them means the container cannot speak TLS — the full workspace
+    // least of all, since egress is what the agent needs to dig itself out.
 
     const probe = this.#probe();
     const resolution = await resolveInstallCommand(
@@ -568,9 +649,9 @@ export class InstallJob {
    *
    * It qualifies a `deps-broken` advisory and nothing else (see
    * `deriveAdvisories`), so outside that state there is nothing to learn and the
-   * question is not asked. What it no longer needs is a cache: the probe reads
-   * this object's own storage rather than a container, so the memo it used to
-   * carry would save a SQL lookup at the cost of being wrong for a window.
+   * question is not asked. It needs no cache of its own: the probe is a read of
+   * this object's storage, and memoising a SQL lookup would only buy the chance
+   * of being wrong for a window.
    */
   async treePresentIfItMatters(install: InstallState): Promise<boolean> {
     if (install.state !== "failed") return false;
@@ -699,7 +780,7 @@ export class InstallJob {
          * an install whose pull is still outstanding is the same hazard wearing
          * a zero exit code. `sync.status` is the runtime saying which of those
          * this was; `pending` hands the write to the drain that finishes the
-         * pull. See `#promoteFingerprint`.
+         * pull. See {@link promoteFingerprint}.
          */
         const landed = result.sync.status === "complete";
         if (context?.fingerprint && landed) {
@@ -712,7 +793,10 @@ export class InstallJob {
         // tens of thousands of files — so this is the pull most likely to need
         // more than its own bracket, and the one whose absence is felt by every
         // container that is handed the tree afterwards.
-        if (!landed) await this.deps.armSync();
+        if (!landed) {
+          await this.#markTreeInFlight();
+          await this.deps.armSync();
+        }
         console.info(`[${this.deps.tag()}] install finished`, {
           id: this.deps.id(),
           command,

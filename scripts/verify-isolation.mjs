@@ -187,10 +187,10 @@ const AGENTS = [
     // Measured 6075 KiB. One of the two entries that also carries `/alarm` and
     // `/job`; see "What every agent carries" above for the rest.
     //
-    // The last 99 KiB of that is the container client growing under the two
-    // agents that embed it — a bigger sync engine and a newer capnweb. It is the
-    // whole of the difference, and `forbidden` stayed clean through it, which is
-    // the check that would have caught a leak instead.
+    // The last 99 KiB of that is the container client growing wherever it is
+    // embedded — a bigger sync engine and a newer capnweb. It is the whole of
+    // the difference, and `forbidden` stayed clean through it, which is the
+    // check that would have caught a leak instead.
     maxBytes: 6_720_000
   },
   {

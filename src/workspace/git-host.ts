@@ -2,7 +2,7 @@ import type { RepoGitResult } from "@dynamicagents/plugins/repo";
 import type { AuthCallback, GitClient } from "@cloudflare/computer/git";
 
 /**
- * The three git operations that need the forge token, run on this side.
+ * The git operations that need the forge token, run on this side.
  *
  * They are here rather than on the `WorkspaceStub` the plugin already holds
  * because `WorkspaceGitStub` exposes only `cli(argv)` across a Durable Object
@@ -20,9 +20,10 @@ import type { AuthCallback, GitClient } from "@cloudflare/computer/git";
  * helpers.
  *
  * **The caller owns the preconditions.** Bringing the workspace up to date is
- * the workspace object's job and it must happen first: git here reads this
+ * the workspace object's job and it must happen first: git here reads that
  * object's SQLite, so a commit made in the container that has not been pulled
- * yet is a commit this code cannot see. See `#git` in `./object.ts`.
+ * yet is a commit this code cannot see. The workspace object's `gitClone`,
+ * `gitFetch` and `gitPush` in `./object.ts` are where that is settled.
  */
 
 export interface GitHostDeps {

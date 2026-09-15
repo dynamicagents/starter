@@ -27,7 +27,8 @@ import { WorkspaceGitHost } from "./git-host.js";
 import {
   SYNC_DRAIN_BUDGET_MS,
   SYNC_DRAIN_RESUME_MS,
-  WorkspaceSync
+  WorkspaceSync,
+  type SyncDrainIntent
 } from "./sync.js";
 import {
   deriveAdvisories,
@@ -85,7 +86,7 @@ import type { RepoGitResult } from "@dynamicagents/plugins/repo";
  * - `./install.ts` — when a dependency install runs, and every guard on it.
  * - `./sync.ts` — the host's half of syncing, which nothing else will do.
  * - `./ca-trust.ts` — making a container able to speak TLS.
- * - `./git-host.ts` — the three operations that hold the forge credential.
+ * - `./git-host.ts` — the operations that hold the forge credential.
  *
  * The seam each takes is small and explicit, which is what keeps the split
  * honest: a module that needed the whole object back would be a module that did
@@ -366,7 +367,7 @@ export abstract class WorkspaceObjectBase extends WorkspaceContainerBase {
         installWatch: () => this.#install.onWatch(),
         idleReclaim: () => this.#onIdleReclaim(),
         containerIdle: () => this.#onContainerIdle(),
-        syncRetry: () => this.#onSyncDrain()
+        syncRetry: (payload?: SyncDrainIntent) => this.#onSyncDrain(payload)
       },
       onError: (err: unknown) => {
         console.error(`[${this.#tag}] a scheduled callback failed for good`, {
@@ -490,6 +491,7 @@ export abstract class WorkspaceObjectBase extends WorkspaceContainerBase {
    */
   readonly #trust = new ContainerTrust({
     workspace: () => this.#workspace,
+    container: () => this.ctx.container,
     tag: () => this.#tag,
     id: () => this.ctx.id.toString()
   });
@@ -629,7 +631,7 @@ export abstract class WorkspaceObjectBase extends WorkspaceContainerBase {
   }
 
   /**
-   * Clone, fetch and push — the three operations that need the forge token.
+   * Clone, fetch and push — the operations that need the forge token.
    *
    * The work is `./git-host.ts`, which owns why the credential stays on this
    * side of the boundary. What stays here is what only this object can do: the
@@ -1060,14 +1062,29 @@ export abstract class WorkspaceObjectBase extends WorkspaceContainerBase {
     }
   }
 
-  /** An outstanding pull came due. */
-  async #onSyncDrain(): Promise<void> {
+  /**
+   * An outstanding pull came due.
+   *
+   * The three answers want three different next moves, which is why the drain
+   * distinguishes them. Progress comes straight back for the next block. A
+   * failure backs off, carrying its own count in the schedule's payload — the
+   * object does not survive between wake-ups, so there is nowhere else to keep
+   * it. Nothing reachable ends the attempt: a container that is gone took the
+   * unpulled writes with it, so the install's record of a tree still in flight
+   * is cleared and the next access can arm a fresh install.
+   */
+  async #onSyncDrain(payload?: SyncDrainIntent): Promise<void> {
     const outcome = await this.#sync.drain(SYNC_DRAIN_BUDGET_MS);
     if (outcome === "incomplete") {
       await this.#sync.arm();
       return;
     }
-    if (outcome === "complete") await this.#install.promoteFingerprint();
+    if (outcome === "failed") {
+      await this.#sync.arm((payload?.attempt ?? 0) + 1);
+      return;
+    }
+    if (outcome === "complete") await this.#install.onSyncComplete();
+    else await this.#install.onSyncUnrecoverable();
   }
 
   /** The idle-reclaim deadline came due. */

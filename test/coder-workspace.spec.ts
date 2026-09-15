@@ -567,6 +567,59 @@ describe("arming an install when the tree is missing", () => {
   });
 
   /**
+   * The window between an install finishing and its tree arriving.
+   *
+   * An install ends when its command exits; the tree it wrote reaches this
+   * object on the pull that follows, which can still be in flight. In between,
+   * the workspace looks exactly like one that never installed anything — a
+   * terminal record and no `node_modules` — and arming there starts a second
+   * `npm ci` **while the first tree is still crossing**, which deletes what the
+   * pull is delivering and sends the whole tree over again.
+   *
+   * A pull with nothing applied yet is the sharp case: the marker is the only
+   * thing that distinguishes it from a workspace with no tree at all.
+   */
+  it("arms nothing while the tree is still on its way", async () => {
+    const stub = freshWorkspace("arm-tree-in-flight");
+    const dir = "/workspace/probe";
+    await seedInstalled(stub, dir);
+
+    // What the install writes when its own bracket did not land the tree: no
+    // `node_modules` anywhere yet, and a note that one is on its way.
+    await runInDurableObject(stub, (_instance, state) =>
+      state.storage.put("install:syncing", { at: Date.now() })
+    );
+
+    await touchWorkspace(stub);
+
+    expect(await armed(stub)).toBeUndefined();
+    expect((await storedInstall(stub))?.state).toBe("done");
+  });
+
+  /**
+   * The bound on that, because a marker nothing clears would suppress every
+   * future install for the life of the workspace — an isolate that died between
+   * the install and its drain leaves exactly that.
+   */
+  it("stops believing a tree that never arrived", async () => {
+    const stub = freshWorkspace("arm-tree-in-flight-stale");
+    const dir = "/workspace/probe";
+    await seedInstalled(stub, dir);
+
+    await runInDurableObject(stub, (_instance, state) =>
+      state.storage.put("install:syncing", {
+        at: Date.now() - 2 * 60 * 60_000
+      })
+    );
+
+    await touchWorkspace(stub);
+
+    // Armed and run: a stale marker is dropped rather than obeyed, and the
+    // install it was suppressing goes ahead.
+    expect((await settled(stub))?.state).toBe("failed");
+  });
+
+  /**
    * A caller's very first task: nothing has ever been installed, so there is no
    * record of *where* to install. `repo_clone` and its `afterCheckout` hook own
    * this case, exactly as they always have.
@@ -600,10 +653,10 @@ describe("arming an install when the tree is missing", () => {
  * the cursor is durable, so a later `pull()` resumes the same operation, and
  * driving that later `pull()` is the host's half of syncing.
  *
- * These assert the two places the host has to act on it. Both run without a
- * container, which is the case the drain has to survive rather than the case it
- * exists for — with none running there is nothing left to pull, because whatever
- * a container held that never arrived went with it.
+ * These assert it on the idle path and the git path, the places the host has to
+ * act. Both run without a container, which is the case the drain has to survive
+ * rather than the case it exists for — with none running there is nothing left
+ * to pull, because whatever a container held that never arrived went with it.
  */
 describe("draining an outstanding pull", () => {
   /**

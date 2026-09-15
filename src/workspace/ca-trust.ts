@@ -45,6 +45,8 @@ const TRUST_TIMEOUT_MS = 30_000;
 
 export interface ContainerTrustDeps {
   workspace: () => Workspace;
+  /** The runtime's own container handle, for the exit this has to hear about. */
+  container: () => Container | undefined;
   /** Log prefix and object id, for the one line an operator can see. */
   tag: () => string;
   id: () => string;
@@ -61,21 +63,70 @@ export interface ContainerTrustDeps {
  * replacement.
  *
  * It is wrong only in the safe direction. An isolate that lost it re-runs an
- * idempotent `install -m 644`; an isolate that kept it across a replacement is
- * corrected by whichever of the two signals arrives first — a container that is
- * no longer running, or a command reporting `EEXEC_LOST`. Both call
- * {@link forget}, and both are needed, because a runtime that swaps a container
- * underneath a running command reports itself through that command's failure
- * rather than through `running`.
+ * idempotent `install -m 644`.
+ *
+ * ## What clears it
+ *
+ * **The container's own exit**, watched through `monitor()`. This is the signal
+ * that does not depend on anyone noticing: a container replaced underneath a
+ * running command — by a reconnect, a relaunch, a crash — exits, and the watch
+ * fires whoever caused it. Nothing else here is in a position to know, because
+ * most commands run through the stub this object hands out and report their
+ * failures to their own caller, not to it.
+ *
+ * The watch lives in memory beside the flag it clears, which is the right
+ * lifetime: an isolate that loses one loses the other, and the replacement
+ * starts out untrusted. It is deliberately not held open with `waitUntil` —
+ * that would keep an invocation alive for the life of the container.
+ *
+ * A container seen not running, and a command reporting `EEXEC_LOST`, both call
+ * {@link forget} as well. They are cheap, they are strictly earlier in some
+ * orderings, and neither is load-bearing on its own.
  */
 export class ContainerTrust {
   #trusted = false;
+
+  /** Whether an exit watch is standing for the container now running. */
+  #watching = false;
 
   constructor(private readonly deps: ContainerTrustDeps) {}
 
   /** Forget that any container was trusted. */
   forget(): void {
     this.#trusted = false;
+  }
+
+  /**
+   * Watch this container's exit, so its replacement is not trusted on its
+   * behalf.
+   *
+   * Re-armed rather than kept: the promise settles once, for the container it
+   * was taken from, so the next {@link ensure} takes a fresh one for whatever is
+   * running then.
+   *
+   * A rejection is an exit too — the runtime reporting the container went away
+   * badly — so both settlements clear the flag, and neither is allowed to
+   * surface as an unhandled rejection.
+   */
+  #watch(): void {
+    if (this.#watching) return;
+    const container = this.deps.container();
+    if (!container) return;
+    try {
+      const done = (): void => {
+        this.#watching = false;
+        this.forget();
+      };
+      container.monitor().then(done, done);
+      this.#watching = true;
+    } catch (err) {
+      // No watch, so the flag keeps its other two ways of being cleared. Worth a
+      // line because it silently widens the window this class exists to close.
+      console.warn(`[${this.deps.tag()}] could not watch the container`, {
+        id: this.deps.id(),
+        err: String(err)
+      });
+    }
   }
 
   /**
@@ -91,6 +142,7 @@ export class ContainerTrust {
    * opaque one.
    */
   async ensure(): Promise<void> {
+    this.#watch();
     if (this.#trusted) return;
     try {
       using handle = await this.deps

@@ -1,12 +1,14 @@
 /**
  * What a workspace object wakes for, as one map.
  *
- * Its own module because two things type against it and neither should own it:
- * the object that registers the callbacks, and the `JobLifecycle` in
- * `./install.ts` that schedules two of them by name. A name that exists in one
- * and not the other is then a compile error rather than a schedule that is
- * rejected at runtime.
+ * Its own module because the object that registers these callbacks and the
+ * `JobLifecycle` in `./install.ts` that schedules some of them by name both type
+ * against it, and neither should own it. A name that exists in one and not the
+ * other is then a compile error rather than a schedule that is rejected at
+ * runtime.
  */
+
+import type { SyncDrainIntent } from "./sync.js";
 
 // A `type`, not an `interface`: the scheduler constrains its handler map to a
 // `Record<string, …>`, and only a type alias carries the implicit index
@@ -17,5 +19,5 @@ export type WorkspaceWakeHandlers = {
   installWatch: () => Promise<void>;
   idleReclaim: () => Promise<void>;
   containerIdle: () => Promise<void>;
-  syncRetry: () => Promise<void>;
+  syncRetry: (payload?: SyncDrainIntent) => Promise<void>;
 };

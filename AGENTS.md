@@ -107,24 +107,28 @@ several frames away.
 
 ### The branches, and what each installs
 
-This repo is not versioned and has no release, but its branches still differ in what
-they install, and the difference is what a fork gets:
+This repo is not versioned and publishes nothing, but it still has a released line:
+**`main` is what a fork builds.** It pins published versions of core and plugins, and
+nothing on it may depend on a commit that is not released. Development lands on
+`next`, by squash-merged PR.
 
-- **`main` pins published versions.** Somebody who forks this repo builds against the
-  registry, which is the whole point of a starter. Nothing here may depend on a commit
-  that is not released.
-- **`next` is where this repo is developed against changes core and plugins have
-  accepted but not yet shipped**, so a contract change can be exercised end-to-end
-  before any of it is published. It reaches them by git ref onto their own `next`,
-  which installs only because those branches carry a `prepare` that builds and
-  because `allowScripts` here lets npm run it — drop either and every subpath
-  resolves to a missing file. npm pins the ref to a SHA in the lockfile, so a merge
-  into core or plugins does not reach this repo until someone reinstalls; a plain
-  reinstall of the lockfile keeps the old commit.
+**`next` pins published versions too, by default.** A change that needs core or
+plugins work not yet published may point `next` at their `main` by git ref for as long
+as it needs to, which is how a contract change is exercised end-to-end before any of it
+ships. The ref installs only because those repos carry a `prepare` that builds and
+because `allowScripts` here lets npm run it — drop either and every subpath resolves
+to a missing file. npm pins the ref to a SHA in the lockfile, so a merge upstream does
+not reach this repo until someone reinstalls; a plain reinstall of the lockfile keeps
+the old commit.
 
-Flipping the git refs back to semver is part of the release, not part of the merge —
-the same act that bumps core and plugins. Use `npm run link:local` for work that is
-not committed anywhere yet; a git ref only reaches what is on a branch.
+**A release is a PR from `next` into `main`, merged with a merge commit.** Before it,
+once core and plugins are published, a PR into `next` pins the new versions and removes
+any git ref; Test fails a PR into `main` that still names one. Nothing reaches `main`
+any other way, a fix included, so `main` only ever gains merges of `next` and a release
+never needs merging back.
+
+Use `npm run link:local` for work that is not committed anywhere yet; a git ref only
+reaches what is on a branch.
 
 ---
 

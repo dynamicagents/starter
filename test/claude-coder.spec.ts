@@ -110,6 +110,20 @@ describe("the parent's surface", () => {
   });
 });
 
+describe("what the main agent asks a person before doing", () => {
+  it("holds opening a pull request, and nothing else", async () => {
+    // The rule `test/coder-surface.spec.ts` pins for the coder, over this agent's
+    // own `parentPlugins`: a separate list, so a rename there that dropped the
+    // rule would let a pull request through unasked and the coder's spec would
+    // still pass.
+    const surface = await parent().mainAgentSurface({
+      session: { getCompactions: async () => [] } as never
+    });
+
+    expect(Object.keys(surface.toolApproval)).toEqual(["repo_open_pr"]);
+  });
+});
+
 /**
  * One entry, and the reason is not economy.
  *

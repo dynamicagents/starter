@@ -66,6 +66,11 @@ Register each agent with your gatekeeper using the **same endpoint** and its own
 `/a2a` is core's default, not a requirement — see [Where the endpoints
 live](#where-the-endpoints-live). Register whatever path this deployment actually serves.
 
+> **The default models need a paid Workers plan**, or prepaid AI Gateway credits. Every
+> Workers AI agent runs on the models `MODEL` names in [`src/config.ts`](src/config.ts),
+> and they are not served on Workers Free. On the free tier, point its `chatModelId` and
+> `fallbackChatModelId` at models that are, and that support function calling.
+
 > **Browser Rendering needs a paid Workers plan.** On the free tier, remove `browser()`
 > from the agents' `plugins.ts` and the `browser` binding from `wrangler.jsonc`.
 

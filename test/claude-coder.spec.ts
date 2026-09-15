@@ -5,7 +5,8 @@ import { createAgentRuntime } from "@dynamicagents/core";
 import type { PluginHost } from "@dynamicagents/core/host";
 import type { RecipeExecutionRequest } from "@dynamicagents/core/subtasks";
 import { makeDoHelpers } from "@dynamicagents/core/testing";
-import { getWorkspace } from "@cloudflare/computer";
+import type { ClaudeCoderWorkspaceDO } from "@/index";
+import { openWorkspace } from "@/workspace/open";
 import {
   CLAUDE_CODE_TYPE,
   WORKSPACE_RUNTIME_KEY
@@ -185,7 +186,9 @@ const { freshStub: freshSubagent } = makeDoHelpers(
     }
   ).CLAUDE_CODER_SUBAGENT
 );
-const { freshStub: freshWorkspace } = makeDoHelpers(env.CLAUDE_CODER_WORKSPACE);
+const { freshStub: freshWorkspace } = makeDoHelpers<ClaudeCoderWorkspaceDO>(
+  env.CLAUDE_CODER_WORKSPACE
+);
 
 const request = (): RecipeExecutionRequest => ({
   taskId: "task-1",
@@ -289,9 +292,7 @@ describe("a checkout with nothing to install", () => {
 
     // A repository with git in it and no lockfile: cloned, recorded, and skipped
     // by the resolver.
-    using ws = await getWorkspace(
-      workspace as unknown as Parameters<typeof getWorkspace>[0]
-    );
+    using ws = await openWorkspace(workspace);
     await ws.fs.mkdir(`${dir}/.git`, { recursive: true });
     await ws.fs.writeFile(`${dir}/.git/HEAD`, "ref: refs/heads/main\n");
     await workspace.noteCheckout({ dir, kind: "repo", repo: "acme/spike" });

@@ -121,10 +121,12 @@ export function code(config: CodeConfig): AgentPlugin {
     //
     // `onAbort` fires per *subtask*, not per task, and every subtask of this
     // agent shares one container with the parent round. Tearing that container
-    // down because one delegated subtask was cancelled would delete the checkout
+    // down because one delegated subtask was cancelled would take the container
     // out from under the round that delegated it and every sibling still
     // running. Only a task-level moment can safely act, and `agent.ts` owns the
-    // one that does: `onTaskCanceled`, which destroys the container.
+    // one that does: `onTaskCanceled`, which resets the working tree rather than
+    // destroying anything — see `discardWorkingTree` in
+    // `src/workspace/lifecycle.ts` for why that is the cleanup that survives.
 
     subtaskType: {
       key: "code",
@@ -154,8 +156,8 @@ export function code(config: CodeConfig): AgentPlugin {
         //
         // **`repo` is deliberately absent.** A subagent sharing the parent's
         // checkout must not also share its history, and the previous "read-only
-        // inspection" justification did not survive contact: the family is all
-        // six tools or none, so `repo_commit` and `repo_push` were on the table
+        // inspection" justification did not survive contact: the family arrives
+        // whole or not at all, so `repo_commit` and `repo_push` were on the table
         // with nothing but prose between them and the model. `git status` and
         // `git diff` through `sb_exec` give the same information and carry no
         // credential.

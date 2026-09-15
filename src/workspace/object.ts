@@ -54,8 +54,8 @@ import type { RepoGitResult } from "@dynamicagents/plugins/repo";
  *
  * It lives in `src/workspace/` rather than in either agent's directory because
  * `verify:isolation` fails an agent that imports a sibling's module: the
- * sibling's plugins come with it. Anything two agents share belongs here or at
- * the top level, never inside one of them.
+ * sibling's plugins come with it. Anything agents share belongs here or at the
+ * top level, never inside one of them.
  *
  * `@cloudflare/computer` pairs a SQLite-backed virtual filesystem in *this*
  * object's storage with a container running `computerd`, which mounts it over
@@ -322,7 +322,7 @@ export abstract class WorkspaceObjectBase extends WorkspaceContainerBase {
     return (this.#configMemo ??= this.workspaceConfig());
   }
 
-  /** This object's log prefix, so two workspaces stay tellable apart. */
+  /** This object's log prefix, so one workspace stays tellable from another. */
   get #tag(): string {
     return this.#cfg.label;
   }
@@ -330,9 +330,9 @@ export abstract class WorkspaceObjectBase extends WorkspaceContainerBase {
   /**
    * How long an install may run before it is killed.
    *
-   * Read from the plan in three places, which is why it is a getter: the
-   * fallback has to be the same number in all three, and a `??` repeated three
-   * times is three chances to write a different one.
+   * Read from the plan wherever an install is bounded, which is why it is a
+   * getter: the fallback has to be the same number every time, and a `??`
+   * repeated at each site is a chance to write a different one.
    */
   /** This agent's container-idle window — see {@link WorkspaceObjectConfig}. */
   get #containerIdleMs(): number {
@@ -454,7 +454,7 @@ export abstract class WorkspaceObjectBase extends WorkspaceContainerBase {
    *
    * `container: () => this` hands the backend this object's own container.
    * `workspace` is how `computerd` dials *back* in: the runtime builds a loopback
-   * binding from the exported `WorkspaceProxy` class and these two values, which
+   * binding from the exported `WorkspaceProxy` class and the values below, which
    * is why `src/index.ts` re-exports it and why dropping that export breaks the
    * container with no compile error.
    *
@@ -916,22 +916,17 @@ export abstract class WorkspaceObjectBase extends WorkspaceContainerBase {
    *
    * So it is **probed, not remembered**. A record is where to look; `.git` being
    * there is what makes the answer true. That costs one local read of this
-   * object's own SQLite — `.git` is durable, since `computerd` excludes only
-   * `node_modules` from the sync — and it is what turns a stale record into
-   * `undefined` instead of into a session started in a directory that is no
-   * longer a checkout.
+   * object's own SQLite — everything under the checkout is durable, `.git`
+   * included — and it is what turns a stale record into `undefined` instead of
+   * into a session started in a directory that is no longer a checkout.
    *
-   * The fallback to the install context is a **migration**, not a second source
-   * of truth, and it is a partial one: it reaches a workspace whose install ran,
-   * and cannot reach one whose install was skipped, since that is the case with
-   * no context to fall back to either. Those answer `undefined` until their next
-   * checkout records one — which `repo_clone` does on any tree it can fetch and
-   * reset, and cannot do on a tree it refuses to touch because it is dirty. The
-   * whole fallback can go once no live workspace predates the record.
+   * The record is the only source. A workspace that has never recorded one
+   * answers `undefined` until its next checkout does, which `repo_clone` does on
+   * any tree it can fetch and reset.
    */
   async checkoutDir(): Promise<string | undefined> {
     const record = await this.ctx.storage.get<CheckoutRecord>(CHECKOUT_KEY);
-    const dir = record?.dir ?? (await this.#install.context())?.dir;
+    const dir = record?.dir;
     if (!dir) return undefined;
     if (await this.#isCheckout(dir)) return dir;
     // Said out loud because the return value cannot say it: a caller reads
@@ -940,7 +935,7 @@ export abstract class WorkspaceObjectBase extends WorkspaceContainerBase {
     console.warn(`[${this.#tag}] a recorded checkout is no longer there`, {
       id: this.ctx.id.toString(),
       dir,
-      recorded: record ? record.kind : "install-context",
+      recorded: record?.kind,
       // The rest of the record, because this line is read during an incident and
       // "the checkout for acme/spike went missing forty minutes ago" is a
       // different investigation from a bare path. It is also what these two
@@ -956,8 +951,8 @@ export abstract class WorkspaceObjectBase extends WorkspaceContainerBase {
    * Whether `dir` holds a git repository, as this object's own storage sees it.
    *
    * `.git` rather than the directory: an empty directory is not a checkout, and
-   * the two callers of {@link checkoutDir} both need git to be there — one to
-   * reset the tree, the other to run a session that will commit in it. It is
+   * every caller of {@link checkoutDir} needs git to be there — to reset the
+   * tree, or to run a session that will commit in it. It is
    * also the one probe a scratchpad and a clone answer identically, which is
    * what lets them share every path below this line.
    */

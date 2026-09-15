@@ -15,9 +15,9 @@ import { ReactiveSubagent } from "./subagent";
  * The reactive agent: the flagship. Round loop, delegation, subagent execution.
  *
  * All of which is `@dynamicagents/core/round`. What is actually *this agent* is the
- * five methods below plus `./plugins.ts` and `./soul.ts` — and
- * `../arc-player/agent.ts` is the same five methods with different answers. If
- * adding a domain to an agent needed more than that, the plugin contract would be
+ * methods below plus `./plugins.ts` and `./soul.ts` — and
+ * `../arc-player/agent.ts` is the same methods with different answers. If adding
+ * a domain to an agent needed more than that, the plugin contract would be
  * wrong.
  */
 export class ReactiveAgent extends RoundAgentBase<Env> {

@@ -1,12 +1,13 @@
 import { env } from "cloudflare:workers";
 import { describe, expect, it } from "vitest";
 import { makeDoHelpers } from "@dynamicagents/core/testing";
+import type { CoderWorkspaceDO } from "@/index";
 
 /**
  * The credentialed git operations, and the one thing about them that can be
  * asserted without a network.
  *
- * These three methods exist so that `GITHUB_TOKEN` never enters the container:
+ * These methods exist so that `GITHUB_TOKEN` never enters the container:
  * they run isomorphic-git inside this Durable Object, against the same SQLite
  * filesystem the container mounts, and read the token from this object's own
  * `env`. What that buys is verified end-to-end against a real forge; what is
@@ -20,7 +21,9 @@ import { makeDoHelpers } from "@dynamicagents/core/testing";
  * caller is left matching on a string.
  */
 
-const { freshStub: freshWorkspace } = makeDoHelpers(env.CODER_WORKSPACE);
+const { freshStub: freshWorkspace } = makeDoHelpers<CoderWorkspaceDO>(
+  env.CODER_WORKSPACE
+);
 
 /**
  * Both cases carry an explicit timeout, and the number is a fact about

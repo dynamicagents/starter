@@ -83,7 +83,7 @@ export const parentPlugins = (host: PluginHost<Env>): AgentPlugin[] => {
     host.env.CLAUDE_CODER_WORKSPACE.get(
       host.env.CLAUDE_CODER_WORKSPACE.idFromName(name())
     );
-  // Hoisted because two plugins commit under it now. Same identity as `coder`'s,
+  // Hoisted because more than one plugin commits under it now. Same identity as `coder`'s,
   // deliberately — see the comment on `author` in `src/agents/coder/plugins.ts`.
   const author = {
     name: host.env.GITHUB_NAME || "da-coder",

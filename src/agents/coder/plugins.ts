@@ -96,7 +96,7 @@ export const parentPlugins = (host: PluginHost<Env>): AgentPlugin[] => {
       )
     );
   /**
-   * Hoisted because two plugins commit under it now.
+   * Hoisted because more than one plugin commits under it now.
    *
    * Defaults to the generic `da-coder` identity — see `.env.example` for
    * `GITHUB_NAME`/`GITHUB_EMAIL` and why. Has to match `defaultGitIdentity` in

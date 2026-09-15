@@ -50,7 +50,8 @@ export const DEPENDENCY_TREE_NOTE =
  * outage. The coder's cancellation path used to rebuild its own — without
  * `shell: "bash"` — so a cancelled task's cleanup ran under a different shell
  * than every other command in the same container. One definition is what stops
- * that, and now it stops it across two agents rather than two call sites.
+ * that, and now it stops it wherever a workspace is reached rather than at each
+ * call site.
  *
  * The name is a parameter rather than resolved here: it is one workspace per
  * caller **per repository** (`@cloudflare/computer` pairs one Durable Object

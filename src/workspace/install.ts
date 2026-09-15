@@ -367,15 +367,6 @@ export class InstallJob {
   }
 
   /**
-   * Where the install last ran, for a caller that needs the path rather than the
-   * state — `checkoutDir` falls back to it for a workspace that predates the
-   * checkout record.
-   */
-  async context(): Promise<InstallContext | undefined> {
-    return await this.#job.context();
-  }
-
-  /**
    * The record exactly as the job wrote it, with no staleness bound applied.
    *
    * {@link state} is what almost everything wants. This is for the one caller

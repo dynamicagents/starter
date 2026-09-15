@@ -14,8 +14,8 @@ import { general } from "@/agents/reactive/general";
 import { REACTIVE_CONFIG } from "@/config";
 
 /**
- * The seam between this repo and the two packages: what happens when the three
- * disagree, and whether a plugin written *here* is indistinguishable from a
+ * The seam between this repo and the packages it composes: what happens when
+ * they disagree, and whether a plugin written *here* is indistinguishable from a
  * published one.
  */
 

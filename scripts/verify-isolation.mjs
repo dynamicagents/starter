@@ -6,7 +6,7 @@
  *
  * This Worker deploys as **one bundle containing every agent**, so grepping
  * `dist/` for "arc-agi" would always find it and prove nothing. The invariant
- * that matters is the one a user relies on the moment they delete the two agents
+ * that matters is the one a user relies on the moment they delete the agents
  * they don't want: *each agent's graph pulls in only the plugins that agent
  * installed.* So each entry is bundled on its own here, in CI only, and the
  * result is inspected.
@@ -50,8 +50,8 @@ const core = (name) => `@dynamicagents/core/dist/${name}/`;
  * with the SDK, so a bump of it moves every ceiling here at once, and that is not
  * a leak: `forbidden` is the check that would catch one.
  *
- * The two agents that own a workspace additionally carry `core/dist/alarm` (7
- * KiB) and `core/dist/job` (13 KiB) — and *only* those two, which is the
+ * An agent that owns a workspace additionally carries `core/dist/alarm` (7 KiB)
+ * and `core/dist/job` (13 KiB) — and *only* such an agent, which is the
  * isolation this file exists to assert still holding.
  *
  * Every ceiling below is its measurement plus the ~8% headroom this file runs
@@ -184,7 +184,7 @@ const AGENTS = [
     // too tight for the ~8% every other entry here runs with, so it would have
     // gone red on the next dependency bump for no real reason.
     //
-    // Measured 6075 KiB. One of the two entries that also carries `/alarm` and
+    // Measured 6075 KiB. A workspace agent, so it also carries `/alarm` and
     // `/job`; see "What every agent carries" above for the rest.
     //
     // The last 99 KiB of that is the container client growing wherever it is
@@ -348,7 +348,7 @@ if (leakFailed) {
     "\nA plugin reached an agent that does not install it. Nothing in core " +
       "imports a plugin and `@dynamicagents/plugins` has no root barrel, so this is " +
       "almost always one agent importing another agent's module — follow the " +
-      "`via` lines. Anything genuinely shared by two agents belongs in " +
+      "`via` lines. Anything genuinely shared between agents belongs in " +
       "src/workspace/, src/config.ts or src/round-policy.ts, never in a sibling's directory."
   );
 }

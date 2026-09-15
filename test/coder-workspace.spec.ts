@@ -2,7 +2,8 @@ import { runInDurableObject } from "cloudflare:test";
 import { env } from "cloudflare:workers";
 import { describe, expect, it, vi } from "vitest";
 import { makeDoHelpers } from "@dynamicagents/core/testing";
-import { getWorkspace } from "@cloudflare/computer";
+import type { CoderWorkspaceDO } from "@/index";
+import { openWorkspace } from "@/workspace/open";
 import type { InstallState } from "@dynamicagents/plugins/computer";
 import { INSTALL_PLAN } from "@/workspace/install-plan";
 import { TRUST_CA_COMMAND } from "@/workspace/ca-trust";
@@ -29,7 +30,9 @@ import { SCRATCH_DIR } from "@/workspace/scratch";
  */
 
 /** A fresh workspace per test — DO storage never leaks between them. */
-const { freshStub: freshWorkspace } = makeDoHelpers(env.CODER_WORKSPACE);
+const { freshStub: freshWorkspace } = makeDoHelpers<CoderWorkspaceDO>(
+  env.CODER_WORKSPACE
+);
 
 /**
  * The same workspace, through a new stub, once a reclaim has reset it.
@@ -38,13 +41,13 @@ const { freshStub: freshWorkspace } = makeDoHelpers(env.CODER_WORKSPACE);
  * object that reset stays broken — every later call on it throws. A caller in
  * production gets a new stub per request, so this is what one sees.
  */
-async function afterReclaim(stub: DurableObjectStub) {
+async function afterReclaim(stub: DurableObjectStub<CoderWorkspaceDO>) {
   await new Promise((resolve) => setTimeout(resolve, 10));
   return env.CODER_WORKSPACE.get(stub.id);
 }
 
 /** Read the raw install record, bypassing the staleness repair `advisories` applies. */
-function storedInstall(stub: DurableObjectStub) {
+function storedInstall(stub: DurableObjectStub<CoderWorkspaceDO>) {
   return runInDurableObject(stub, (_instance, state) =>
     state.storage.get<InstallState>("install")
   );
@@ -64,10 +67,11 @@ function storedInstall(stub: DurableObjectStub) {
  * So the two facts stay apart: this is a checkout, that is a checkout which
  * installs. Reach for the second only where the resolver has to act.
  */
-async function seedGitCheckout(stub: DurableObjectStub, dir: string) {
-  using ws = await getWorkspace(
-    stub as unknown as Parameters<typeof getWorkspace>[0]
-  );
+async function seedGitCheckout(
+  stub: DurableObjectStub<CoderWorkspaceDO>,
+  dir: string
+) {
+  using ws = await openWorkspace(stub);
   await ws.fs.mkdir(`${dir}/.git`, { recursive: true });
   // `.git` is a directory in a real checkout, but what the workspace probes for
   // is its presence, and a file is what a fixture can create in one call. It is
@@ -77,14 +81,12 @@ async function seedGitCheckout(stub: DurableObjectStub, dir: string) {
 
 /** A checkout the install resolver will act on: git, plus a lockfile. */
 async function seedNodeCheckout(
-  stub: DurableObjectStub,
+  stub: DurableObjectStub<CoderWorkspaceDO>,
   dir: string,
   options: { tree?: boolean } = {}
 ) {
   await seedGitCheckout(stub, dir);
-  using ws = await getWorkspace(
-    stub as unknown as Parameters<typeof getWorkspace>[0]
-  );
+  using ws = await openWorkspace(stub);
   await ws.fs.writeFile(`${dir}/package.json`, '{"name":"probe"}');
   await ws.fs.writeFile(`${dir}/package-lock.json`, '{"lockfileVersion":3}');
   if (options.tree) await ws.fs.mkdir(`${dir}/node_modules`);
@@ -298,37 +300,12 @@ describe("where the work is", () => {
     await stub.noteCheckout({ dir, kind: "repo", repo: "acme/gone" });
     expect(await stub.checkoutDir()).toBe(dir);
 
-    using ws = await getWorkspace(
-      stub as unknown as Parameters<typeof getWorkspace>[0]
-    );
+    using ws = await openWorkspace(stub);
     await ws.fs.rm(`${dir}/.git`, { recursive: true });
 
     // The record still says `dir`. The answer is `undefined` anyway, because the
     // record is where to look and `.git` is what makes it true.
     expect(await stub.checkoutDir()).toBeUndefined();
-  });
-
-  /**
-   * The migration path. Workspaces deployed before the checkout record existed
-   * hold an install context and nothing else, and they must keep answering until
-   * their next clone writes a record — a fix that silently stranded every live
-   * checkout would be its own outage.
-   */
-  it("still answers for a workspace that predates the record", async () => {
-    const stub = freshWorkspace("checkout-legacy");
-    const dir = "/workspace/legacy";
-    await seedGitCheckout(stub, dir);
-
-    await runInDurableObject(stub, (_instance, state) =>
-      state.storage.put("install:context", {
-        dir,
-        fingerprint: null,
-        command: "npm ci --no-audit --no-fund",
-        startedAt: Date.now()
-      })
-    );
-
-    expect(await stub.checkoutDir()).toBe(dir);
   });
 
   /**
@@ -382,7 +359,7 @@ describe("where the work is", () => {
  * container and is covered end to end.
  */
 describe("arming an install when the tree is missing", () => {
-  const armed = (stub: DurableObjectStub) =>
+  const armed = (stub: DurableObjectStub<CoderWorkspaceDO>) =>
     runInDurableObject(stub, (_instance, state) =>
       state.storage.get<number>("install:armed")
     );
@@ -396,7 +373,7 @@ describe("arming an install when the tree is missing", () => {
    * after the decision it was meant to inform.
    */
   async function seedInstalled(
-    stub: DurableObjectStub,
+    stub: DurableObjectStub<CoderWorkspaceDO>,
     dir: string,
     options: { tree?: boolean } = {}
   ) {
@@ -423,10 +400,8 @@ describe("arming an install when the tree is missing", () => {
   }
 
   /** Touch the workspace the way anything reaching it does — via the stub hook. */
-  async function touchWorkspace(stub: DurableObjectStub) {
-    using ws = await getWorkspace(
-      stub as unknown as Parameters<typeof getWorkspace>[0]
-    );
+  async function touchWorkspace(stub: DurableObjectStub<CoderWorkspaceDO>) {
+    using ws = await openWorkspace(stub);
     void ws;
   }
 
@@ -438,7 +413,10 @@ describe("arming an install when the tree is missing", () => {
    * That is the system working, so these assert the settled outcome rather than a
    * marker that is meant to be transient.
    */
-  async function settled(stub: DurableObjectStub, ms = 5_000) {
+  async function settled(
+    stub: DurableObjectStub<CoderWorkspaceDO>,
+    ms = 5_000
+  ) {
     const deadline = Date.now() + ms;
     for (;;) {
       const state = await storedInstall(stub);
@@ -738,9 +716,7 @@ describe("reclaiming an idle workspace", () => {
   it("still reclaims one that was used and then went idle", async () => {
     const stub = freshWorkspace("used-then-idle");
     // `getWorkspace` is the busiest entry point and the one that touches.
-    using ws = await getWorkspace(
-      stub as unknown as Parameters<typeof getWorkspace>[0]
-    );
+    using ws = await openWorkspace(stub);
     await ws.fs.mkdir("/workspace/repo", { recursive: true });
 
     // A zero threshold stands in for a week having passed.
@@ -820,9 +796,7 @@ describe("trusting the interception CA", () => {
 
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     try {
-      using ws = await getWorkspace(
-        stub as unknown as Parameters<typeof getWorkspace>[0]
-      );
+      using ws = await openWorkspace(stub);
       void ws;
       expect(attempts(warn.mock.calls)).toBeGreaterThan(0);
     } finally {
@@ -841,9 +815,7 @@ describe("trusting the interception CA", () => {
 
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     try {
-      using ws = await getWorkspace(
-        stub as unknown as Parameters<typeof getWorkspace>[0]
-      );
+      using ws = await openWorkspace(stub);
       void ws;
       // No checkout, no install record, nothing armed — the paths that used to
       // carry the trust are all inert here.
@@ -892,14 +864,12 @@ function scheduleRows(
  */
 describe("the idle deadlines, over a scheduler that has no upsert", () => {
   /** The same hook anything reaching this object goes through. */
-  async function touch(stub: DurableObjectStub) {
-    using ws = await getWorkspace(
-      stub as unknown as Parameters<typeof getWorkspace>[0]
-    );
+  async function touch(stub: DurableObjectStub<CoderWorkspaceDO>) {
+    using ws = await openWorkspace(stub);
     void ws;
   }
 
-  const schedules = (stub: DurableObjectStub) =>
+  const schedules = (stub: DurableObjectStub<CoderWorkspaceDO>) =>
     runInDurableObject(stub, (_instance, state) => scheduleRows(state));
 
   it("keeps one row per deadline however often the workspace is touched", async () => {
@@ -1003,91 +973,5 @@ describe("the idle deadlines, over a scheduler that has no upsert", () => {
       .sort();
     expect(again).toContain("idleReclaim");
     expect(again).toContain("containerIdle");
-  });
-});
-
-/**
- * Booting on what the predecessor left behind, since there is no migration.
- *
- * Deployed objects hold a KV row called `"wake"` carrying every deadline, and a
- * physical alarm armed against it. Nothing reads that row here, so an object
- * upgraded mid-install boots with all of it still on disk: a `running` install
- * record, an `install-run` entry in that row pointing at it, and an alarm that
- * fires once into a handler with no schedule rows behind it.
- *
- * The intent is orphaned — nothing reads that row any more — so the question is
- * not whether the wake-up is lost (it is) but whether the object recovers. It
- * does, through the staleness bound, which is the mechanism that already exists
- * for "the isolate that owned this is gone". An orphaned intent is exactly that
- * case, so the upgrade needs no drain of its own.
- */
-describe("an object upgraded mid-install", () => {
-  it("recovers a running record whose wake intent the upgrade orphaned", async () => {
-    const stub = freshWorkspace("upgraded-mid-install");
-    const limit = INSTALL_PLAN.timeoutMs ?? 20 * 60_000;
-
-    await runInDurableObject(stub, async (_instance, state) => {
-      await state.storage.put("install", {
-        state: "running",
-        command: "npm ci --no-audit --no-fund",
-        startedAt: Date.now() - limit - 10 * 60_000
-      } satisfies InstallState);
-      // The legacy row, carrying the entry that would have run the install.
-      await state.storage.put("wake", {
-        "install-run": { key: "install-run", notBefore: Date.now() - 60_000 },
-        "install-watch": {
-          key: "install-watch",
-          notBefore: Date.now() - 30_000
-        }
-      });
-      // And the alarm it armed, already due.
-      await state.storage.setAlarm(Date.now() - 1_000);
-    });
-
-    // The stale alarm fires into a lifecycle with no schedule rows. It must be a
-    // no-op that does not throw: a throwing `alarm()` is retried a bounded number
-    // of times and then abandoned, taking every future schedule with it.
-    await runInDurableObject(stub, async (instance) => {
-      await expect(instance.alarm()).resolves.toBeUndefined();
-    });
-
-    // The record is not stranded. `arm()` refuses `running`, so recovery is the
-    // staleness bound writing the only accurate thing left to say.
-    const [advisory] = await stub.advisories();
-    expect(advisory?.kind).toBe("deps-broken");
-    expect((await storedInstall(stub))?.state).toBe("failed");
-
-    // And the object schedules again afterwards, rather than being poisoned by
-    // what it found.
-    using ws = await getWorkspace(
-      stub as unknown as Parameters<typeof getWorkspace>[0]
-    );
-    void ws;
-    const rows = await runInDurableObject(stub, (_instance, state) =>
-      scheduleRows(state)
-    );
-    expect(rows.map((row) => row.callback)).toContain("idleReclaim");
-  });
-
-  /** The orphaned row is left in place rather than drained. Pinned, not assumed. */
-  it("leaves the orphaned row untouched", async () => {
-    const stub = freshWorkspace("upgraded-orphan");
-    const leftover = {
-      "container-idle": { key: "container-idle", notBefore: Date.now() }
-    };
-    await runInDurableObject(stub, (_instance, state) =>
-      state.storage.put("wake", leftover)
-    );
-
-    using ws = await getWorkspace(
-      stub as unknown as Parameters<typeof getWorkspace>[0]
-    );
-    void ws;
-
-    expect(
-      await runInDurableObject(stub, (_instance, state) =>
-        state.storage.get("wake")
-      )
-    ).toEqual(leftover);
   });
 });

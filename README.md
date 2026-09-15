@@ -195,7 +195,7 @@ request body, and a token minted for one agent would work against any sibling.
 
 ---
 
-## The five agents
+## The agents
 
 | Agent                                       | What it is                                                              | Why it's here                                                                                    |
 | ------------------------------------------- | ----------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------ |
@@ -374,18 +374,18 @@ npm run agent:new watcher --kind single  # a single-turn agent, its own loop
 npm run agent:remove arc-player
 ```
 
-Each edits the four places an agent exists — its directory, [`src/index.ts`](src/index.ts),
+Each edits every place an agent exists — its directory, [`src/index.ts`](src/index.ts),
 [`wrangler.jsonc`](wrangler.jsonc) (DO binding, sqlite migration, workflow binding), and
 [`scripts/verify-isolation.mjs`](scripts/verify-isolation.mjs) — then runs prettier over
-what it touched. `agent:new` then tells you the two things it cannot decide for you: the
-config entry and the agent's soul.
+what it touched. `agent:new` then tells you what it cannot decide for you: the config
+entry and the agent's soul.
 
 Do it by hand and a missed edit fails at a different time each: a forgotten DO binding at
 deploy, a forgotten `new_sqlite_classes` entry at the first request, a forgotten
 isolation entry _never_ — it just quietly stops checking that agent.
 
-Add-then-remove returns all four files byte-for-byte to where they started, which is
-the test that keeps this honest.
+Add-then-remove returns every file it touched byte-for-byte to where it started, which
+is the test that keeps this honest.
 
 > The signing key and `GATEKEEPER_ORIGINS` are **not** removed: they belong to the
 > deployment, not to any one agent. A secret only one agent's plugins needed —
@@ -493,10 +493,10 @@ src/
   workspace/            ← the container-backed workspace both coders share
   agents/
     reactive/           ← definition, plugins, soul, manifest, the `general` plugin
-    proactive/          ← its own loop + workflow, plus the same five files
+    proactive/          ← its own loop + workflow, plus the same set
     arc-player/         ← definition, plugins, soul, manifest, thin subclasses
-    coder/              ← the same five files, plus the `code` subtask type
-    claude-coder/       ← the same five files, plus a subagent that drives the CLI
+    coder/              ← the same set, plus the `code` subtask type
+    claude-coder/       ← the same set, plus a subagent that drives the CLI
 test/
 scripts/
 ```

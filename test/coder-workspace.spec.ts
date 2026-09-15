@@ -367,21 +367,26 @@ describe("arming an install when the tree is missing", () => {
   /**
    * A workspace that installed successfully, before its container went away.
    *
-   * `tree` seeds what that install left behind. It is written **with** the
-   * checkout rather than afterwards, because opening the workspace at all runs
-   * the arming check — so a tree created in a second `getWorkspace` block lands
-   * after the decision it was meant to inform.
+   * `tree` seeds what that install left behind, and the two kinds are the whole
+   * point of asking: `landed` is a tree whose pull completed, recorded by the
+   * fingerprint that says so, and `partial` is the directory a pull left behind
+   * when nobody could finish it. On the filesystem they are indistinguishable,
+   * which is exactly why the fixture makes the caller name one.
+   *
+   * It is written **with** the checkout rather than afterwards, because opening
+   * the workspace at all runs the arming check — so a tree created in a second
+   * `getWorkspace` block lands after the decision it was meant to inform.
    */
   async function seedInstalled(
     stub: DurableObjectStub<CoderWorkspaceDO>,
     dir: string,
-    options: { tree?: boolean } = {}
+    options: { tree?: "landed" | "partial" } = {}
   ) {
     // The checkout has to be here too, or the resolver finds no `package.json`,
     // answers `skip`, and the armed install proves nothing by never reaching a
     // spawn — which is exactly how the first draft of this passed while testing
     // half of what it claimed.
-    await seedNodeCheckout(stub, dir, options);
+    await seedNodeCheckout(stub, dir, { tree: options.tree !== undefined });
     await runInDurableObject(stub, async (_instance, state) => {
       await state.storage.put("install", {
         state: "done",
@@ -396,6 +401,13 @@ describe("arming an install when the tree is missing", () => {
         command: "npm ci --no-audit --no-fund",
         startedAt: Date.now() - 140_000
       });
+      // The record a completed pull writes, and the only thing that separates a
+      // whole tree from the remains of an abandoned one.
+      if (options.tree === "landed")
+        await state.storage.put("install:completed", {
+          fingerprint: "stale",
+          at: Date.now() - 60_000
+        });
     });
   }
 
@@ -534,7 +546,7 @@ describe("arming an install when the tree is missing", () => {
     const dir = "/workspace/probe";
     // What a finished install leaves behind, as this side sees it: a directory
     // under the checkout. The probe asks for exactly that and nothing more.
-    await seedInstalled(stub, dir, { tree: true });
+    await seedInstalled(stub, dir, { tree: "landed" });
 
     await touchWorkspace(stub);
 
@@ -542,6 +554,34 @@ describe("arming an install when the tree is missing", () => {
     // describes a tree that is right there.
     expect(await armed(stub)).toBeUndefined();
     expect((await storedInstall(stub))?.state).toBe("done");
+  });
+
+  /**
+   * The other half of that, and the reason the directory is not the whole
+   * question.
+   *
+   * A pull commits in blocks, so one that is abandoned part-way — the container
+   * it was reading from went away — leaves `node_modules` holding some fraction
+   * of a tree. Nothing on this side can tell that from a finished one: same
+   * directory, same name, no marker left once the drain has given up on it. Read
+   * as "the tree is here", it suppresses the reinstall that would repair it for
+   * the life of the workspace, and every command that needs a dependency fails
+   * for no visible reason.
+   *
+   * So the fingerprint is asked as well, because it is written only by a pull
+   * that completed — the same pair the skip condition in `install.ts` requires
+   * before it declines to install at all.
+   */
+  it("arms an install for a tree an abandoned pull left half here", async () => {
+    const stub = freshWorkspace("arm-tree-partial");
+    const dir = "/workspace/probe";
+    await seedInstalled(stub, dir, { tree: "partial" });
+
+    await touchWorkspace(stub);
+
+    // Armed and run: `failed` is a spawn attempted with no container to spawn
+    // into, which is how this suite sees an install actually being driven.
+    expect((await settled(stub))?.state).toBe("failed");
   });
 
   /**
@@ -656,6 +696,57 @@ describe("draining an outstanding pull", () => {
       await instance.alarm?.();
       expect(state.container?.running ?? false).toBe(false);
     });
+  });
+
+  /**
+   * Stopping the container is what ends the wait, so it has to end the belief
+   * as well.
+   *
+   * An install whose tree is still crossing leaves a marker, and the marker
+   * suppresses the next reinstall on the grounds that one is already on its way.
+   * Destroying the container is the moment that stops being true — whatever it
+   * held that never arrived is gone — so a marker left standing would skip the
+   * install for as long as it lasts, on the one workspace whose dependencies are
+   * the thing that is missing.
+   */
+  it("stops waiting on a tree when the container it was coming from goes", async () => {
+    const stub = freshWorkspace("drain-idle-releases-install");
+    const dir = "/workspace/probe";
+    await seedGitCheckout(stub, dir);
+    // A workspace mid-window: the install is done, the tree is not here, and
+    // something is believed to be bringing it.
+    await runInDurableObject(stub, async (_instance, state) => {
+      await state.storage.put("install", {
+        state: "done",
+        command: "npm ci --no-audit --no-fund",
+        exitCode: 0,
+        finishedAt: Date.now() - 60_000,
+        ms: 80_000
+      } satisfies InstallState);
+      await state.storage.put("install:context", {
+        dir,
+        fingerprint: "stale",
+        command: "npm ci --no-audit --no-fund",
+        startedAt: Date.now() - 140_000
+      });
+      await state.storage.put("install:syncing", { at: Date.now() });
+    });
+
+    await runInDurableObject(stub, async (instance, state) => {
+      await state.storage.put("lastUsedAt", Date.now() - 24 * 60 * 60_000);
+      // The deadline exists — `seedGitCheckout` went through the stub hook, which
+      // touches — but it is a day away. Due is what makes the handler run.
+      expect(forceDue(state, "containerIdle")).toBeGreaterThan(0);
+      await instance.alarm?.();
+    });
+
+    // With no container there was nothing to drain and nothing still coming, so
+    // the wait is over and the next access is free to install again.
+    expect(
+      await runInDurableObject(stub, (_instance, state) =>
+        state.storage.get("install:syncing")
+      )
+    ).toBeUndefined();
   });
 
   /**
@@ -833,6 +924,22 @@ describe("trusting the interception CA", () => {
  * table at all is no rows: storage that was just wiped has not had the queue
  * recreated yet.
  */
+/**
+ * Bring a deadline forward to now, so `alarm()` actually runs its handler.
+ *
+ * The suite cannot wait out an idle window, and a deadline that is not due is a
+ * handler that does not run — which a test asserting what the handler *did* would
+ * pass without noticing. Reaches into the scheduler's own table, like
+ * {@link scheduleRows}, because the times are the thing being faked.
+ */
+function forceDue(state: DurableObjectState, callback: string): number {
+  return state.storage.sql.exec(
+    "UPDATE cf_agents_jobs SET time = ? WHERE fn = ?",
+    Date.now() - 1_000,
+    callback
+  ).rowsWritten;
+}
+
 function scheduleRows(
   state: DurableObjectState
 ): { id: string; callback: string }[] {

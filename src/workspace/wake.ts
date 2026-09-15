@@ -18,6 +18,10 @@ export type WorkspaceWakeHandlers = {
   installRun: () => Promise<void>;
   installWatch: () => Promise<void>;
   idleReclaim: () => Promise<void>;
-  containerIdle: () => Promise<void>;
+  // Carries the same count as `syncRetry`, because its deferral is the same
+  // wait: this deadline holds a container open while an outstanding pull is
+  // still being drained, and a pull that keeps failing must not be retried at
+  // the rate one that is progressing is.
+  containerIdle: (payload?: SyncDrainIntent) => Promise<void>;
   syncRetry: (payload?: SyncDrainIntent) => Promise<void>;
 };

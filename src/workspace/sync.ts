@@ -74,7 +74,11 @@ export function syncRetryDelayMs(attempt: number): number {
  */
 export type DrainOutcome = "complete" | "incomplete" | "failed" | "unavailable";
 
-/** What a scheduled drain carries: how many times it has failed in a row. */
+/**
+ * What a schedule waiting on a pull carries: how many times it has failed in a
+ * row. Both the drain's own deadline and the container-idle deferral that waits
+ * for one hold it, since both have to back off against the same fault.
+ */
 export interface SyncDrainIntent {
   attempt: number;
 }

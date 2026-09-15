@@ -28,6 +28,7 @@ import {
   SYNC_DRAIN_BUDGET_MS,
   SYNC_DRAIN_RESUME_MS,
   WorkspaceSync,
+  syncRetryDelayMs,
   type SyncDrainIntent
 } from "./sync.js";
 import {
@@ -366,7 +367,7 @@ export abstract class WorkspaceObjectBase extends WorkspaceContainerBase {
         installRun: () => this.#install.onRun(),
         installWatch: () => this.#install.onWatch(),
         idleReclaim: () => this.#onIdleReclaim(),
-        containerIdle: () => this.#onContainerIdle(),
+        containerIdle: (payload) => this.#onContainerIdle(payload),
         syncRetry: (payload?: SyncDrainIntent) => this.#onSyncDrain(payload)
       },
       onError: (err: unknown) => {
@@ -691,13 +692,36 @@ export abstract class WorkspaceObjectBase extends WorkspaceContainerBase {
   async #beforeGit(): Promise<RepoGitResult | undefined> {
     await this.#touch();
     await this.#repairAlarm();
-    await this.#ready();
 
+    /**
+     * Drained **before** `#ready()`, which is what starts a stopped container.
+     *
+     * An outstanding pull belongs to the runtime that ran the command. Start a
+     * replacement first and the drain can no longer tell: `pull()` reconnects to
+     * whatever is running now, finds a filesystem that matches this object
+     * because the workspace just pushed it there, and reports a clean
+     * completion — for writes that are gone. That answer is worse than no
+     * answer, because `complete` is the branch that promotes the fingerprint,
+     * so a tree that never arrived would be recorded as having landed.
+     *
+     * Asked while the old container is still the only one there, the same call
+     * either moves the writes or says plainly there is nothing to move them
+     * from.
+     */
     const synced = await this.#sync.drain(SYNC_DRAIN_BUDGET_MS);
-    if (synced === "incomplete") {
+    // `failed` refuses alongside `incomplete`, and the reason is that the two
+    // differ only in what the *drain* should do next. To git they are one thing:
+    // writes that may exist and are not here. Letting a failure through would
+    // push the tree this check exists to refuse.
+    if (synced === "incomplete" || synced === "failed") {
+      // Plain, rather than carrying the failure ladder: a git operation is
+      // somebody waiting, which is fresh evidence that the next attempt is worth
+      // making soon. The ladder rebuilds from there if the fault persists, and
+      // the rate is bounded by how often a model can call a tool.
       await this.#sync.arm();
       console.error(`[${this.#tag}] refusing git: the workspace is behind`, {
-        id: this.ctx.id.toString()
+        id: this.ctx.id.toString(),
+        outcome: synced
       });
       return {
         ok: false,
@@ -708,7 +732,9 @@ export abstract class WorkspaceObjectBase extends WorkspaceContainerBase {
           "again in a moment."
       };
     }
-    if (synced === "complete") await this.#install.promoteFingerprint();
+    if (synced === "complete") await this.#install.onSyncComplete();
+
+    await this.#ready();
     return undefined;
   }
 
@@ -1096,7 +1122,7 @@ export abstract class WorkspaceObjectBase extends WorkspaceContainerBase {
   }
 
   /** The container-idle deadline came due. */
-  async #onContainerIdle(): Promise<void> {
+  async #onContainerIdle(payload?: SyncDrainIntent): Promise<void> {
     // An install still running is "in use" even though nothing has called in —
     // stopping the container under it would throw away the work and leave the
     // gate closed until something noticed.
@@ -1135,35 +1161,73 @@ export abstract class WorkspaceObjectBase extends WorkspaceContainerBase {
      * writes go with it, which is the honest outcome: they were unreachable
      * either way, and the alternative is an idle container nobody stops.
      */
-    if (await this.#drainBeforeStop(lastUsedAt)) return;
+    if (await this.#drainBeforeStop(lastUsedAt, payload?.attempt ?? 0)) return;
 
     await this.#stopContainer();
   }
 
-  /** Whether the idle deadline deferred to let an outstanding pull finish. */
-  async #drainBeforeStop(lastUsedAt: number): Promise<boolean> {
+  /**
+   * Whether the idle deadline deferred to let an outstanding pull finish.
+   *
+   * Every path that ends the wait tells the install so, and that is not
+   * bookkeeping: an install whose tree is still crossing suppresses the next
+   * reinstall while it believes one is on its way. Once this returns `false` the
+   * container is destroyed, and the tree is not on its way any more — so leaving
+   * that belief standing would skip the install for as long as the marker lasts,
+   * on a workspace whose dependencies are the thing that is missing.
+   *
+   * `attempt` is how many times the drain has failed in a row, carried on the
+   * schedule because nothing in memory survives a wake-up.
+   */
+  async #drainBeforeStop(
+    lastUsedAt: number,
+    attempt: number
+  ): Promise<boolean> {
     const outcome = await this.#sync.drain(SYNC_DRAIN_BUDGET_MS);
     if (outcome === "complete") {
-      await this.#install.promoteFingerprint();
+      await this.#install.onSyncComplete();
       return false;
     }
-    if (outcome === "unavailable") return false;
+    // Nothing to pull from, so nothing is still on its way.
+    if (outcome === "unavailable") {
+      await this.#install.onSyncUnrecoverable();
+      return false;
+    }
 
     if (Date.now() - lastUsedAt > this.#containerIdleMs + SYNC_DRAIN_GRACE_MS) {
       console.error(
         `[${this.#tag}] stopping a container with an unfinished pull`,
         {
           id: this.ctx.id.toString(),
+          outcome,
           graceMinutes: Math.round(SYNC_DRAIN_GRACE_MS / 60_000)
         }
       );
+      await this.#install.onSyncUnrecoverable();
       return false;
     }
 
+    /**
+     * How soon to come back, and the two outcomes want different answers for the
+     * same reason they do on the drain's own schedule — except that here the
+     * deferral holds a **container** open, so getting it wrong bills as well as
+     * spins. `incomplete` is progress and clears the count; `failed` is a pull
+     * that threw, and returning in a second would put an alarm and an error line
+     * against a broken transport every second until the grace wall, half an hour
+     * later.
+     */
+    const failed = outcome === "failed";
+    const next = failed ? attempt + 1 : 0;
     console.info(`[${this.#tag}] holding a container for an unfinished pull`, {
-      id: this.ctx.id.toString()
+      id: this.ctx.id.toString(),
+      outcome
     });
-    await this.#containerIdle.set(new Date(Date.now() + SYNC_DRAIN_RESUME_MS));
+    await this.#containerIdle.set(
+      new Date(
+        Date.now() + (failed ? syncRetryDelayMs(next) : SYNC_DRAIN_RESUME_MS)
+      ),
+      { attempt: next }
+    );
     return true;
   }
 }

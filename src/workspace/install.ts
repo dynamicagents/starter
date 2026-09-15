@@ -116,6 +116,15 @@ interface InstallContext extends JobContext {
 const TREE_IN_FLIGHT_KEY = "install:syncing";
 
 /**
+ * Where an install records that its tree is here in full.
+ *
+ * Written only by a pull that completed, which is what makes it the answer to
+ * "does this object hold the tree that install produced" — see
+ * {@link InstallJob.onSyncComplete}.
+ */
+const INSTALL_COMPLETED_KEY = "install:completed";
+
+/**
  * How long a tree may be in flight before the marker stops being believed.
  *
  * The marker is cleared by the drain, on the pull completing or on the container
@@ -233,8 +242,13 @@ export class InstallJob {
     const context = await this.#job.context();
     if (!context?.dir) return;
 
-    // The branch that runs on almost every call, and it costs one local read.
-    if (await this.treePresent(context.dir)) return;
+    // The branch that runs on almost every call, and it costs one local read —
+    // paired with the record that says the read means what it looks like.
+    if (
+      (await this.treePresent(context.dir)) &&
+      (await this.#treeLanded(context))
+    )
+      return;
 
     // A tree that is on its way is not a missing one. Installing again here
     // would delete what the pull is in the middle of delivering and rebuild it,
@@ -318,6 +332,29 @@ export class InstallJob {
   }
 
   /**
+   * Did the tree this install produced actually finish arriving?
+   *
+   * The pair, rather than the directory alone, and for the same reason the skip
+   * condition in `#beginInstall` asks both: a pull that was abandoned part-way
+   * leaves a directory holding *some* of a tree, and nothing in the filesystem
+   * tells that from a whole one. The fingerprint is the record that a pull
+   * finished, so it is what distinguishes them — and without it here, a partial
+   * tree suppresses the reinstall that would replace it, permanently and
+   * silently, which is the one outcome a missing dependency tree must not have.
+   *
+   * No fingerprint means nothing can vouch either way — a checkout whose
+   * resolver found no lockfile installs without one. The directory is then all
+   * the evidence there is, so it is taken at face value.
+   */
+  async #treeLanded(context: InstallContext): Promise<boolean> {
+    if (!context.fingerprint) return true;
+    const completed = await this.deps.storage.get<{ fingerprint: string }>(
+      INSTALL_COMPLETED_KEY
+    );
+    return completed?.fingerprint === context.fingerprint;
+  }
+
+  /**
    * Note that this install's tree is still crossing, and suppress arming until
    * it lands or is given up on.
    */
@@ -348,11 +385,17 @@ export class InstallJob {
    *
    * The fingerprint is written **here** rather than when the install exited,
    * because what the skip condition needs to know is that this object holds the
-   * tree — see {@link promoteFingerprint}.
+   * tree — see {@link InstallJob.onSyncComplete}.
+   *
+   * **The pair is the point, and it is why the promotion is private.** A caller
+   * that promoted the fingerprint on its own would record the tree as landed and
+   * leave the marker saying one is still on its way — and the marker outlives
+   * the moment, suppressing the next install for as long as it stands. There is
+   * one way to say a pull finished, and it says both halves.
    */
   async onSyncComplete(): Promise<void> {
     await this.deps.storage.delete(TREE_IN_FLIGHT_KEY);
-    await this.promoteFingerprint();
+    await this.#promoteFingerprint();
   }
 
   /**
@@ -545,7 +588,7 @@ export class InstallJob {
      * visible reason.
      */
     const previous = await this.deps.storage.get<{ fingerprint: string }>(
-      "install:completed"
+      INSTALL_COMPLETED_KEY
     );
     if (
       fingerprint &&
@@ -771,11 +814,11 @@ export class InstallJob {
          * an install whose pull is still outstanding is the same hazard wearing
          * a zero exit code. `sync.status` is the runtime saying which of those
          * this was; `pending` hands the write to the drain that finishes the
-         * pull. See {@link promoteFingerprint}.
+         * pull. See {@link InstallJob.onSyncComplete}.
          */
         const landed = result.sync.status === "complete";
         if (context?.fingerprint && landed) {
-          await this.deps.storage.put("install:completed", {
+          await this.deps.storage.put(INSTALL_COMPLETED_KEY, {
             fingerprint: context.fingerprint,
             at: Date.now()
           });
@@ -911,16 +954,16 @@ export class InstallJob {
    * So the install writes it only when its own bracket reported the sync
    * complete, and a drain that finishes the job writes it here instead.
    */
-  async promoteFingerprint(): Promise<void> {
+  async #promoteFingerprint(): Promise<void> {
     const state = await this.#job.read();
     if (state.state !== "done") return;
     const context = await this.#job.context();
     if (!context?.fingerprint) return;
     const previous = await this.deps.storage.get<{ fingerprint: string }>(
-      "install:completed"
+      INSTALL_COMPLETED_KEY
     );
     if (previous?.fingerprint === context.fingerprint) return;
-    await this.deps.storage.put("install:completed", {
+    await this.deps.storage.put(INSTALL_COMPLETED_KEY, {
       fingerprint: context.fingerprint,
       at: Date.now()
     });

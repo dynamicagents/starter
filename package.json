@@ -34,32 +34,34 @@
     "@a2a-js/sdk": "^1.1.0",
     "@cloudflare/computer": "^0.2.1",
     "@cloudflare/shell": "0.4.3",
-    "@dynamicagents/core": "^0.11.0",
-    "@dynamicagents/plugins": "^0.11.1",
+    "@dynamicagents/core": "git+https://github.com/dynamicagents/core.git#main",
+    "@dynamicagents/plugins": "git+https://github.com/dynamicagents/plugins.git#main",
     "@platformatic/vfs": "^0.4.0",
-    "agents": "^0.22.0",
-    "ai": "^7.0.93",
+    "agents": "^0.23.0",
+    "ai": "^7.0.101",
     "drizzle-orm": "^0.45.2",
     "jose": "^6.2.12",
     "workers-ai-provider": "^4.0.0",
-    "zod": "^4.5.4"
+    "zod": "^4.6.5"
   },
   "devDependencies": {
-    "@cloudflare/vitest-plugin": "^1.1.5",
-    "@types/node": "^26.5.0",
-    "esbuild": "^0.28.1",
+    "@cloudflare/vitest-plugin": "^1.1.9",
+    "@types/node": "^26.5.1",
+    "esbuild": "^0.28.2",
     "eslint": "^10.10.0",
     "husky": "^9.1.7",
     "prettier": "^3.9.6",
     "typescript": "^6.0.3",
     "typescript-eslint": "^8.70.0",
     "vitest": "^4.1.11",
-    "wrangler": "^4.129.1"
+    "wrangler": "^4.131.2"
   },
   "engines": {
     "node": ">=24"
   },
   "allowScripts": {
+    "@dynamicagents/core": true,
+    "@dynamicagents/plugins": true,
     "esbuild": false,
     "fsevents": false,
     "sharp": false,

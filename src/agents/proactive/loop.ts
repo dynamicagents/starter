@@ -1,6 +1,5 @@
 import type { PrepareStepFunction, StopCondition, ToolSet } from "ai";
 import { generateText, isStepCount } from "ai";
-import type { SessionMessage } from "agents/experimental/memory/session";
 import {
   buildIntermediateContentHandler,
   isTransientAiError,
@@ -9,7 +8,8 @@ import {
   withFallback,
   type ModelPair,
   type OnContent,
-  type SessionLike
+  type SessionLike,
+  type SessionMessage
 } from "@dynamicagents/core/agent";
 import {
   isNoReplyTurn,

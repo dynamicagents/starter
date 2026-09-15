@@ -40,24 +40,22 @@ const core = (name) => `@dynamicagents/core/dist/${name}/`;
  * installs — so it is not a list of things nobody uses, it is a list of things
  * that exist in this repo and must not have leaked sideways.
  *
- * ## Why every ceiling here moved at once
+ * ## What every agent carries whatever it imports
  *
- * Two causes, and neither is a leak — `forbidden` stayed clean throughout, which
- * is the check that would have caught one.
+ * The `agents` SDK composes its own `Lifecycle` into the `Agent` base class, with
+ * a scheduler, a task runner, dynamic-agent routing and WebSocket handling
+ * installed on it — so **every** entry that extends `Agent` carries all of them,
+ * used or not. Measured at 372 KiB of `agents` in `reactive`'s agent entry, which
+ * imports neither `/alarm` nor `/job` and cannot shed any of it. That share moves
+ * with the SDK, so a bump of it moves every ceiling here at once, and that is not
+ * a leak: `forbidden` is the check that would catch one.
  *
- * The dependency refresh moved every agent a little. Three of them were already
- * over their ceilings on that alone, before any of the scheduler work below.
- *
- * Then the `agents` SDK began composing its own `Lifecycle` and `Scheduler` into
- * the `Agent` base class, so **every** agent's graph now carries them: measured
- * at 76 KiB of `scheduler-*` and `durable-object-lifecycle-*` modules in
- * `reactive`, which imports neither `/alarm` nor `/job` and cannot avoid them.
  * The two agents that own a workspace additionally carry `core/dist/alarm` (7
  * KiB) and `core/dist/job` (13 KiB) — and *only* those two, which is the
  * isolation this file exists to assert still holding.
  *
  * Every ceiling below is its measurement plus the ~8% headroom this file runs
- * with, taken after both.
+ * with.
  */
 const AGENTS = [
   {
@@ -80,10 +78,10 @@ const AGENTS = [
     // honestly, against a 3613 KiB ceiling it had been quietly over. ~8% over
     // that measurement, the headroom every entry here runs with.
     //
-    // Now 4116 KiB — see "Why every ceiling here moved at once" above. This is
-    // the agent that shows the SDK's share cleanly, since it imports neither
-    // `/alarm` nor `/job` and still carries the scheduler.
-    maxBytes: 4_550_000
+    // Now 4427 KiB — see "What every agent carries" above. This is the agent
+    // that shows the SDK's share cleanly, since it imports neither `/alarm` nor
+    // `/job` and still carries the scheduler.
+    maxBytes: 4_900_000
   },
   {
     name: "proactive",
@@ -109,8 +107,8 @@ const AGENTS = [
       "@cloudflare/computer",
       core("round")
     ],
-    // Measured 1764 KiB. See "Why every ceiling here moved at once" above.
-    maxBytes: 1_950_000
+    // Measured 1909 KiB. See "What every agent carries" above.
+    maxBytes: 2_110_000
   },
   {
     name: "arc-player",
@@ -127,8 +125,8 @@ const AGENTS = [
       plugin("repo"),
       "@cloudflare/computer"
     ],
-    // Measured 3275 KiB. See "Why every ceiling here moved at once" above.
-    maxBytes: 3_620_000
+    // Measured 3560 KiB. See "What every agent carries" above.
+    maxBytes: 3_940_000
   },
   {
     name: "coder",
@@ -186,9 +184,9 @@ const AGENTS = [
     // too tight for the ~8% every other entry here runs with, so it would have
     // gone red on the next dependency bump for no real reason.
     //
-    // Now 5660 KiB. See "Why every ceiling here moved at once" above; this is
-    // one of the two entries that also carries `/alarm` and `/job`.
-    maxBytes: 6_260_000
+    // Now 5976 KiB. See "What every agent carries" above; this is one of the
+    // two entries that also carries `/alarm` and `/job`.
+    maxBytes: 6_610_000
   },
   {
     name: "claude-coder",
@@ -219,11 +217,11 @@ const AGENTS = [
     // is `/recall` and `/claude-code`, and what it drops is nothing.
     // Re-baseline against a measurement, never to make a red build green.
     //
-    // Measured 5560 KiB, which the old 5664 KiB ceiling still passed — raised
-    // anyway, because 1.9% of headroom is the state the coder's comment above
-    // describes as going red on the next bump for no real reason. Deliberate,
-    // and against the same measurement as the rest.
-    maxBytes: 6_150_000
+    // Measured 5876 KiB. Raised with the rest even while it still passed,
+    // because 2% of headroom is the state the coder's comment above describes as
+    // going red on the next bump for no real reason. Deliberate, and against the
+    // same measurement as the rest.
+    maxBytes: 6_500_000
   }
 ];
 

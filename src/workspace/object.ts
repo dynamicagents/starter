@@ -491,8 +491,8 @@ export abstract class WorkspaceObjectBase extends WorkspaceContainerBase {
    * none, so without saying so here the scheduler would be installed and never
    * fire, with no error anywhere. `alarm()` below calls through, which is what
    * makes the declaration true. **`fetch()` deliberately does not** — it serves
-   * `computerd`'s capnweb WebSocket upgrade, and a lifecycle's `fetch` takes any
-   * upgrade into its own connection handling.
+   * `computerd`'s capnweb WebSocket upgrade, and a lifecycle's `fetch` declines
+   * any upgrade no installed capability claims.
    */
   readonly #wake = installScheduler<WorkspaceWakeHandlers>(this, {
     hostOwns: ["alarm", "fetch"],
@@ -624,6 +624,13 @@ export abstract class WorkspaceObjectBase extends WorkspaceContainerBase {
    * sees a container that is not running.
    */
   #caTrusted = false;
+
+  /**
+   * Set once {@link reclaimIfIdle} has emptied storage, for the few microtasks
+   * before the isolate resets. Anything still running on this instance then is
+   * describing storage that is gone, and failing because of it is expected.
+   */
+  #reclaimed = false;
 
   /**
    * Open the workspace, and make sure the container behind it can speak TLS.
@@ -1067,12 +1074,18 @@ export abstract class WorkspaceObjectBase extends WorkspaceContainerBase {
     // otherwise a reclaimed object wakes once more into empty storage.
     await this.ctx.storage.deleteAlarm();
     await this.ctx.storage.deleteAll();
-    // It *does* take the scheduler's SQL tables, and the lifecycle has already
-    // started so it will not migrate them a second time. Without this the next
-    // touch of this isolate — a reclaim does not evict it — schedules against a
-    // table that is no longer there. `CREATE TABLE IF NOT EXISTS`, so calling it
-    // on an object that still has its schema costs nothing.
-    await this.#wake.scheduler.onStart();
+    // It *also* takes the lifecycle's job queue table, which this instance has
+    // already created and will not create again — so the next schedule set from
+    // this isolate would fail against a table that is gone, and the workspace
+    // would stop arming its timers until something evicted it. Reset the isolate
+    // instead, as the SDK's own `Agent.destroy()` does: the next call constructs
+    // the object fresh on empty storage, and every table comes back with it.
+    // Deferred one macrotask so this call still returns its result, and with no
+    // alarm retry, so the reset cannot wake the object it has just emptied.
+    this.#reclaimed = true;
+    setTimeout(() => {
+      this.ctx.abort("workspace reclaimed", { retryAlarm: false });
+    }, 0);
 
     return { reclaimed: true, idleMs, bytes };
   }
@@ -1913,6 +1926,10 @@ export abstract class WorkspaceObjectBase extends WorkspaceContainerBase {
     try {
       await this.#wake.alarm();
     } catch (err) {
+      // The idle reclaim ran from this alarm and emptied storage, the job queue
+      // with it, so settling the job that ran it fails. That is the reclaim
+      // working, and the isolate is about to reset; nothing is left to re-arm.
+      if (this.#reclaimed) return;
       console.error(`[${this.#tag}] the alarm failed`, {
         id: this.ctx.id.toString(),
         err: String(err)

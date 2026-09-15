@@ -31,6 +31,18 @@ import { SCRATCH_DIR } from "@/workspace/scratch";
 /** A fresh workspace per test — DO storage never leaks between them. */
 const { freshStub: freshWorkspace } = makeDoHelpers(env.CODER_WORKSPACE);
 
+/**
+ * The same workspace, through a new stub, once a reclaim has reset it.
+ *
+ * A reclaim resets the isolate after it returns, and a stub connected to an
+ * object that reset stays broken — every later call on it throws. A caller in
+ * production gets a new stub per request, so this is what one sees.
+ */
+async function afterReclaim(stub: DurableObjectStub) {
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  return env.CODER_WORKSPACE.get(stub.id);
+}
+
 /** Read the raw install record, bypassing the staleness repair `advisories` applies. */
 function storedInstall(stub: DurableObjectStub) {
   return runInDurableObject(stub, (_instance, state) =>
@@ -573,7 +585,8 @@ describe("reclaiming an idle workspace", () => {
     expect((await stub.reclaimIfIdle(0)).reclaimed).toBe(true);
     // And once emptied it reports nothing to do rather than reclaiming again,
     // which is the loop this whole describe exists for.
-    expect((await stub.reclaimIfIdle(0)).reclaimed).toBe(false);
+    const reclaimed = await afterReclaim(stub);
+    expect((await reclaimed.reclaimIfIdle(0)).reclaimed).toBe(false);
   });
 });
 
@@ -693,6 +706,28 @@ describe("trusting the interception CA", () => {
  * count is the durable consequence and a handle would only report what the code
  * under test already believes.
  */
+/**
+ * The scheduler's rows, read from storage. A schedule is a row in the lifecycle's
+ * job queue under the scheduler's capability, its callback name in `fn`. No
+ * table at all is no rows: storage that was just wiped has not had the queue
+ * recreated yet.
+ */
+function scheduleRows(
+  state: DurableObjectState
+): { id: string; callback: string }[] {
+  const [table] = state.storage.sql
+    .exec(
+      "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'cf_agents_jobs'"
+    )
+    .toArray();
+  if (!table) return [];
+  return state.storage.sql
+    .exec<{ id: string; callback: string }>(
+      "SELECT id, fn AS callback FROM cf_agents_jobs WHERE capability = 'scheduler'"
+    )
+    .toArray();
+}
+
 describe("the idle deadlines, over a scheduler that has no upsert", () => {
   /** The same hook anything reaching this object goes through. */
   async function touch(stub: DurableObjectStub) {
@@ -703,11 +738,7 @@ describe("the idle deadlines, over a scheduler that has no upsert", () => {
   }
 
   const schedules = (stub: DurableObjectStub) =>
-    runInDurableObject(stub, (_instance, state) => [
-      ...state.storage.sql
-        .exec("SELECT id, callback FROM cf_agents_schedules")
-        .toArray()
-    ]);
+    runInDurableObject(stub, (_instance, state) => scheduleRows(state));
 
   it("keeps one row per deadline however often the workspace is touched", async () => {
     const stub = freshWorkspace("touch-repeatedly");
@@ -786,13 +817,14 @@ describe("the idle deadlines, over a scheduler that has no upsert", () => {
 
   /**
    * A reclaimed workspace must not wake again, and must still work if it is
-   * used again — a reclaim empties the object, it does not evict the isolate.
+   * used again.
    *
-   * `deleteAll()` takes the scheduler's SQL tables with it, and a lifecycle that
-   * has already started will not migrate them a second time. So without the
-   * re-migration in `reclaimIfIdle` the first touch after a reclaim schedules
-   * against a table that is no longer there, and this test is the only thing
-   * between that and a workspace that stops arming its timers for good.
+   * `deleteAll()` takes the lifecycle's job queue table with it, and an
+   * instance that has already created that table will not create it again. So
+   * a touch on the same instance after a reclaim schedules against a table that
+   * is no longer there, and the workspace stops arming its timers for good. The
+   * reclaim resets the isolate so that the next call is a fresh instance, and
+   * this test is what pins that the fresh instance schedules.
    */
   it("leaves no schedule behind after a reclaim, and still schedules after one", async () => {
     const stub = freshWorkspace("reclaim-clears");
@@ -800,10 +832,13 @@ describe("the idle deadlines, over a scheduler that has no upsert", () => {
     expect((await schedules(stub)).length).toBeGreaterThan(0);
 
     expect((await stub.reclaimIfIdle(0)).reclaimed).toBe(true);
-    expect(await schedules(stub)).toHaveLength(0);
+    const reclaimed = await afterReclaim(stub);
+    expect(await schedules(reclaimed)).toHaveLength(0);
 
-    await touch(stub);
-    const again = (await schedules(stub)).map((row) => row.callback).sort();
+    await touch(reclaimed);
+    const again = (await schedules(reclaimed))
+      .map((row) => row.callback)
+      .sort();
     expect(again).toContain("idleReclaim");
     expect(again).toContain("containerIdle");
   });
@@ -866,11 +901,9 @@ describe("an object upgraded mid-install", () => {
       stub as unknown as Parameters<typeof getWorkspace>[0]
     );
     void ws;
-    const rows = await runInDurableObject(stub, (_instance, state) => [
-      ...state.storage.sql
-        .exec("SELECT callback FROM cf_agents_schedules")
-        .toArray()
-    ]);
+    const rows = await runInDurableObject(stub, (_instance, state) =>
+      scheduleRows(state)
+    );
     expect(rows.map((row) => row.callback)).toContain("idleReclaim");
   });
 

@@ -626,9 +626,9 @@ export abstract class WorkspaceObjectBase extends WorkspaceContainerBase {
   #caTrusted = false;
 
   /**
-   * Set once {@link reclaimIfIdle} has emptied storage, for the few microtasks
-   * before the isolate resets. Anything still running on this instance then is
-   * describing storage that is gone, and failing because of it is expected.
+   * Set once {@link reclaimIfIdle} has emptied storage, until the alarm it armed
+   * resets the isolate. Anything reaching this instance in between is addressing
+   * storage that is gone.
    */
   #reclaimed = false;
 
@@ -1021,6 +1021,13 @@ export abstract class WorkspaceObjectBase extends WorkspaceContainerBase {
    * workspace sees all of it.
    */
   async #touch(): Promise<void> {
+    // A reclaim emptied this instance and its reset has not landed yet.
+    // Scheduling below would write to a table that is gone, so fail this call
+    // and let the caller come back on a fresh object.
+    if (this.#reclaimed) {
+      this.ctx.abort("workspace reclaimed", { retryAlarm: false });
+    }
+
     const now = Date.now();
     // Everything reaches this object by RPC, which bypasses `fetch` — so this
     // is where the lifecycle gets started, and without it the scheduler's schema
@@ -1077,15 +1084,22 @@ export abstract class WorkspaceObjectBase extends WorkspaceContainerBase {
     // It *also* takes the lifecycle's job queue table, which this instance has
     // already created and will not create again — so the next schedule set from
     // this isolate would fail against a table that is gone, and the workspace
-    // would stop arming its timers until something evicted it. Reset the isolate
-    // instead, as the SDK's own `Agent.destroy()` does: the next call constructs
-    // the object fresh on empty storage, and every table comes back with it.
-    // Deferred one macrotask so this call still returns its result, and with no
-    // alarm retry, so the reset cannot wake the object it has just emptied.
+    // would stop arming its timers until something evicted it. The answer is to
+    // stop using this instance: a later call constructs the object fresh on empty
+    // storage, and every table comes back with it.
+    //
+    // **The reset runs from its own alarm invocation, never from here.** An
+    // `abort()` on the way out of an RPC races that RPC's response, and the
+    // weekly sweep reads this result to decide whether to forget the workspace —
+    // so a reset that beat the response would report a failed reclaim for one
+    // that had already emptied the object. A timer would race it the same way;
+    // only a separate invocation is ordered after the response.
+    //
+    // Nothing durable records this. The flag exists to reset *this* isolate, and
+    // an isolate that went away on its own has already achieved that: a fresh
+    // instance creates the tables it needs on the way in.
     this.#reclaimed = true;
-    setTimeout(() => {
-      this.ctx.abort("workspace reclaimed", { retryAlarm: false });
-    }, 0);
+    await this.ctx.storage.setAlarm(Date.now());
 
     return { reclaimed: true, idleMs, bytes };
   }
@@ -1923,12 +1937,20 @@ export abstract class WorkspaceObjectBase extends WorkspaceContainerBase {
    * dropped when it runs, so it cannot stay due forever.
    */
   override async alarm(): Promise<void> {
+    // The reset a reclaim asked for, in the invocation it asked for it in.
+    // Nothing else may run on this instance: its storage is gone, and the job
+    // queue's table with it.
+    if (this.#reclaimed) {
+      this.ctx.abort("workspace reclaimed", { retryAlarm: false });
+      return;
+    }
+
     try {
       await this.#wake.alarm();
     } catch (err) {
-      // The idle reclaim ran from this alarm and emptied storage, the job queue
-      // with it, so settling the job that ran it fails. That is the reclaim
-      // working, and the isolate is about to reset; nothing is left to re-arm.
+      // A reclaim that ran *from* this alarm emptied storage, the job queue with
+      // it, so settling the job that ran it fails. That is the reclaim working,
+      // and the reset it armed is the next thing to happen here.
       if (this.#reclaimed) return;
       console.error(`[${this.#tag}] the alarm failed`, {
         id: this.ctx.id.toString(),

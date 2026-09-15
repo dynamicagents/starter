@@ -694,19 +694,6 @@ describe("trusting the interception CA", () => {
 });
 
 /**
- * What the scheduler rewrite could break quietly, and what a passing suite would
- * not otherwise notice.
- *
- * A schedule is a row the scheduler mints an id for, not a keyed upsert, so
- * moving a deadline leaves a second row unless it cancels the first. `#touch()`
- * runs on every entry point, which makes this the busiest path in the object and
- * the one where an extra row per call compounds fastest.
- *
- * Counted through storage rather than through a scheduler handle, because the
- * count is the durable consequence and a handle would only report what the code
- * under test already believes.
- */
-/**
  * The scheduler's rows, read from storage. A schedule is a row in the lifecycle's
  * job queue under the scheduler's capability, its callback name in `fn`. No
  * table at all is no rows: storage that was just wiped has not had the queue
@@ -728,6 +715,19 @@ function scheduleRows(
     .toArray();
 }
 
+/**
+ * What the scheduler rewrite could break quietly, and what a passing suite would
+ * not otherwise notice.
+ *
+ * A schedule is a row the scheduler mints an id for, not a keyed upsert, so
+ * moving a deadline leaves a second row unless it cancels the first. `#touch()`
+ * runs on every entry point, which makes this the busiest path in the object and
+ * the one where an extra row per call compounds fastest.
+ *
+ * Counted through storage rather than through a scheduler handle, because the
+ * count is the durable consequence and a handle would only report what the code
+ * under test already believes.
+ */
 describe("the idle deadlines, over a scheduler that has no upsert", () => {
   /** The same hook anything reaching this object goes through. */
   async function touch(stub: DurableObjectStub) {

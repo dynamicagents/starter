@@ -78,8 +78,8 @@ const AGENTS = [
     // honestly, against a 3613 KiB ceiling it had been quietly over. ~8% over
     // that measurement, the headroom every entry here runs with.
     //
-    // Now 4427 KiB — see "What every agent carries" above. This is the agent
-    // that shows the SDK's share cleanly, since it imports neither `/alarm` nor
+    // Measured 4427 KiB. The agent that shows the SDK's share cleanly — see
+    // "What every agent carries" above — since it imports neither `/alarm` nor
     // `/job` and still carries the scheduler.
     maxBytes: 4_900_000
   },
@@ -184,8 +184,8 @@ const AGENTS = [
     // too tight for the ~8% every other entry here runs with, so it would have
     // gone red on the next dependency bump for no real reason.
     //
-    // Now 5976 KiB. See "What every agent carries" above; this is one of the
-    // two entries that also carries `/alarm` and `/job`.
+    // Measured 5976 KiB. One of the two entries that also carries `/alarm` and
+    // `/job`; see "What every agent carries" above for the rest.
     maxBytes: 6_610_000
   },
   {
@@ -217,10 +217,9 @@ const AGENTS = [
     // is `/recall` and `/claude-code`, and what it drops is nothing.
     // Re-baseline against a measurement, never to make a red build green.
     //
-    // Measured 5876 KiB. Raised with the rest even while it still passed,
-    // because 2% of headroom is the state the coder's comment above describes as
-    // going red on the next bump for no real reason. Deliberate, and against the
-    // same measurement as the rest.
+    // Measured 5877 KiB, and sized with the same ~8% headroom as the rest: the
+    // tighter margin the coder's comment above describes is what sends a build
+    // red on the next bump for no real reason.
     maxBytes: 6_500_000
   }
 ];

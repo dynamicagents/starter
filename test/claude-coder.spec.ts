@@ -5,7 +5,8 @@ import { createAgentRuntime } from "@dynamicagents/core";
 import type { PluginHost } from "@dynamicagents/core/host";
 import type { RecipeExecutionRequest } from "@dynamicagents/core/subtasks";
 import { makeDoHelpers } from "@dynamicagents/core/testing";
-import { getWorkspace } from "@cloudflare/computer";
+import type { ClaudeCoderWorkspaceDO } from "@/index";
+import { openWorkspace } from "@/workspace/open";
 import {
   CLAUDE_CODE_TYPE,
   WORKSPACE_RUNTIME_KEY
@@ -185,7 +186,9 @@ const { freshStub: freshSubagent } = makeDoHelpers(
     }
   ).CLAUDE_CODER_SUBAGENT
 );
-const { freshStub: freshWorkspace } = makeDoHelpers(env.CLAUDE_CODER_WORKSPACE);
+const { freshStub: freshWorkspace } = makeDoHelpers<ClaudeCoderWorkspaceDO>(
+  env.CLAUDE_CODER_WORKSPACE
+);
 
 const request = (): RecipeExecutionRequest => ({
   taskId: "task-1",
@@ -289,9 +292,7 @@ describe("a checkout with nothing to install", () => {
 
     // A repository with git in it and no lockfile: cloned, recorded, and skipped
     // by the resolver.
-    using ws = await getWorkspace(
-      workspace as unknown as Parameters<typeof getWorkspace>[0]
-    );
+    using ws = await openWorkspace(workspace);
     await ws.fs.mkdir(`${dir}/.git`, { recursive: true });
     await ws.fs.writeFile(`${dir}/.git/HEAD`, "ref: refs/heads/main\n");
     await workspace.noteCheckout({ dir, kind: "repo", repo: "acme/spike" });
@@ -347,9 +348,9 @@ describe("the credential pool", () => {
  * aborts the turn, kills its Bash process tree, runs its `SessionEnd` hooks,
  * exits 143. Meanwhile the parent's `onTaskCanceled` awaits `abortRun` and then
  * runs `git reset --hard && git clean -fdx` in the same container — and the
- * container-to-workspace sync is driven by the *drain* reaching `done`, so a
- * reset that goes first can be followed by a sync carrying files the session
- * wrote after it. The cleanup that exists to guarantee a clean tree would leave
+ * session's writes reach the workspace on the pull its own drain triggers when
+ * it reaches `done`, so a reset that goes first can be followed by a sync
+ * carrying files the session wrote after it. The cleanup that exists to guarantee a clean tree would leave
  * an arbitrary half-reset one.
  *
  * The ordering itself needs a real container and belongs to the deploy-time

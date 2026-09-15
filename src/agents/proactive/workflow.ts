@@ -104,8 +104,8 @@ export type NotifyVerdict =
 
 /**
  * What distinguishes one use of this controller from another — the same shape
- * `HandleTaskDeps` gives the round agents, for the same two reasons: a spec can
- * drive the orchestration against a fake stub, and a second agent could reuse the
+ * `HandleTaskDeps` gives the round agents, for the same reasons: a spec can
+ * drive the orchestration against a fake stub, and another agent could reuse the
  * body with a different resolver.
  *
  * Routing used to be a hardcoded `getAgent(p.identity)` here, which made the two

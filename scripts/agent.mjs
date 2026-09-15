@@ -4,11 +4,10 @@
  *
  * ## Why this exists
  *
- * The README used to say adding or removing an agent was "three edits, no
- * leftovers". It was five, and they were not adjacent: a directory, two spots in
- * `src/index.ts`, three blocks in `wrangler.jsonc`, an entry in
+ * An agent is not one edit and the edits are not adjacent: a directory, spots in
+ * `src/index.ts`, blocks in `wrangler.jsonc`, an entry in
  * `verify-isolation.mjs`, and any secret the agent's plugins declared. Several of
- * them were stringly-typed, and a missed one fails at a different time each: a
+ * them are stringly-typed, and a missed one fails at a different time each: a
  * forgotten DO binding fails at deploy, a forgotten `new_sqlite_classes` entry
  * fails at the first request, a forgotten isolation entry fails never — it just
  * stops checking the agent.

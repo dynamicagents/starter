@@ -7,7 +7,6 @@ import type {
   RecipeExecutionResult,
   SubtaskRuntime
 } from "@dynamicagents/core/subtasks";
-import { getWorkspace } from "@cloudflare/computer";
 import {
   claudeCodeSession,
   CLAUDE_CODE_TYPE,
@@ -22,6 +21,7 @@ import {
   truncateOutput
 } from "@dynamicagents/plugins/computer";
 import { CLAUDE_CODE_SESSION, CLAUDE_CODER_CONFIG } from "@/config";
+import { openWorkspace } from "@/workspace/open";
 import { claudeCodeConfig } from "./claude-code";
 import { subagentPlugins } from "./plugins";
 
@@ -51,9 +51,12 @@ const REPORT_MAX = 24_000;
  *
  * Generous, because what it is waiting on is a process exit plus a
  * container-to-workspace filesystem sync whose cost scales with the number of
- * files the session touched — and because the alternative to waiting is a
- * working-tree reset racing that sync. Still bounded: a cancellation must
- * complete whether or not the container is answering.
+ * files the session touched — a session that ran an install is moving a whole
+ * dependency tree — and because the alternative to waiting is a working-tree
+ * reset racing that sync. Still bounded: a cancellation must complete whether or
+ * not the container is answering, and what the bound gives up is only speed. A
+ * pull cut short here resumes from its cursor when the workspace next drives
+ * one.
  */
 const SETTLE_MAX_MS = 60_000;
 
@@ -319,9 +322,7 @@ export class ClaudeCoderSubagent extends RecipeSubagentHost<Env> {
     // it hands back is rebuilt on this side of the boundary from the stub's byte
     // stream, so it is a real `ReadableStream` of runtime events — which is what
     // lets the drain live here rather than inside the workspace object.
-    using workspace = await getWorkspace(
-      stub as unknown as Parameters<typeof getWorkspace>[0]
-    );
+    using workspace = await openWorkspace(stub);
     const runner = workspace.runtime as SessionRuntime;
     // Resolved in the `finally` below, so {@link abortRun} can wait for this
     // drain to unwind rather than only for the signal to be delivered.
@@ -410,9 +411,7 @@ export class ClaudeCoderSubagent extends RecipeSubagentHost<Env> {
       const stub = this.env.CLAUDE_CODER_WORKSPACE.get(
         this.env.CLAUDE_CODER_WORKSPACE.idFromName(inflight.name)
       );
-      using workspace = await getWorkspace(
-        stub as unknown as Parameters<typeof getWorkspace>[0]
-      );
+      using workspace = await openWorkspace(stub);
       await this.#session.stop(
         workspace.runtime as SessionRuntime,
         inflight.subtaskId

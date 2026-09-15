@@ -56,7 +56,7 @@ export class ProactiveAgent extends DynamicAgent<Env> {
    * a deliberate `no_reply`, or `failed`. The workflow maps those onto the three
    * terminal Task shapes.
    *
-   * ## The two places a turn can decline
+   * ## Where a turn can decline
    *
    * **The gate, here.** Every plugin declaring `shouldHandleTurn` is consulted
    * before anything expensive is built or called, and the answers are AND-ed. The

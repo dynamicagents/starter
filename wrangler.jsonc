@@ -1,5 +1,5 @@
 /**
- * One Worker, five agents.
+ * One Worker, every agent in it.
  *
  * The agents are **tenants** of one deployment, routed by `src/index.ts` on the
  * A2A `params.tenant` — they share one origin, one `/a2a` endpoint, one signed
@@ -44,12 +44,13 @@
   "limits": { "cpu_ms": 300000 },
   "observability": {
     "enabled": true,
-    // Traces, not just logs. The coder's workspace passes
+    // Traces, not just logs. Every workspace passes
     // `createCloudflareObserver({ tracing })` to its `Workspace`, which emits a
-    // span per sync push, sync pull, exec spawn and filesystem operation. Those
-    // are the only view into how long a container→host sync actually takes, and
-    // without this flag `tracing` is undefined and the observer silently
-    // degrades to a no-op.
+    // span per sync push, sync pull, exec spawn and filesystem operation — and
+    // the sync telemetry alongside it reports what each block of a pull cost.
+    // Those are the only view into how long a container→host sync actually
+    // takes, and without this flag `tracing` is undefined and the observer
+    // silently degrades to a no-op.
     "traces": {
       "enabled": true
     }
@@ -143,10 +144,9 @@
   //
   // Nothing replaces it, because nothing needs to: the checkout now lives in the
   // workspace object's own SQLite storage, which survives the container and
-  // costs no credential at all. `node_modules` does not — it stays in the
-  // container and is reinstalled when one starts — but that is reproducible from
-  // the lockfile in a few minutes, which is exactly what a snapshot was ever
-  // worth. See `src/workspace/install-plan.ts`.
+  // costs no credential at all — dependencies included, since those sync like
+  // any other file. A snapshot was only ever worth what it saved rebuilding, and
+  // there is nothing left to rebuild. See `src/workspace/install-plan.ts`.
 
   // `@dynamicagents/plugins/browser` — used by reactive and arc-player.
   // NOTE: requires a PAID Workers plan; Browser Rendering is not on the free
@@ -186,7 +186,7 @@
       { "class_name": "CoderAgent", "name": "CoderAgent" },
       { "class_name": "ClaudeCoderAgent", "name": "ClaudeCoderAgent" },
 
-      // Not agents — the two workspaces. One object per caller per repository,
+      // Not agents — the workspaces. One object per caller per repository,
       // holding that checkout's filesystem in SQLite and owning the container
       // that mounts it. Addressed by `idFromName`, never by the caller alone;
       // see `workspaceName` in `src/workspace/object.ts`, which both share.
@@ -246,7 +246,7 @@
   // Async A2A (accept + notify): the Worker accepts a turn synchronously and
   // hands generation plus the gatekeeper push-notification callback to a durable
   // Workflow. Reactive and arc-player run the same round loop over different
-  // souls and plugins, so they share one workflow body behind two entrypoints.
+  // souls and plugins, so they share one workflow body behind an entrypoint each.
   "workflows": [
     {
       "binding": "HANDLE_TASK_WORKFLOW",

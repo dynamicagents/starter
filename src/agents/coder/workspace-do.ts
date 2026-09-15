@@ -13,9 +13,9 @@ import { INSTALL_PLAN } from "@/workspace/install-plan";
  * What is *this agent's* is the config below.
  *
  * The subclass exists rather than the shared class being bound directly because
- * a Durable Object is addressed by class name: two agents need two classes, two
- * bindings and two `new_sqlite_classes` entries, or they would share one
- * namespace and one caller's checkout would answer for both.
+ * a Durable Object is addressed by class name: an agent needs a class, a binding
+ * and a `new_sqlite_classes` entry of its own, or agents share one namespace and
+ * one caller's checkout answers for all of them.
  */
 export class CoderWorkspaceDO extends WorkspaceObjectBase {
   protected workspaceConfig(): WorkspaceObjectConfig {

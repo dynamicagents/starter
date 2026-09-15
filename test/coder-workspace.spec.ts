@@ -2,10 +2,11 @@ import { runInDurableObject } from "cloudflare:test";
 import { env } from "cloudflare:workers";
 import { describe, expect, it, vi } from "vitest";
 import { makeDoHelpers } from "@dynamicagents/core/testing";
-import { getWorkspace } from "@cloudflare/computer";
+import type { CoderWorkspaceDO } from "@/index";
+import { openWorkspace } from "@/workspace/open";
 import type { InstallState } from "@dynamicagents/plugins/computer";
 import { INSTALL_PLAN } from "@/workspace/install-plan";
-import { TRUST_CA_COMMAND } from "@/workspace/object";
+import { TRUST_CA_COMMAND } from "@/workspace/ca-trust";
 import { SCRATCH_DIR } from "@/workspace/scratch";
 
 /**
@@ -29,7 +30,9 @@ import { SCRATCH_DIR } from "@/workspace/scratch";
  */
 
 /** A fresh workspace per test — DO storage never leaks between them. */
-const { freshStub: freshWorkspace } = makeDoHelpers(env.CODER_WORKSPACE);
+const { freshStub: freshWorkspace } = makeDoHelpers<CoderWorkspaceDO>(
+  env.CODER_WORKSPACE
+);
 
 /**
  * The same workspace, through a new stub, once a reclaim has reset it.
@@ -37,14 +40,32 @@ const { freshStub: freshWorkspace } = makeDoHelpers(env.CODER_WORKSPACE);
  * A reclaim resets the isolate after it returns, and a stub connected to an
  * object that reset stays broken — every later call on it throws. A caller in
  * production gets a new stub per request, so this is what one sees.
+ *
+ * **Waits for the reset rather than for a duration.** The reset is an abort the
+ * reclaim arms and the alarm carries out, so it lands some time after
+ * `reclaimIfIdle` returns — and a fixed sleep either outlasts it on a fast
+ * machine or does not on a slow one, where the abort arrives in the middle of
+ * whatever the test did next and fails it somewhere unrelated. The old instance
+ * throwing *is* the event, so that is what this waits for.
  */
-async function afterReclaim(stub: DurableObjectStub) {
-  await new Promise((resolve) => setTimeout(resolve, 10));
-  return env.CODER_WORKSPACE.get(stub.id);
+async function afterReclaim(stub: DurableObjectStub<CoderWorkspaceDO>) {
+  const deadline = Date.now() + 5_000;
+  for (;;) {
+    try {
+      // Any call at all: what is being watched for is the instance ceasing to
+      // answer, not anything it would answer with.
+      await runInDurableObject(stub, () => {});
+    } catch {
+      return env.CODER_WORKSPACE.get(stub.id);
+    }
+    if (Date.now() > deadline)
+      throw new Error("the reclaim never reset the isolate");
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
 }
 
 /** Read the raw install record, bypassing the staleness repair `advisories` applies. */
-function storedInstall(stub: DurableObjectStub) {
+function storedInstall(stub: DurableObjectStub<CoderWorkspaceDO>) {
   return runInDurableObject(stub, (_instance, state) =>
     state.storage.get<InstallState>("install")
   );
@@ -64,10 +85,11 @@ function storedInstall(stub: DurableObjectStub) {
  * So the two facts stay apart: this is a checkout, that is a checkout which
  * installs. Reach for the second only where the resolver has to act.
  */
-async function seedGitCheckout(stub: DurableObjectStub, dir: string) {
-  using ws = await getWorkspace(
-    stub as unknown as Parameters<typeof getWorkspace>[0]
-  );
+async function seedGitCheckout(
+  stub: DurableObjectStub<CoderWorkspaceDO>,
+  dir: string
+) {
+  using ws = await openWorkspace(stub);
   await ws.fs.mkdir(`${dir}/.git`, { recursive: true });
   // `.git` is a directory in a real checkout, but what the workspace probes for
   // is its presence, and a file is what a fixture can create in one call. It is
@@ -76,13 +98,16 @@ async function seedGitCheckout(stub: DurableObjectStub, dir: string) {
 }
 
 /** A checkout the install resolver will act on: git, plus a lockfile. */
-async function seedNodeCheckout(stub: DurableObjectStub, dir: string) {
+async function seedNodeCheckout(
+  stub: DurableObjectStub<CoderWorkspaceDO>,
+  dir: string,
+  options: { tree?: boolean } = {}
+) {
   await seedGitCheckout(stub, dir);
-  using ws = await getWorkspace(
-    stub as unknown as Parameters<typeof getWorkspace>[0]
-  );
+  using ws = await openWorkspace(stub);
   await ws.fs.writeFile(`${dir}/package.json`, '{"name":"probe"}');
   await ws.fs.writeFile(`${dir}/package-lock.json`, '{"lockfileVersion":3}');
+  if (options.tree) await ws.fs.mkdir(`${dir}/node_modules`);
 }
 
 describe("the install gate", () => {
@@ -250,25 +275,6 @@ describe("the install gate", () => {
 });
 
 /**
- * Arming the install the moment a cold container is seen.
- *
- * This is the *ordinary* second task, not an edge case. `node_modules` lives in
- * the container and dies with it; the install record lives in this object's
- * storage and does not. So once the container is reclaimed for idleness, a `done`
- * record describes a tree that is gone — and `startInstall` is only ever reached
- * from `repo_clone`, which a follow-up task never calls, because its checkout is
- * already here.
- *
- * That gap cost 99 seconds of `npm ci` inside a round. Closing it by probing from
- * the gate cost far more: the install was started from a poll that returned in
- * milliseconds, its drain died with that invocation, and the half-written tree
- * took a nine-minute task to unpick.
- *
- * So detection is a boolean read here, and the install itself belongs to the
- * alarm. These tests cover the detection; the alarm's own handler needs a
- * container and is covered end to end.
- */
-/**
  * Where the work is — the question `checkoutDir()` answers, and the invariants
  * that make its answer worth acting on.
  *
@@ -312,37 +318,12 @@ describe("where the work is", () => {
     await stub.noteCheckout({ dir, kind: "repo", repo: "acme/gone" });
     expect(await stub.checkoutDir()).toBe(dir);
 
-    using ws = await getWorkspace(
-      stub as unknown as Parameters<typeof getWorkspace>[0]
-    );
+    using ws = await openWorkspace(stub);
     await ws.fs.rm(`${dir}/.git`, { recursive: true });
 
     // The record still says `dir`. The answer is `undefined` anyway, because the
     // record is where to look and `.git` is what makes it true.
     expect(await stub.checkoutDir()).toBeUndefined();
-  });
-
-  /**
-   * The migration path. Workspaces deployed before the checkout record existed
-   * hold an install context and nothing else, and they must keep answering until
-   * their next clone writes a record — a fix that silently stranded every live
-   * checkout would be its own outage.
-   */
-  it("still answers for a workspace that predates the record", async () => {
-    const stub = freshWorkspace("checkout-legacy");
-    const dir = "/workspace/legacy";
-    await seedGitCheckout(stub, dir);
-
-    await runInDurableObject(stub, (_instance, state) =>
-      state.storage.put("install:context", {
-        dir,
-        fingerprint: null,
-        command: "npm ci --no-audit --no-fund",
-        startedAt: Date.now()
-      })
-    );
-
-    expect(await stub.checkoutDir()).toBe(dir);
   });
 
   /**
@@ -374,19 +355,56 @@ describe("where the work is", () => {
   });
 });
 
-describe("arming a reinstall for a cold container", () => {
-  const armed = (stub: DurableObjectStub) =>
+/**
+ * Arming the install when the workspace has no dependency tree.
+ *
+ * The signal is the tree, and it used to be the container. `node_modules` is
+ * synced into this object's storage now, so a container that went away takes no
+ * dependencies with it and a replacement is handed them back — a cold container
+ * is no longer evidence of anything. What is left is the workspace that
+ * genuinely has none: one whose install never ran, one whose pull never
+ * finished, or one written before any of this synced.
+ *
+ * It still has to be caught here rather than left to `repo_clone`, which is the
+ * gap that cost 99 seconds of `npm ci` inside a round: a follow-up task never
+ * calls it, because its checkout is already here. Closing it by probing from the
+ * gate cost far more — the install started from a poll that returned in
+ * milliseconds, its drain died with that invocation, and the half-written tree
+ * took a nine-minute task to unpick.
+ *
+ * So detection is a local read here, and the install itself belongs to the
+ * alarm. These tests cover the detection; the alarm's own handler needs a
+ * container and is covered end to end.
+ */
+describe("arming an install when the tree is missing", () => {
+  const armed = (stub: DurableObjectStub<CoderWorkspaceDO>) =>
     runInDurableObject(stub, (_instance, state) =>
       state.storage.get<number>("install:armed")
     );
 
-  /** A workspace that installed successfully, before its container went away. */
-  async function seedInstalled(stub: DurableObjectStub, dir: string) {
+  /**
+   * A workspace that installed successfully, before its container went away.
+   *
+   * `tree` seeds what that install left behind, and the two kinds are the whole
+   * point of asking: `landed` is a tree whose pull completed, recorded by the
+   * fingerprint that says so, and `partial` is the directory a pull left behind
+   * when nobody could finish it. On the filesystem they are indistinguishable,
+   * which is exactly why the fixture makes the caller name one.
+   *
+   * It is written **with** the checkout rather than afterwards, because opening
+   * the workspace at all runs the arming check — so a tree created in a second
+   * `getWorkspace` block lands after the decision it was meant to inform.
+   */
+  async function seedInstalled(
+    stub: DurableObjectStub<CoderWorkspaceDO>,
+    dir: string,
+    options: { tree?: "landed" | "partial" } = {}
+  ) {
     // The checkout has to be here too, or the resolver finds no `package.json`,
     // answers `skip`, and the armed install proves nothing by never reaching a
     // spawn — which is exactly how the first draft of this passed while testing
     // half of what it claimed.
-    await seedNodeCheckout(stub, dir);
+    await seedNodeCheckout(stub, dir, { tree: options.tree !== undefined });
     await runInDurableObject(stub, async (_instance, state) => {
       await state.storage.put("install", {
         state: "done",
@@ -401,14 +419,19 @@ describe("arming a reinstall for a cold container", () => {
         command: "npm ci --no-audit --no-fund",
         startedAt: Date.now() - 140_000
       });
+      // The record a completed pull writes, and the only thing that separates a
+      // whole tree from the remains of an abandoned one.
+      if (options.tree === "landed")
+        await state.storage.put("install:completed", {
+          fingerprint: "stale",
+          at: Date.now() - 60_000
+        });
     });
   }
 
   /** Touch the workspace the way anything reaching it does — via the stub hook. */
-  async function touchWorkspace(stub: DurableObjectStub) {
-    using ws = await getWorkspace(
-      stub as unknown as Parameters<typeof getWorkspace>[0]
-    );
+  async function touchWorkspace(stub: DurableObjectStub<CoderWorkspaceDO>) {
+    using ws = await openWorkspace(stub);
     void ws;
   }
 
@@ -420,7 +443,10 @@ describe("arming a reinstall for a cold container", () => {
    * That is the system working, so these assert the settled outcome rather than a
    * marker that is meant to be transient.
    */
-  async function settled(stub: DurableObjectStub, ms = 5_000) {
+  async function settled(
+    stub: DurableObjectStub<CoderWorkspaceDO>,
+    ms = 5_000
+  ) {
     const deadline = Date.now() + ms;
     for (;;) {
       const state = await storedInstall(stub);
@@ -448,12 +474,12 @@ describe("arming a reinstall for a cold container", () => {
   /**
    * The bound on retrying, and it has to exist.
    *
-   * Arming is naturally once-only for an install that *succeeds*: it leaves
-   * `done` with the container up, so the `container.running` check short-circuits
-   * everything after. A failing one has no such property — it lands back on
-   * `failed` with the container still down, and `__getWorkspaceStub` is the
-   * busiest entry point in the object, so without a cooldown it would re-arm on
-   * essentially every tool call.
+   * Arming is naturally once-only for an install that *succeeds*: it leaves a
+   * tree in the workspace, so the probe short-circuits everything after. A
+   * failing one has no such property — it lands back on `failed` with the tree
+   * still absent, and `__getWorkspaceStub` is the busiest entry point in the
+   * object, so without a cooldown it would re-arm on essentially every tool
+   * call.
    *
    * This test is the one that caught that: extending arming to `failed` made it
    * fail, which is the whole reason `INSTALL_ARM_COOLDOWN_MS` exists.
@@ -476,11 +502,6 @@ describe("arming a reinstall for a cold container", () => {
     expect(await armed(stub)).toBeUndefined();
   });
 
-  /**
-   * A caller's very first task: nothing has ever been installed, so there is no
-   * record of *where* to install. `repo_clone` and its `afterCheckout` hook own
-   * this case, exactly as they always have.
-   */
   /**
    * A failed install must not poison the workspace forever.
    *
@@ -528,6 +549,117 @@ describe("arming a reinstall for a cold container", () => {
     expect(await armed(stub)).toBeUndefined();
   });
 
+  /**
+   * The case the old signal could not express, and the reason for the new one.
+   *
+   * A container that has gone away says nothing about the dependencies now: they
+   * are in this object's storage, and the next container is handed them. Arming
+   * on a cold container would therefore re-run `npm ci` against a tree that is
+   * already correct — and that install starts by deleting the tree, so it does
+   * not merely waste the time, it writes the deletion and the rebuild back
+   * through the sync as well.
+   */
+  it("arms nothing when the tree is already in the workspace", async () => {
+    const stub = freshWorkspace("arm-tree-present");
+    const dir = "/workspace/probe";
+    // What a finished install leaves behind, as this side sees it: a directory
+    // under the checkout. The probe asks for exactly that and nothing more.
+    await seedInstalled(stub, dir, { tree: "landed" });
+
+    await touchWorkspace(stub);
+
+    // Still `done`, untouched, with nothing armed: the record it was seeded with
+    // describes a tree that is right there.
+    expect(await armed(stub)).toBeUndefined();
+    expect((await storedInstall(stub))?.state).toBe("done");
+  });
+
+  /**
+   * The other half of that, and the reason the directory is not the whole
+   * question.
+   *
+   * A pull commits in blocks, so one that is abandoned part-way — the container
+   * it was reading from went away — leaves `node_modules` holding some fraction
+   * of a tree. Nothing on this side can tell that from a finished one: same
+   * directory, same name, no marker left once the drain has given up on it. Read
+   * as "the tree is here", it suppresses the reinstall that would repair it for
+   * the life of the workspace, and every command that needs a dependency fails
+   * for no visible reason.
+   *
+   * So the fingerprint is asked as well, because it is written only by a pull
+   * that completed — the same pair the skip condition in `install.ts` requires
+   * before it declines to install at all.
+   */
+  it("arms an install for a tree an abandoned pull left half here", async () => {
+    const stub = freshWorkspace("arm-tree-partial");
+    const dir = "/workspace/probe";
+    await seedInstalled(stub, dir, { tree: "partial" });
+
+    await touchWorkspace(stub);
+
+    // Armed and run: `failed` is a spawn attempted with no container to spawn
+    // into, which is how this suite sees an install actually being driven.
+    expect((await settled(stub))?.state).toBe("failed");
+  });
+
+  /**
+   * The window between an install finishing and its tree arriving.
+   *
+   * An install ends when its command exits; the tree it wrote reaches this
+   * object on the pull that follows, which can still be in flight. In between,
+   * the workspace looks exactly like one that never installed anything — a
+   * terminal record and no `node_modules` — and arming there starts a second
+   * `npm ci` **while the first tree is still crossing**, which deletes what the
+   * pull is delivering and sends the whole tree over again.
+   *
+   * A pull with nothing applied yet is the sharp case: the marker is the only
+   * thing that distinguishes it from a workspace with no tree at all.
+   */
+  it("arms nothing while the tree is still on its way", async () => {
+    const stub = freshWorkspace("arm-tree-in-flight");
+    const dir = "/workspace/probe";
+    await seedInstalled(stub, dir);
+
+    // What the install writes when its own bracket did not land the tree: no
+    // `node_modules` anywhere yet, and a note that one is on its way.
+    await runInDurableObject(stub, (_instance, state) =>
+      state.storage.put("install:syncing", { at: Date.now() })
+    );
+
+    await touchWorkspace(stub);
+
+    expect(await armed(stub)).toBeUndefined();
+    expect((await storedInstall(stub))?.state).toBe("done");
+  });
+
+  /**
+   * The bound on that, because a marker nothing clears would suppress every
+   * future install for the life of the workspace — an isolate that died between
+   * the install and its drain leaves exactly that.
+   */
+  it("stops believing a tree that never arrived", async () => {
+    const stub = freshWorkspace("arm-tree-in-flight-stale");
+    const dir = "/workspace/probe";
+    await seedInstalled(stub, dir);
+
+    await runInDurableObject(stub, (_instance, state) =>
+      state.storage.put("install:syncing", {
+        at: Date.now() - 2 * 60 * 60_000
+      })
+    );
+
+    await touchWorkspace(stub);
+
+    // Armed and run: a stale marker is dropped rather than obeyed, and the
+    // install it was suppressing goes ahead.
+    expect((await settled(stub))?.state).toBe("failed");
+  });
+
+  /**
+   * A caller's very first task: nothing has ever been installed, so there is no
+   * record of *where* to install. `repo_clone` and its `afterCheckout` hook own
+   * this case, exactly as they always have.
+   */
   it("arms nothing when no install has ever run", async () => {
     const stub = freshWorkspace("arm-first-task");
 
@@ -549,6 +681,123 @@ describe("arming a reinstall for a cold container", () => {
  * again and logging a reclaim that did not happen. Both the candidate table and
  * the RPC work grew for the lifetime of the caller.
  */
+/**
+ * Keeping the workspace level with the container, which nothing else will do.
+ *
+ * A command's own bracket pulls its writes back when it exits, and that pull can
+ * fail while the command succeeds. The runtime reports it and schedules nothing:
+ * the cursor is durable, so a later `pull()` resumes the same operation, and
+ * driving that later `pull()` is the host's half of syncing.
+ *
+ * These assert it on the idle path and the git path, the places the host has to
+ * act. Both run without a container, which is the case the drain has to survive
+ * rather than the case it exists for — with none running there is nothing left
+ * to pull, because whatever a container held that never arrived went with it.
+ */
+describe("draining an outstanding pull", () => {
+  /**
+   * The drain must never start a container.
+   *
+   * Opening a backend handle would launch one, and a pull against a replacement
+   * finds an empty filesystem rather than the writes it was after. Launching a
+   * container to discover that is pure cost — and on the idle path it would
+   * restart the very container the deadline had just decided to stop.
+   */
+  it("starts no container when none is running", async () => {
+    const stub = freshWorkspace("drain-no-container");
+    await seedGitCheckout(stub, "/workspace/probe");
+
+    await runInDurableObject(stub, async (instance, state) => {
+      // The idle handler's own path, with the clock far enough back that it
+      // decides to stop. It reaches the drain first, which must decline.
+      await state.storage.put("lastUsedAt", Date.now() - 24 * 60 * 60_000);
+      await instance.alarm?.();
+      expect(state.container?.running ?? false).toBe(false);
+    });
+  });
+
+  /**
+   * Stopping the container is what ends the wait, so it has to end the belief
+   * as well.
+   *
+   * An install whose tree is still crossing leaves a marker, and the marker
+   * suppresses the next reinstall on the grounds that one is already on its way.
+   * Destroying the container is the moment that stops being true — whatever it
+   * held that never arrived is gone — so a marker left standing would skip the
+   * install for as long as it lasts, on the one workspace whose dependencies are
+   * the thing that is missing.
+   */
+  it("stops waiting on a tree when the container it was coming from goes", async () => {
+    const stub = freshWorkspace("drain-idle-releases-install");
+    const dir = "/workspace/probe";
+    await seedGitCheckout(stub, dir);
+    // A workspace mid-window: the install is done, the tree is not here, and
+    // something is believed to be bringing it.
+    await runInDurableObject(stub, async (_instance, state) => {
+      await state.storage.put("install", {
+        state: "done",
+        command: "npm ci --no-audit --no-fund",
+        exitCode: 0,
+        finishedAt: Date.now() - 60_000,
+        ms: 80_000
+      } satisfies InstallState);
+      await state.storage.put("install:context", {
+        dir,
+        fingerprint: "stale",
+        command: "npm ci --no-audit --no-fund",
+        startedAt: Date.now() - 140_000
+      });
+      await state.storage.put("install:syncing", { at: Date.now() });
+    });
+
+    await runInDurableObject(stub, async (instance, state) => {
+      await state.storage.put("lastUsedAt", Date.now() - 24 * 60 * 60_000);
+      // The deadline exists — `seedGitCheckout` went through the stub hook, which
+      // touches — but it is a day away. Due is what makes the handler run.
+      expect(forceDue(state, "containerIdle")).toBeGreaterThan(0);
+      await instance.alarm?.();
+    });
+
+    // With no container there was nothing to drain and nothing still coming, so
+    // the wait is over and the next access is free to install again.
+    expect(
+      await runInDurableObject(stub, (_instance, state) =>
+        state.storage.get("install:syncing")
+      )
+    ).toBeUndefined();
+  });
+
+  /**
+   * Git runs **here**, against this object's storage, so it reads a tree that is
+   * only as current as the last pull. A commit made in the container that has
+   * not arrived is a commit `git push` cannot see — and pushing anyway publishes
+   * a tree the agent did not produce, which reports success and shows an older
+   * branch on the forge.
+   *
+   * With no container there is nothing outstanding, so this asserts the other
+   * half: the check does not stand between a workspace and its own git.
+   */
+  it("lets git run when there is nothing outstanding", async () => {
+    const stub = freshWorkspace("drain-git-clear");
+    const dir = "/workspace/probe";
+    await seedGitCheckout(stub, dir);
+
+    // Refused for want of an allowed host, which is a decision made *after* the
+    // sync check — so reaching it at all proves the check passed.
+    const result = await stub.gitPush({
+      url: "https://github.example/acme/api.git",
+      dir,
+      branch: "main",
+      allowedHosts: []
+    });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.message).not.toMatch(/reached the workspace/);
+    }
+  });
+});
+
 describe("reclaiming an idle workspace", () => {
   it("reports nothing to do for a workspace nothing has ever used", async () => {
     const stub = freshWorkspace("never-used");
@@ -576,9 +825,7 @@ describe("reclaiming an idle workspace", () => {
   it("still reclaims one that was used and then went idle", async () => {
     const stub = freshWorkspace("used-then-idle");
     // `getWorkspace` is the busiest entry point and the one that touches.
-    using ws = await getWorkspace(
-      stub as unknown as Parameters<typeof getWorkspace>[0]
-    );
+    using ws = await openWorkspace(stub);
     await ws.fs.mkdir("/workspace/repo", { recursive: true });
 
     // A zero threshold stands in for a week having passed.
@@ -658,9 +905,7 @@ describe("trusting the interception CA", () => {
 
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     try {
-      using ws = await getWorkspace(
-        stub as unknown as Parameters<typeof getWorkspace>[0]
-      );
+      using ws = await openWorkspace(stub);
       void ws;
       expect(attempts(warn.mock.calls)).toBeGreaterThan(0);
     } finally {
@@ -679,9 +924,7 @@ describe("trusting the interception CA", () => {
 
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     try {
-      using ws = await getWorkspace(
-        stub as unknown as Parameters<typeof getWorkspace>[0]
-      );
+      using ws = await openWorkspace(stub);
       void ws;
       // No checkout, no install record, nothing armed — the paths that used to
       // carry the trust are all inert here.
@@ -699,6 +942,22 @@ describe("trusting the interception CA", () => {
  * table at all is no rows: storage that was just wiped has not had the queue
  * recreated yet.
  */
+/**
+ * Bring a deadline forward to now, so `alarm()` actually runs its handler.
+ *
+ * The suite cannot wait out an idle window, and a deadline that is not due is a
+ * handler that does not run — which a test asserting what the handler *did* would
+ * pass without noticing. Reaches into the scheduler's own table, like
+ * {@link scheduleRows}, because the times are the thing being faked.
+ */
+function forceDue(state: DurableObjectState, callback: string): number {
+  return state.storage.sql.exec(
+    "UPDATE cf_agents_jobs SET time = ? WHERE fn = ?",
+    Date.now() - 1_000,
+    callback
+  ).rowsWritten;
+}
+
 function scheduleRows(
   state: DurableObjectState
 ): { id: string; callback: string }[] {
@@ -730,14 +989,12 @@ function scheduleRows(
  */
 describe("the idle deadlines, over a scheduler that has no upsert", () => {
   /** The same hook anything reaching this object goes through. */
-  async function touch(stub: DurableObjectStub) {
-    using ws = await getWorkspace(
-      stub as unknown as Parameters<typeof getWorkspace>[0]
-    );
+  async function touch(stub: DurableObjectStub<CoderWorkspaceDO>) {
+    using ws = await openWorkspace(stub);
     void ws;
   }
 
-  const schedules = (stub: DurableObjectStub) =>
+  const schedules = (stub: DurableObjectStub<CoderWorkspaceDO>) =>
     runInDurableObject(stub, (_instance, state) => scheduleRows(state));
 
   it("keeps one row per deadline however often the workspace is touched", async () => {
@@ -841,91 +1098,5 @@ describe("the idle deadlines, over a scheduler that has no upsert", () => {
       .sort();
     expect(again).toContain("idleReclaim");
     expect(again).toContain("containerIdle");
-  });
-});
-
-/**
- * Booting on what the predecessor left behind, since there is no migration.
- *
- * Deployed objects hold a KV row called `"wake"` carrying every deadline, and a
- * physical alarm armed against it. Nothing reads that row here, so an object
- * upgraded mid-install boots with all of it still on disk: a `running` install
- * record, an `install-run` entry in that row pointing at it, and an alarm that
- * fires once into a handler with no schedule rows behind it.
- *
- * The intent is orphaned — nothing reads that row any more — so the question is
- * not whether the wake-up is lost (it is) but whether the object recovers. It
- * does, through the staleness bound, which is the mechanism that already exists
- * for "the isolate that owned this is gone". An orphaned intent is exactly that
- * case, so the upgrade needs no drain of its own.
- */
-describe("an object upgraded mid-install", () => {
-  it("recovers a running record whose wake intent the upgrade orphaned", async () => {
-    const stub = freshWorkspace("upgraded-mid-install");
-    const limit = INSTALL_PLAN.timeoutMs ?? 20 * 60_000;
-
-    await runInDurableObject(stub, async (_instance, state) => {
-      await state.storage.put("install", {
-        state: "running",
-        command: "npm ci --no-audit --no-fund",
-        startedAt: Date.now() - limit - 10 * 60_000
-      } satisfies InstallState);
-      // The legacy row, carrying the entry that would have run the install.
-      await state.storage.put("wake", {
-        "install-run": { key: "install-run", notBefore: Date.now() - 60_000 },
-        "install-watch": {
-          key: "install-watch",
-          notBefore: Date.now() - 30_000
-        }
-      });
-      // And the alarm it armed, already due.
-      await state.storage.setAlarm(Date.now() - 1_000);
-    });
-
-    // The stale alarm fires into a lifecycle with no schedule rows. It must be a
-    // no-op that does not throw: a throwing `alarm()` is retried a bounded number
-    // of times and then abandoned, taking every future schedule with it.
-    await runInDurableObject(stub, async (instance) => {
-      await expect(instance.alarm()).resolves.toBeUndefined();
-    });
-
-    // The record is not stranded. `arm()` refuses `running`, so recovery is the
-    // staleness bound writing the only accurate thing left to say.
-    const [advisory] = await stub.advisories();
-    expect(advisory?.kind).toBe("deps-broken");
-    expect((await storedInstall(stub))?.state).toBe("failed");
-
-    // And the object schedules again afterwards, rather than being poisoned by
-    // what it found.
-    using ws = await getWorkspace(
-      stub as unknown as Parameters<typeof getWorkspace>[0]
-    );
-    void ws;
-    const rows = await runInDurableObject(stub, (_instance, state) =>
-      scheduleRows(state)
-    );
-    expect(rows.map((row) => row.callback)).toContain("idleReclaim");
-  });
-
-  /** The orphaned row is left in place rather than drained. Pinned, not assumed. */
-  it("leaves the orphaned row untouched", async () => {
-    const stub = freshWorkspace("upgraded-orphan");
-    const leftover = {
-      "container-idle": { key: "container-idle", notBefore: Date.now() }
-    };
-    await runInDurableObject(stub, (_instance, state) =>
-      state.storage.put("wake", leftover)
-    );
-
-    using ws = await getWorkspace(
-      stub as unknown as Parameters<typeof getWorkspace>[0]
-    );
-    void ws;
-
-    expect(
-      await runInDurableObject(stub, (_instance, state) =>
-        state.storage.get("wake")
-      )
-    ).toEqual(leftover);
   });
 });

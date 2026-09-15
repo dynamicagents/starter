@@ -40,10 +40,28 @@ const { freshStub: freshWorkspace } = makeDoHelpers<CoderWorkspaceDO>(
  * A reclaim resets the isolate after it returns, and a stub connected to an
  * object that reset stays broken — every later call on it throws. A caller in
  * production gets a new stub per request, so this is what one sees.
+ *
+ * **Waits for the reset rather than for a duration.** The reset is an abort the
+ * reclaim arms and the alarm carries out, so it lands some time after
+ * `reclaimIfIdle` returns — and a fixed sleep either outlasts it on a fast
+ * machine or does not on a slow one, where the abort arrives in the middle of
+ * whatever the test did next and fails it somewhere unrelated. The old instance
+ * throwing *is* the event, so that is what this waits for.
  */
 async function afterReclaim(stub: DurableObjectStub<CoderWorkspaceDO>) {
-  await new Promise((resolve) => setTimeout(resolve, 10));
-  return env.CODER_WORKSPACE.get(stub.id);
+  const deadline = Date.now() + 5_000;
+  for (;;) {
+    try {
+      // Any call at all: what is being watched for is the instance ceasing to
+      // answer, not anything it would answer with.
+      await runInDurableObject(stub, () => {});
+    } catch {
+      return env.CODER_WORKSPACE.get(stub.id);
+    }
+    if (Date.now() > deadline)
+      throw new Error("the reclaim never reset the isolate");
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
 }
 
 /** Read the raw install record, bypassing the staleness repair `advisories` applies. */

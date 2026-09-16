@@ -6,7 +6,7 @@ import {
   workspaceName,
   WORKSPACE_DIR,
   type WorkspaceObjectBase
-} from "./object";
+} from "@dynamicagents/plugins/computer";
 import { SCRATCH_DIR, SCRATCH_REPO } from "./scratch";
 
 /**

@@ -228,8 +228,9 @@ subtask _is_. A `coder` subtask is a Dynamic Agents subagent running core's tool
 inside the container. A `claude-coder` subtask is one `claude -p` session — its
 own loop, its own tools, its own context management — which is why that agent
 overrides `executeChunk` instead of configuring a recipe. Their workspace Durable
-Objects are two thin subclasses of one shared `src/workspace/object.ts`,
-differing only in a `WorkspaceObjectConfig`.
+Objects are two thin subclasses of `WorkspaceObjectBase` from
+`@dynamicagents/plugins/computer`, differing only in a
+`WorkspaceObjectConfig`.
 
 That egress policy is the whole reason `claude-coder` exists. An Anthropic
 **subscription** credential is refused for raw Messages API calls on every

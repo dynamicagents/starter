@@ -13,20 +13,25 @@ what core deliberately refuses to ship — the words, the config values, and whi
 plugins each agent installs.
 
 If you find yourself writing durable-execution logic in this repo, that is the
-signal it belongs in core instead.
+signal it belongs in core instead. If you find yourself writing the Durable
+Object a capability lives in — a container, its alarm, its install — that is the
+signal it belongs in plugins. `src/workspace/` holds only config, addresses and
+adapters for the workspace this Worker deploys; the object itself is
+`@dynamicagents/plugins/computer`.
 
 ---
 
 ## Where a thing goes
 
-| You are changing…                         | It goes in                           |
-| ----------------------------------------- | ------------------------------------ |
-| what the model is told about a domain     | the plugin that owns that domain     |
-| what the agent _is_                       | `src/agents/<tenant>/soul.ts`        |
-| how a round ends, or a user-facing string | `src/round-policy.ts`                |
-| which capabilities an agent has           | `src/agents/<tenant>/plugins.ts`     |
-| model ids, budgets, limits                | `src/config.ts`                      |
-| cancellation, retries, idempotency, DAGs  | **`@dynamicagents/core`** — not here |
+| You are changing…                         | It goes in                              |
+| ----------------------------------------- | --------------------------------------- |
+| what the model is told about a domain     | the plugin that owns that domain        |
+| what the agent _is_                       | `src/agents/<tenant>/soul.ts`           |
+| how a round ends, or a user-facing string | `src/round-policy.ts`                   |
+| which capabilities an agent has           | `src/agents/<tenant>/plugins.ts`        |
+| model ids, budgets, limits                | `src/config.ts`                         |
+| the object a capability runs in           | **`@dynamicagents/plugins`** — not here |
+| cancellation, retries, idempotency, DAGs  | **`@dynamicagents/core`** — not here    |
 
 `src/round-policy.ts` and `src/config.ts` sit at the top level because two agents
 share them. An agent importing a _sibling's_ module is what `npm run

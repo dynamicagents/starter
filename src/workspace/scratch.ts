@@ -2,7 +2,7 @@ import { scratch, DEFAULT_SCRATCH_DIR } from "@dynamicagents/plugins/scratch";
 import type { AgentPlugin } from "@dynamicagents/core";
 import type { computerExec } from "@dynamicagents/plugins/computer";
 import type { ActiveRepo } from "./active-repo";
-import type { WorkspaceObjectBase } from "./object";
+import type { WorkspaceObjectBase } from "@dynamicagents/plugins/computer";
 
 /**
  * How *this* Worker addresses a scratchpad.
@@ -27,7 +27,8 @@ import type { WorkspaceObjectBase } from "./object";
  * Angle brackets because no forge name can contain them. This shares a namespace
  * with the `owner/repo` strings in {@link ActiveRepo}, so a sentinel a caller
  * could clone is a sentinel a caller could collide with — the same reasoning that
- * spells the pre-selection window `<unassigned>` in `./object.ts`.
+ * spells the pre-selection window `<unassigned>` — see `workspaceName` in
+ * `@dynamicagents/plugins/computer`.
  */
 export const SCRATCH_REPO = "<scratch>";
 
@@ -50,8 +51,9 @@ export const SCRATCH_DIR = DEFAULT_SCRATCH_DIR;
  * scratchpad would rely solely on its own seven-day alarm with no backstop, which
  * is the state the accidental `<unassigned>` workspace is in.
  *
- * `afterOpen` is what makes a scratchpad reachable at all. `checkoutDir()` in
- * `./object.ts` answers from the checkout record, and a scratchpad has nothing else that would
+ * `afterOpen` is what makes a scratchpad reachable at all. `checkoutDir()` on
+ * the workspace host answers from the checkout record, and a scratchpad has
+ * nothing else that would
  * write one — a directory with no `package.json` is exactly what the install
  * resolver skips. The `present` it reports back is the same probe the delegation
  * will make, so a workspace that cannot see the tree says so in this tool'"'"'s own

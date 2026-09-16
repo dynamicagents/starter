@@ -1,7 +1,9 @@
 import { MAX_TOOL_CALL_MS, TOOL_CALL_GRACE_MS } from "@dynamicagents/core";
 import type { ComputerConfig } from "@dynamicagents/plugins/computer";
-import type { WorkspaceObjectBase } from "./object";
-import { WORKSPACE_DIR } from "./object";
+import {
+  WORKSPACE_DIR,
+  type WorkspaceObjectBase
+} from "@dynamicagents/plugins/computer";
 
 /**
  * How long `sb_exec` waits on an install in flight before running the command
@@ -108,9 +110,10 @@ export function workspaceContainer(
      * {@link COMMAND_TIMEOUT_MS} for why it sits below the call's signal rather
      * than at `MAX_TOOL_CALL_MS`.
      *
-     * Note the other end of the same command: `CONTAINER_IDLE_MS` in `./object.ts`
-     * must stay above this, or the idle sweeper destroys the container out from
-     * under a command still running in it.
+     * Note the other end of the same command: the container-idle window in
+     * `@dynamicagents/plugins/computer` must stay above this, or the idle
+     * sweeper destroys the container out from under a command still running in
+     * it. That package's default is the one this agent takes.
      */
     timeoutMs: COMMAND_TIMEOUT_MS
   };

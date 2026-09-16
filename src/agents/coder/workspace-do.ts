@@ -1,14 +1,14 @@
 import {
   WorkspaceObjectBase,
   type WorkspaceObjectConfig
-} from "@dynamicagents/plugins/computer-host";
+} from "@dynamicagents/plugins/computer";
 import { INSTALL_PLAN } from "@/workspace/install-plan";
 import { gitIdentity } from "@/workspace/git-identity";
 
 /**
  * The coder's workspace, bound as `CODER_WORKSPACE`.
  *
- * Everything this object does lives in `@dynamicagents/plugins/computer-host`
+ * Everything this object does lives in `@dynamicagents/plugins/computer`
  * and is shared with `claude-coder`: one Durable Object, one container, one repository, with
  * the checkout in SQLite and `computerd` mounting it over FUSE at `/workspace`.
  * What is *this agent's* is the config below.

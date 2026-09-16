@@ -21,7 +21,7 @@
 # `egress: { mode: "http-gateway" }` the CA is mounted after the container
 # starts, so anything in this image runs too early to find it. The workspace
 # object installs it instead — the `ca-trust` module in
-# `@dynamicagents/plugins/computer-host` carries the ordering constraint and the
+# `@dynamicagents/plugins/computer` carries the ordering constraint and the
 # measurements.
 # `NODE_OPTIONS` below is the other half, and belongs here because it is an
 # image property.

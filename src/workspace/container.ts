@@ -3,7 +3,7 @@ import type { ComputerConfig } from "@dynamicagents/plugins/computer";
 import {
   WORKSPACE_DIR,
   type WorkspaceObjectBase
-} from "@dynamicagents/plugins/computer-host";
+} from "@dynamicagents/plugins/computer";
 
 /**
  * How long `sb_exec` waits on an install in flight before running the command
@@ -111,7 +111,7 @@ export function workspaceContainer(
      * than at `MAX_TOOL_CALL_MS`.
      *
      * Note the other end of the same command: the container-idle window in
-     * `@dynamicagents/plugins/computer-host` must stay above this, or the idle
+     * `@dynamicagents/plugins/computer` must stay above this, or the idle
      * sweeper destroys the container out from under a command still running in
      * it. That package's default is the one this agent takes.
      */

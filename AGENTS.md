@@ -17,7 +17,7 @@ signal it belongs in core instead. If you find yourself writing the Durable
 Object a capability lives in — a container, its alarm, its install — that is the
 signal it belongs in plugins. `src/workspace/` holds only config, addresses and
 adapters for the workspace this Worker deploys; the object itself is
-`@dynamicagents/plugins/computer-host`.
+`@dynamicagents/plugins/computer`.
 
 ---
 

@@ -2,7 +2,7 @@ import { scratch, DEFAULT_SCRATCH_DIR } from "@dynamicagents/plugins/scratch";
 import type { AgentPlugin } from "@dynamicagents/core";
 import type { computerExec } from "@dynamicagents/plugins/computer";
 import type { ActiveRepo } from "./active-repo";
-import type { WorkspaceObjectBase } from "@dynamicagents/plugins/computer-host";
+import type { WorkspaceObjectBase } from "@dynamicagents/plugins/computer";
 
 /**
  * How *this* Worker addresses a scratchpad.
@@ -28,7 +28,7 @@ import type { WorkspaceObjectBase } from "@dynamicagents/plugins/computer-host";
  * with the `owner/repo` strings in {@link ActiveRepo}, so a sentinel a caller
  * could clone is a sentinel a caller could collide with — the same reasoning that
  * spells the pre-selection window `<unassigned>` — see `workspaceName` in
- * `@dynamicagents/plugins/computer-host`.
+ * `@dynamicagents/plugins/computer`.
  */
 export const SCRATCH_REPO = "<scratch>";
 

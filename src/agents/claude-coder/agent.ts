@@ -9,7 +9,7 @@ import { CLAUDE_CODER_CONFIG } from "@/config";
 import { roundPolicy } from "@/round-policy";
 import { activeRepo } from "@/workspace/active-repo";
 import { discardWorkingTree, sweepIdleWorkspaces } from "@/workspace/lifecycle";
-import { workspaceName } from "@dynamicagents/plugins/computer-host";
+import { workspaceName } from "@dynamicagents/plugins/computer";
 import { parentPlugins } from "./plugins";
 import { soulPrompt } from "./soul";
 import { ClaudeCoderSubagent } from "./subagent";

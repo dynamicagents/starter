@@ -7,7 +7,7 @@ import {
 import {
   WorkspaceObjectBase,
   type WorkspaceObjectConfig
-} from "@dynamicagents/plugins/computer-host";
+} from "@dynamicagents/plugins/computer";
 import { CLAUDE_CODE_SESSION } from "@/config";
 import { INSTALL_PLAN } from "@/workspace/install-plan";
 import { gitIdentity } from "@/workspace/git-identity";
@@ -16,7 +16,7 @@ import { claudeCodeConfig, CREDENTIALS_KEY } from "./claude-code";
 /**
  * The claude-coder's workspace, bound as `CLAUDE_CODER_WORKSPACE`.
  *
- * Everything a workspace does is in `@dynamicagents/plugins/computer-host`,
+ * Everything a workspace does is in `@dynamicagents/plugins/computer`,
  * shared with the coder. Two things are this agent's own, and both exist so that the container
  * never holds an Anthropic credential — see `./claude-code.ts`:
  *
@@ -32,7 +32,7 @@ import { claudeCodeConfig, CREDENTIALS_KEY } from "./claude-code";
  * "Self-signed certificate detected", neither of which mentions egress.
  *
  * That trust is installed by the workspace host in
- * `@dynamicagents/plugins/computer-host`, whose `ca-trust` module carries the
+ * `@dynamicagents/plugins/computer`, whose `ca-trust` module carries the
  * full reasoning — including why it cannot live in the image's entrypoint, where
  * Cloudflare's own recipe puts it. Changing this mode means reading it.
  */

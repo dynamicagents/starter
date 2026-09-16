@@ -7,7 +7,7 @@ import { createAgentRuntime } from "@dynamicagents/core";
 import { SCRATCH_OPEN_TOOL } from "@dynamicagents/plugins/scratch";
 import { CODER_CONFIG } from "@/config";
 import type { ActiveRepo } from "@/workspace/active-repo";
-import { workspaceName } from "@dynamicagents/plugins/computer-host";
+import { workspaceName } from "@dynamicagents/plugins/computer";
 import { hostScratch, SCRATCH_DIR, SCRATCH_REPO } from "@/workspace/scratch";
 
 /**

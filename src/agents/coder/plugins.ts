@@ -9,7 +9,7 @@ import {
   workspaceContainer
 } from "@/workspace/container";
 import { workspaceGit } from "@/workspace/git";
-import { workspaceName } from "@dynamicagents/plugins/computer-host";
+import { workspaceName } from "@dynamicagents/plugins/computer";
 import { gitIdentity } from "@/workspace/git-identity";
 import { hostScratch } from "@/workspace/scratch";
 import { code } from "./code";
@@ -143,7 +143,7 @@ export const parentPlugins = (host: PluginHost<Env>): AgentPlugin[] => {
         // Before the install, and never inside it: an install is conditional
         // where a checkout is not, so no install outcome may decide whether the
         // path is recorded. The reasoning is on `noteCheckout` in the
-        // workspace host, in `@dynamicagents/plugins/computer-host`.
+        // workspace host, in `@dynamicagents/plugins/computer`.
         await ws.noteCheckout({
           dir,
           kind: "repo",

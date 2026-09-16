@@ -229,7 +229,7 @@ inside the container. A `claude-coder` subtask is one `claude -p` session — it
 own loop, its own tools, its own context management — which is why that agent
 overrides `executeChunk` instead of configuring a recipe. Their workspace Durable
 Objects are two thin subclasses of `WorkspaceObjectBase` from
-`@dynamicagents/plugins/computer-host`, differing only in a
+`@dynamicagents/plugins/computer`, differing only in a
 `WorkspaceObjectConfig`.
 
 That egress policy is the whole reason `claude-coder` exists. An Anthropic

@@ -96,8 +96,8 @@ export class ClaudeCoderWorkspaceDO extends WorkspaceObjectBase {
         mode: "http-gateway",
         gateway: this.#session.egress(this.#credentials)
       },
-      // See the coder's workspace for why this is config and not an env read.
-      git: { token: this.env.GITHUB_TOKEN, author: gitIdentity(this.env) }
+      // See the coder's workspace for why the binding is named, not read.
+      git: { tokenBinding: "GITHUB_TOKEN", author: gitIdentity(this.env) }
     };
   }
 

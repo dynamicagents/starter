@@ -36,10 +36,11 @@ export class CoderWorkspaceDO extends WorkspaceObjectBase {
        * one reason — swapping a credential the container must never hold.
        */
       egress: { mode: "direct" },
-      // The credential git runs under, and who a commit made on this side is
-      // attributed to. Config rather than an env read because the base class
-      // ships from a package that cannot name this Worker's `Env`.
-      git: { token: this.env.GITHUB_TOKEN, author: gitIdentity(this.env) }
+      // Which binding holds the credential git runs under, and who a commit
+      // made on this side is attributed to. The binding is named rather than
+      // read because `workspaceConfig()` is reachable over RPC — the base class
+      // carries the reasoning on `tokenBinding`.
+      git: { tokenBinding: "GITHUB_TOKEN", author: gitIdentity(this.env) }
     };
   }
 }

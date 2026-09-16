@@ -9,8 +9,8 @@
  * committer nobody configured.
  *
  * One function rather than the pair written out at each site, because "has to
- * match" in a comment is a rule with nothing enforcing it, and this Worker now
- * has four places that would have to keep it.
+ * match" in a comment is a rule with nothing enforcing it, and every plugin that
+ * commits plus every workspace object would otherwise have to keep it.
  *
  * `da-coder` is the fallback for an unset `GITHUB_NAME` — see `.env.example`.
  * The workspace object takes the resolved answer and has no fallback of its own,

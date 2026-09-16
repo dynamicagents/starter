@@ -126,6 +126,16 @@ to a missing file. npm pins the ref to a SHA in the lockfile, so a merge upstrea
 not reach this repo until someone reinstalls; a plain reinstall of the lockfile keeps
 the old commit.
 
+**A git dependency is allowed by its own key, written without a committish.** The
+`@dynamicagents/*` entries in `allowScripts` are registry keys and match nothing while
+these are git refs — npm identifies a git dependency by repo and commit, never by the
+name in a manifest it has not verified. So each ref needs a `github:owner/repo` entry
+of its own, and **no `#sha` on it**: npm treats a committish in the key as a prefix the
+resolved SHA must start with, so a pinned one approves exactly one commit and goes
+unreviewed — the build silently losing `dist/` — the next time core or plugins merges.
+Without a committish it matches the repo at any commit, which is the only form that
+survives a moving ref.
+
 **A release is a PR from `next` into `main`, merged with a merge commit.** Before it,
 once core and plugins are published, a PR into `next` pins the new versions and removes
 any git ref; Test fails a PR into `main` that still names one. Nothing reaches `main`

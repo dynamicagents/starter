@@ -189,7 +189,8 @@
       // Not agents — the workspaces. One object per caller per repository,
       // holding that checkout's filesystem in SQLite and owning the container
       // that mounts it. Addressed by `idFromName`, never by the caller alone;
-      // see `workspaceName` in `src/workspace/object.ts`, which both share.
+      // see `workspaceName` in `@dynamicagents/plugins/computer-host`, which
+      // both share.
       //
       // Two classes rather than one shared class with two bindings, because a
       // Durable Object namespace is keyed by class name: one class would put

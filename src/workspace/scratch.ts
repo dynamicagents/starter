@@ -2,7 +2,7 @@ import { scratch, DEFAULT_SCRATCH_DIR } from "@dynamicagents/plugins/scratch";
 import type { AgentPlugin } from "@dynamicagents/core";
 import type { computerExec } from "@dynamicagents/plugins/computer";
 import type { ActiveRepo } from "./active-repo";
-import type { WorkspaceObjectBase } from "./object";
+import type { WorkspaceObjectBase } from "@dynamicagents/plugins/computer-host";
 
 /**
  * How *this* Worker addresses a scratchpad.

@@ -2,12 +2,12 @@ import { describe, expect, it } from "vitest";
 import { env } from "cloudflare:workers";
 import { makeDoHelpers } from "@dynamicagents/core/testing";
 import type { CoderWorkspaceDO } from "@/index";
-import { openWorkspace } from "@/workspace/open";
+import { openWorkspace } from "@dynamicagents/plugins/computer";
 import { createAgentRuntime } from "@dynamicagents/core";
 import { SCRATCH_OPEN_TOOL } from "@dynamicagents/plugins/scratch";
 import { CODER_CONFIG } from "@/config";
 import type { ActiveRepo } from "@/workspace/active-repo";
-import { workspaceName } from "@/workspace/object";
+import { workspaceName } from "@dynamicagents/plugins/computer-host";
 import { hostScratch, SCRATCH_DIR, SCRATCH_REPO } from "@/workspace/scratch";
 
 /**

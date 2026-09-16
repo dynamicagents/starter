@@ -21,7 +21,7 @@ import {
   truncateOutput
 } from "@dynamicagents/plugins/computer";
 import { CLAUDE_CODE_SESSION, CLAUDE_CODER_CONFIG } from "@/config";
-import { openWorkspace } from "@/workspace/open";
+import { openWorkspace } from "@dynamicagents/plugins/computer";
 import { claudeCodeConfig } from "./claude-code";
 import { subagentPlugins } from "./plugins";
 

@@ -1,5 +1,5 @@
 import type { RepoGit, RepoGitResult } from "@dynamicagents/plugins/repo";
-import type { WorkspaceObjectBase } from "./object";
+import type { WorkspaceObjectBase } from "@dynamicagents/plugins/computer-host";
 
 /**
  * `/repo`'s credentialed half, wired to the Durable Object that owns the files.

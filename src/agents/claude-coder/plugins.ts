@@ -12,7 +12,8 @@ import {
   workspaceContainer
 } from "@/workspace/container";
 import { workspaceGit } from "@/workspace/git";
-import { workspaceName } from "@/workspace/object";
+import { workspaceName } from "@dynamicagents/plugins/computer-host";
+import { gitIdentity } from "@/workspace/git-identity";
 import { hostScratch } from "@/workspace/scratch";
 import { claudeCodeConfig } from "./claude-code";
 
@@ -83,12 +84,8 @@ export const parentPlugins = (host: PluginHost<Env>): AgentPlugin[] => {
     host.env.CLAUDE_CODER_WORKSPACE.get(
       host.env.CLAUDE_CODER_WORKSPACE.idFromName(name())
     );
-  // Hoisted because more than one plugin commits under it now. Same identity as `coder`'s,
-  // deliberately — see the comment on `author` in `src/agents/coder/plugins.ts`.
-  const author = {
-    name: host.env.GITHUB_NAME || "da-coder",
-    email: host.env.GITHUB_EMAIL
-  };
+  /** Shared with the workspace object — see `@/workspace/git-identity`. */
+  const author = gitIdentity(host.env);
 
   return [
     /**
@@ -127,8 +124,8 @@ export const parentPlugins = (host: PluginHost<Env>): AgentPlugin[] => {
         const ws = workspace();
         // Before the install, and never inside it: an install is conditional
         // where a checkout is not, so no install outcome may decide whether the
-        // path is recorded. The reasoning is on `noteCheckout` in
-        // `src/workspace/object.ts`.
+        // path is recorded. The reasoning is on `noteCheckout` in the
+        // workspace host, in `@dynamicagents/plugins/computer-host`.
         await ws.noteCheckout({
           dir,
           kind: "repo",

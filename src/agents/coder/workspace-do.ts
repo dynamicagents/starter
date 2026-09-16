@@ -1,14 +1,15 @@
 import {
   WorkspaceObjectBase,
   type WorkspaceObjectConfig
-} from "@/workspace/object";
+} from "@dynamicagents/plugins/computer-host";
 import { INSTALL_PLAN } from "@/workspace/install-plan";
+import { gitIdentity } from "@/workspace/git-identity";
 
 /**
  * The coder's workspace, bound as `CODER_WORKSPACE`.
  *
- * Everything this object does lives in `src/workspace/object.ts` and is shared
- * with `claude-coder`: one Durable Object, one container, one repository, with
+ * Everything this object does lives in `@dynamicagents/plugins/computer-host`
+ * and is shared with `claude-coder`: one Durable Object, one container, one repository, with
  * the checkout in SQLite and `computerd` mounting it over FUSE at `/workspace`.
  * What is *this agent's* is the config below.
  *
@@ -34,7 +35,11 @@ export class CoderWorkspaceDO extends WorkspaceObjectBase {
        * `claude-coder` is the agent that needs it, and it needs it for exactly
        * one reason — swapping a credential the container must never hold.
        */
-      egress: { mode: "direct" }
+      egress: { mode: "direct" },
+      // The credential git runs under, and who a commit made on this side is
+      // attributed to. Config rather than an env read because the base class
+      // ships from a package that cannot name this Worker's `Env`.
+      git: { token: this.env.GITHUB_TOKEN, author: gitIdentity(this.env) }
     };
   }
 }

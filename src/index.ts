@@ -27,9 +27,9 @@ export { CoderWorkflow } from "./agents/coder/workflow";
 // The workspaces: a Durable Object holding one repository's filesystem in
 // SQLite, paired with the container that mounts it. One class per agent that has
 // one — a namespace is keyed by class name, so a shared class would put both
-// agents' checkouts in one namespace. Both are thin subclasses of
-// `src/workspace/object.ts`; `verify:isolation` keeps each out of the bundles
-// that do not install it.
+// agents' checkouts in one namespace. Both are thin subclasses of the base in
+// `@dynamicagents/plugins/computer-host`; `verify:isolation` keeps each out of
+// the bundles that do not install it.
 export { CoderWorkspaceDO } from "./agents/coder/workspace-do";
 export { ClaudeCoderWorkspaceDO } from "./agents/claude-coder/workspace-do";
 

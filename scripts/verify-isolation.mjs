@@ -69,6 +69,9 @@ const AGENTS = [
       plugin("arc-agi"),
       plugin("triage"),
       plugin("computer"),
+      // The workspace object, forbidden beside the tools it serves: an agent with
+      // no container must not gain one by importing the host that starts it.
+      plugin("computer-host"),
       plugin("repo"),
       "@cloudflare/computer"
     ],
@@ -102,6 +105,9 @@ const AGENTS = [
       plugin("arc-agi"),
       plugin("workspace"),
       plugin("computer"),
+      // The workspace object, forbidden beside the tools it serves: an agent with
+      // no container must not gain one by importing the host that starts it.
+      plugin("computer-host"),
       plugin("repo"),
       "@cloudflare/shell",
       "@cloudflare/computer",
@@ -122,6 +128,9 @@ const AGENTS = [
       plugin("browser"),
       plugin("recall"),
       plugin("computer"),
+      // The workspace object, forbidden beside the tools it serves: an agent with
+      // no container must not gain one by importing the host that starts it.
+      plugin("computer-host"),
       plugin("repo"),
       "@cloudflare/computer"
     ],
@@ -147,8 +156,9 @@ const AGENTS = [
     // path which it is addressing.
     //
     // `/claude-code` is the newest entry and the one doing the most work. Both
-    // coders now share `src/workspace/object.ts`, and the whole point of that
-    // base is that it knows nothing about Claude Code: the egress policy arrives
+    // coders share one workspace base, from
+    // `@dynamicagents/plugins/computer-host`, and the whole point of that base
+    // is that it knows nothing about Claude Code: the egress policy arrives
     // through a config seam, and only `claude-coder`'s subclass fills it in. If
     // this ever fails, the shared base has grown an import that belongs in a
     // subclass — which would also put an Anthropic credential path in an agent

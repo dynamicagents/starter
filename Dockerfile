@@ -20,8 +20,9 @@
 # **The container's TLS trust is not established here**, and cannot be: under
 # `egress: { mode: "http-gateway" }` the CA is mounted after the container
 # starts, so anything in this image runs too early to find it. The workspace
-# object installs it instead — `#trustInterceptionCa` in
-# `src/workspace/object.ts` carries the ordering constraint and the measurements.
+# object installs it instead — the `ca-trust` module in
+# `@dynamicagents/plugins/computer-host` carries the ordering constraint and the
+# measurements.
 # `NODE_OPTIONS` below is the other half, and belongs here because it is an
 # image property.
 #

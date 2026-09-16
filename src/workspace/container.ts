@@ -1,7 +1,9 @@
 import { MAX_TOOL_CALL_MS, TOOL_CALL_GRACE_MS } from "@dynamicagents/core";
 import type { ComputerConfig } from "@dynamicagents/plugins/computer";
-import type { WorkspaceObjectBase } from "./object";
-import { WORKSPACE_DIR } from "./object";
+import {
+  WORKSPACE_DIR,
+  type WorkspaceObjectBase
+} from "@dynamicagents/plugins/computer-host";
 
 /**
  * How long `sb_exec` waits on an install in flight before running the command

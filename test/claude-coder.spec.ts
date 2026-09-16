@@ -6,7 +6,7 @@ import type { PluginHost } from "@dynamicagents/core/host";
 import type { RecipeExecutionRequest } from "@dynamicagents/core/subtasks";
 import { makeDoHelpers } from "@dynamicagents/core/testing";
 import type { ClaudeCoderWorkspaceDO } from "@/index";
-import { openWorkspace } from "@/workspace/open";
+import { openWorkspace } from "@dynamicagents/plugins/computer";
 import {
   CLAUDE_CODE_TYPE,
   WORKSPACE_RUNTIME_KEY

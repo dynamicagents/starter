@@ -125,10 +125,21 @@ export class ClaudeCoderWorkspaceDO extends WorkspaceObjectBase {
    * unrecognised one as exhaustion would retire a working credential for hours —
    * the same trade that leaves a 403 unclassified. So this is the wiring, live
    * and inert, waiting on a real refusal to name the status that fills it.
+   *
+   * **It marks whichever credential is leading now, which is an approximation.**
+   * The drain reports a reading only to the chunk that observed it, so this
+   * cannot be a stale one from an earlier window — but a pool that rotated
+   * between the reading and this call marks the wrong entry. That is bounded:
+   * rotation only happens on a refusal, which is the gateway already retiring
+   * the credential this would have retired, and `spend` takes the later of the
+   * two resets. Carrying the identity from inside the container is the only
+   * exact answer, and the container is deliberately told nothing about which
+   * credential it is spending.
    */
   async claudeNoteRateLimit(info: RateLimitInfo): Promise<void> {
     const resetAt = readRateLimitEvent(info);
-    if (resetAt === undefined) return;
+    // A reset already in the past retires nothing and would only write a row.
+    if (resetAt === undefined || resetAt <= Date.now()) return;
 
     const pool = credentialPool({
       credentials: claudeCodeConfig(this.env, () => this.ctx.id.toString())

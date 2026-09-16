@@ -351,18 +351,14 @@ export class ClaudeCoderSubagent extends RecipeSubagentHost<Env> {
      * Where a note goes the moment it is written, and where the drain may
      * checkpoint.
      *
-     * A drain window is eight minutes and a session that finishes inside one
-     * used to report everything at the end — thirteen minutes of work arriving
-     * as an eleven-second burst once it was over. `postProgress` labels and
-     * posts each note as the line is parsed, so the thread keeps pace with the
-     * session.
+     * A session's chunk is the whole session, so a chunk boundary is the wrong
+     * clock for a note: what it reports is bounded by the drain window, not by
+     * when the session had something to say. `postProgress` labels and posts
+     * each note as the line is parsed, so the thread keeps pace.
      *
-     * The checkpoint is only safe **because** of that: a cursor is normally
-     * committed after the drain, since one written ahead of consuming events
-     * would skip events a retry never saw, and the position offered here is one
-     * whose notes are already on their way out. Without it a chunk that dies
-     * mid-window resumes from wherever the previous window ended — one run lost
-     * six and a half minutes that way and replayed the stream to get it back.
+     * The checkpoint is only safe **because** of that, and the drain enforces
+     * the pairing — see `DrainOptions` in `@dynamicagents/plugins/claude-code`,
+     * which carries the reasoning for both.
      */
     const sinks = {
       onProgress: (event: ProgressEvent) => this.postProgress(event),
@@ -480,6 +476,17 @@ export class ClaudeCoderSubagent extends RecipeSubagentHost<Env> {
    * drain that will not settle is logged and left.
    */
   override async abortRun(): Promise<boolean> {
+    /**
+     * Stop narrating before anything else, on both paths.
+     *
+     * The base disarms live posting inside its own `abortRun`, which the branch
+     * below never reaches — and its abort *signal* cannot stand in for it here,
+     * because that signal tracks a model call and this class holds none. Left
+     * armed, every note the drain parses while the session takes its `SIGTERM`
+     * and unwinds is posted to a Task the user already canceled.
+     */
+    this.stopProgress();
+
     const inflight = this.#inflight;
     if (!inflight) return await super.abortRun();
 

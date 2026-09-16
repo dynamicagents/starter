@@ -264,16 +264,16 @@ describe("executeChunk refuses to guess", () => {
 /**
  * The wiring that makes a session audible while it is still working.
  *
- * A drain window is eight minutes and a session that finishes inside one used to
- * report everything at the end: thirteen minutes of work arriving as an
- * eleven-second burst once it was over. Core does the posting and has its own
- * specs for it; what belongs here is the one line that can silently undo it.
+ * Core does the posting and has its own specs for it; the drain has its own for
+ * the sink. What belongs here is the seam between them — the one line that can
+ * silently undo both.
  *
  * `executeChunk` is overridden outright and never reaches `super`, which is
- * where the base normally arms the channel — so this class has to arm it itself.
+ * where the base normally arms the channel, so this class has to arm it itself.
  * Delete that line and nothing fails: the session runs, the work lands, and the
- * notes go nowhere. There is no container in this pool, so the arming is
- * observed directly rather than through a drain.
+ * notes go nowhere. `abortRun` is overridden for the same reason and carries the
+ * same obligation. There is no container in this pool, so both are observed
+ * directly rather than through a drain.
  */
 describe("a session's notes reach the gatekeeper while it works", () => {
   /** Drive one facet with its callback channel captured instead of posted. */
@@ -325,6 +325,38 @@ describe("a session's notes reach the gatekeeper while it works", () => {
       expect(posted).toEqual([
         { text: "[claude-code 3] reading the tree", key: "claude:0" }
       ]);
+    });
+  });
+
+  it("stops posting when the session is canceled", async () => {
+    await withCapturedChannel(async (instance, posted) => {
+      await instance.executeChunk(request(), 0, {}, undefined, {
+        push,
+        ordinal: 0
+      });
+      await (
+        instance as unknown as {
+          postProgress: (e: { key: string; text: string }) => Promise<void>;
+        }
+      ).postProgress({ key: "claude:0", text: "before" });
+
+      /**
+       * The abort path this class overrides, holding no model call for the base
+       * signal to stand in for.
+       *
+       * `onTaskCanceled` calls this and then waits for the drain to unwind,
+       * which is up to a minute of a session taking its `SIGTERM`, running its
+       * hooks and syncing its filesystem — and every note parsed in that minute
+       * would be posted to a Task the user already canceled.
+       */
+      expect(await instance.abortRun()).toBe(false);
+      await (
+        instance as unknown as {
+          postProgress: (e: { key: string; text: string }) => Promise<void>;
+        }
+      ).postProgress({ key: "claude:1", text: "after the cancel" });
+
+      expect(posted.map((p) => p.key)).toEqual(["claude:0"]);
     });
   });
 

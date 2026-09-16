@@ -273,6 +273,21 @@ the Worker and leaves the container alone.
 > in-flight sessions to end — `--containers-rollout=none` is for a Worker-only
 > change, not for skipping a container build you also made.
 
+A _staged_ image rollout is the same hazard with a timer on it, which is why
+[`wrangler.jsonc`](wrangler.jsonc) sets `rollout_step_percentage` to 100 on both
+container entries. The Worker reaches every request the moment it deploys; an
+image rolled out in steps does not, so until the last step lands, some workspaces
+have a new Worker and an old container and cannot open. Left unset, wrangler
+starts at a 10% step for any entry allowing more than one instance.
+
+> **Deleting a container application does not rebuild it.** In the dashboard it
+> reads like turning something off and on again, and it is not: the application is
+> created by `wrangler deploy`, and the Durable Object can only start instances of
+> one that already exists. Delete it and every workspace fails with `There is no
+container application assigned to this Durable Object namespace` until the next
+> deploy — a bounded problem turned into an open-ended one. To force containers to
+> be replaced, deploy; to replace one workspace's container, let it go idle.
+
 #### The checkout outlives the container, and the container outlives the task
 
 The **workspace** is a Durable Object, one per caller per repository, and the

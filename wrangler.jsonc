@@ -120,8 +120,8 @@
   // image, it can only schedule one: for the width of the window the Worker is
   // new everywhere and the image is still old somewhere, and every workspace
   // that lands on the old one is guaranteed to fail until the step completes.
-  // That is not hypothetical, it is what a deploy of this file did, and the
-  // symptom is `[stage=auth]` with the container refusing to authenticate.
+  // The symptom is `[stage=auth]`, the container refusing to authenticate —
+  // worth knowing, because it names the image rather than the rollout.
   //
   // It has to be written here because wrangler's fallback is the hazard:
   // unset, an entry with `max_instances` above one starts at a 10% step.

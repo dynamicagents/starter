@@ -18,6 +18,9 @@
 //   --grep <text>         keep events whose message contains <text>, case-
 //                         insensitively (server-side, so it searches the whole
 //                         window rather than the first page)
+//   --app                 only this Worker's own log lines, dropping the
+//                         container egress that is ~95% of events while a
+//                         session runs
 //   --limit <N>           max matching events (default 100, max 2000)
 //   --json | --raw        full pretty JSON / verbatim body instead of the digest
 //
@@ -30,6 +33,7 @@
 //   npm run cf -- verify
 //   npm run cf -- logs --since 2h --level error
 //   npm run cf -- logs --worker da-starter --grep HandleTaskWorkflow
+//   npm run cf -- logs --worker da-starter --app --since 30m
 //   npm run cf -- wf handle-task
 //   npm run cf -- wf handle-task 27to4pc4w7eo0psa59o
 //   npm run cf -- ai --since 2h
@@ -62,7 +66,7 @@ const USAGE = `cf.mjs — Cloudflare API proxy (credentials from ${ENV_FILE})
   verify                                 check the token
   logs [--since 1h] [--worker <name>]    historical Worker logs, as a digest
        [--level error] [--grep <text>]
-       [--limit 100] [--json|--raw]
+       [--app] [--limit 100] [--json|--raw]
   wf                                     list workflow definitions
   wf <name>                              list recent instances of a workflow
   wf <name> <instanceId> [--json]        one instance, per-step pass/fail
@@ -193,7 +197,7 @@ async function telemetryQuery({ from, to, filters, limit }) {
 
 async function cmdLogs(args) {
   const { flags } = parseFlags(args, {
-    bool: ["--json", "--raw"],
+    bool: ["--json", "--raw", "--app"],
     value: ["--since", "--worker", "--service", "--level", "--grep", "--limit"]
   });
   const sinceLabel = flags.since ?? "1h";
@@ -248,6 +252,28 @@ async function cmdLogs(args) {
       key: "$metadata.message",
       operation: "includes",
       value: String(flags.grep),
+      type: "string"
+    });
+  /**
+   * `--app` — this Worker's own log lines, without the container's egress.
+   *
+   * Under `http-gateway` every request a container makes is intercepted, and
+   * each one is an invocation that observability records — twice, once on
+   * `WorkspaceProxy` and once on the workspace object. Measured over one
+   * thirteen-minute coding session: 1,633 of 1,711 events, 95%, almost all of
+   * them `npm ci` fetching tarballs. They bury everything the Worker actually
+   * said, and an unfiltered `logs` is unreadable while a session is running.
+   *
+   * `origin` is the discriminator rather than the message text: an egress event
+   * is a `fetch` invocation and a `console.*` line from a Durable Object is
+   * `jsrpc`. It does also drop genuine inbound `fetch` events — the A2A POST,
+   * the JWKS reads — so it is a flag rather than the default.
+   */
+  if (flags.app)
+    filters.push({
+      key: "$metadata.origin",
+      operation: "eq",
+      value: "jsrpc",
       type: "string"
     });
 

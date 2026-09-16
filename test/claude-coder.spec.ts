@@ -262,6 +262,124 @@ describe("executeChunk refuses to guess", () => {
 });
 
 /**
+ * The wiring that makes a session audible while it is still working.
+ *
+ * Core does the posting and has its own specs for it; the drain has its own for
+ * the sink. What belongs here is the seam between them — the one line that can
+ * silently undo both.
+ *
+ * `executeChunk` is overridden outright and never reaches `super`, which is
+ * where the base normally arms the channel, so this class has to arm it itself.
+ * Delete that line and nothing fails: the session runs, the work lands, and the
+ * notes go nowhere. `abortRun` is overridden for the same reason and carries the
+ * same obligation. There is no container in this pool, so both are observed
+ * directly rather than through a drain.
+ */
+describe("a session's notes reach the gatekeeper while it works", () => {
+  /** Drive one facet with its callback channel captured instead of posted. */
+  const withCapturedChannel = async (
+    fn: (
+      instance: ClaudeCoderSubagent,
+      posted: { text: string; key: string }[]
+    ) => Promise<void>
+  ) => {
+    const stub = freshSubagent("live-progress");
+    await runInDurableObject(stub, async (instance: ClaudeCoderSubagent) => {
+      const posted: { text: string; key: string }[] = [];
+      (instance as unknown as { pushChannel: () => unknown }).pushChannel =
+        () => ({
+          working: async (text: string, key: string) => {
+            posted.push({ text, key });
+          }
+        });
+      await fn(instance, posted);
+    });
+  };
+
+  const push = {
+    taskId: "task-1",
+    contextId: "ctx-1",
+    pushUrl: "https://gatekeeper.example/a2a/notifications",
+    pushToken: "token",
+    jku: "https://agent.example/.well-known/jwks.json"
+  };
+
+  it("arms the channel on a chunk that never reaches the base class", async () => {
+    await withCapturedChannel(async (instance, posted) => {
+      // Fails on the wiring guard, which is fine: arming happens before every
+      // early return, because a chunk that refuses still must not leave a
+      // previous turn's channel behind it.
+      await instance.executeChunk(request(), 0, {}, undefined, {
+        push,
+        ordinal: 3
+      });
+
+      await (
+        instance as unknown as {
+          postProgress: (e: { key: string; text: string }) => Promise<void>;
+        }
+      ).postProgress({ key: "claude:0", text: "reading the tree" });
+
+      // The label is what tells a reader in a busy thread which branch is
+      // talking — the ordinal comes from the parent's row, not from here.
+      expect(posted).toEqual([
+        { text: "[claude-code 3] reading the tree", key: "claude:0" }
+      ]);
+    });
+  });
+
+  it("stops posting when the session is canceled", async () => {
+    await withCapturedChannel(async (instance, posted) => {
+      await instance.executeChunk(request(), 0, {}, undefined, {
+        push,
+        ordinal: 0
+      });
+      await (
+        instance as unknown as {
+          postProgress: (e: { key: string; text: string }) => Promise<void>;
+        }
+      ).postProgress({ key: "claude:0", text: "before" });
+
+      /**
+       * The abort path this class overrides, holding no model call for the base
+       * signal to stand in for.
+       *
+       * `onTaskCanceled` calls this and then waits for the drain to unwind,
+       * which is up to a minute of a session taking its `SIGTERM`, running its
+       * hooks and syncing its filesystem — and every note parsed in that minute
+       * would be posted to a Task the user already canceled.
+       */
+      expect(await instance.abortRun()).toBe(false);
+      await (
+        instance as unknown as {
+          postProgress: (e: { key: string; text: string }) => Promise<void>;
+        }
+      ).postProgress({ key: "claude:1", text: "after the cancel" });
+
+      expect(posted.map((p) => p.key)).toEqual(["claude:0"]);
+    });
+  });
+
+  it("clears it when a later chunk arrives without one", async () => {
+    await withCapturedChannel(async (instance, posted) => {
+      await instance.executeChunk(request(), 0, {}, undefined, {
+        push,
+        ordinal: 3
+      });
+      await instance.executeChunk(request(), 1, {}, undefined, undefined);
+
+      await (
+        instance as unknown as {
+          postProgress: (e: { key: string; text: string }) => Promise<void>;
+        }
+      ).postProgress({ key: "claude:0", text: "leaked" });
+
+      expect(posted).toEqual([]);
+    });
+  });
+});
+
+/**
  * The other side of the refusal above: a checkout the install resolver had
  * nothing to do in is still a checkout, and this gate must not confuse the two.
  *

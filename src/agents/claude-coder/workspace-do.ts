@@ -1,8 +1,11 @@
 import {
   claudeCodeSession,
+  credentialPool,
+  readRateLimitEvent,
   type CredentialState,
   type CredentialStore,
-  type Lead
+  type Lead,
+  type RateLimitInfo
 } from "@dynamicagents/plugins/claude-code";
 import {
   WorkspaceObjectBase,
@@ -107,5 +110,55 @@ export class ClaudeCoderWorkspaceDO extends WorkspaceObjectBase {
    */
   async claudeCredentials(): Promise<Lead> {
     return await this.#session.credentials(this.#credentials);
+  }
+
+  /**
+   * What the session's own client reported about the bucket it is spending.
+   *
+   * The pool learns a credential is empty from the gateway, which learns it from
+   * a refused request — so the cost of finding out is a refusal. The client
+   * announces the same bucket on its stream, ahead of that, which is the one
+   * place a credential can be retired *before* something fails.
+   *
+   * Whether a given reading means empty is the plugin's to decide, and today it
+   * decides nothing: the only status ever observed is `allowed`, and treating an
+   * unrecognised one as exhaustion would retire a working credential for hours —
+   * the same trade that leaves a 403 unclassified. So this is the wiring, live
+   * and inert, waiting on a real refusal to name the status that fills it.
+   *
+   * **It marks whichever credential is leading now, which is an approximation.**
+   * The drain reports a reading only to the chunk that observed it, so this
+   * cannot be a stale one from an earlier window — but a pool that rotated
+   * between the reading and this call marks the wrong entry. That is bounded:
+   * rotation only happens on a refusal, which is the gateway already retiring
+   * the credential this would have retired, and `spend` takes the later of the
+   * two resets. Carrying the identity from inside the container is the only
+   * exact answer, and the container is deliberately told nothing about which
+   * credential it is spending.
+   */
+  async claudeNoteRateLimit(info: RateLimitInfo): Promise<void> {
+    const resetAt = readRateLimitEvent(info);
+    // A reset already in the past retires nothing and would only write a row.
+    if (resetAt === undefined || resetAt <= Date.now()) return;
+
+    const pool = credentialPool({
+      credentials: claudeCodeConfig(this.env, () => this.ctx.id.toString())
+        .credentials,
+      store: this.#credentials
+    });
+    // Whichever credential the gateway is handing out is the one this session's
+    // requests carried, so it is the one the reading is about.
+    const lead = await pool.lead();
+    if (!lead.ok) return;
+    await pool.spend(lead.id, resetAt);
+    console.warn(
+      "[claude-coder-workspace] retiring a credential on the " +
+        "client's own bucket reading",
+      {
+        id: lead.id,
+        resetAt: new Date(resetAt).toISOString(),
+        status: info.status
+      }
+    );
   }
 }

@@ -2,6 +2,8 @@ import type { AgentPlugin, CoreConfigOverrides } from "@dynamicagents/core";
 import type { PluginHost } from "@dynamicagents/core/host";
 import { RecipeSubagentHost } from "@dynamicagents/core/round";
 import type {
+  ChunkProgressContext,
+  ProgressEvent,
   RecipeChunkResult,
   RecipeExecutionRequest,
   RecipeExecutionResult,
@@ -14,6 +16,7 @@ import {
   type ClaudeCodeSession,
   type DrainCursor,
   type DrainOutcome,
+  type RateLimitInfo,
   type SessionRuntime
 } from "@dynamicagents/plugins/claude-code";
 import {
@@ -214,14 +217,23 @@ export class ClaudeCoderSubagent extends RecipeSubagentHost<Env> {
     request: RecipeExecutionRequest,
     chunk: number,
     runtime?: SubtaskRuntime,
-    selfOrigin?: string
+    selfOrigin?: string,
+    live?: ChunkProgressContext
   ): Promise<RecipeChunkResult> {
     // Defensive rather than expected: this agent declares one type. A different
     // one means somebody added a second, and core's runner is the right thing to
     // hand it to.
     if (request.type !== CLAUDE_CODE_TYPE) {
-      return super.executeChunk(request, chunk, runtime, selfOrigin);
+      return super.executeChunk(request, chunk, runtime, selfOrigin, live);
     }
+
+    /**
+     * Arm the callback channel by hand, because this method never reaches
+     * `super.executeChunk` — which is where the base normally does it — and
+     * a channel left over from a previous chunk on this isolate would post this
+     * session's notes to the previous turn's gatekeeper callback.
+     */
+    this.noteProgressContext(request, live);
 
     /**
      * Which workspace this session runs in, resolved on the **parent**.
@@ -335,15 +347,38 @@ export class ClaudeCoderSubagent extends RecipeSubagentHost<Env> {
       })
     };
 
+    /**
+     * Where a note goes the moment it is written, and where the drain may
+     * checkpoint.
+     *
+     * A drain window is eight minutes and a session that finishes inside one
+     * used to report everything at the end — thirteen minutes of work arriving
+     * as an eleven-second burst once it was over. `postProgress` labels and
+     * posts each note as the line is parsed, so the thread keeps pace with the
+     * session.
+     *
+     * The checkpoint is only safe **because** of that: a cursor is normally
+     * committed after the drain, since one written ahead of consuming events
+     * would skip events a retry never saw, and the position offered here is one
+     * whose notes are already on their way out. Without it a chunk that dies
+     * mid-window resumes from wherever the previous window ended — one run lost
+     * six and a half minutes that way and replayed the stream to get it back.
+     */
+    const sinks = {
+      onProgress: (event: ProgressEvent) => this.postProgress(event),
+      onCheckpoint: (at: DrainCursor) => this.ctx.storage.put(CURSOR_KEY, at)
+    };
+
     let outcome: DrainOutcome;
     try {
       outcome = cursor
-        ? await this.#session.resume(runner, cursor)
+        ? await this.#session.resume(runner, cursor, sinks)
         : await this.#session.start(
             runner,
             request.subtaskId,
             sessionBrief(request, note),
-            dir as string
+            dir as string,
+            sinks
           );
     } finally {
       this.#inflight = undefined;
@@ -358,16 +393,57 @@ export class ClaudeCoderSubagent extends RecipeSubagentHost<Env> {
      * events the retry never saw. Writing after means a retry re-drains from the
      * last committed sequence, and the duplicated progress notes are harmless
      * because the keys are positional, which is exactly why they are positional.
+     *
+     * Still the authority even with `onCheckpoint` above: a checkpoint bounds
+     * what a crash loses, and this is what records where a window actually
+     * ended.
      */
     await this.ctx.storage.put(CURSOR_KEY, outcome.cursor);
 
+    // What the client said about the subscription bucket it is spending, if it
+    // said anything. Best-effort — a session that did the work must not fail for
+    // want of a bookkeeping RPC.
+    if (outcome.rateLimit) await this.#noteRateLimit(stub, outcome.rateLimit);
+
+    /**
+     * **Empty, because `onProgress` already posted them.**
+     *
+     * `RecipeChunkResult.progress` is what core's parent posts at the chunk
+     * boundary, and every note in `outcome.progress` has been through the
+     * channel already. Returning them here as well would post the session twice
+     * — deduped by the gatekeeper on their positional keys, and paid for either
+     * way.
+     */
     return outcome.done
       ? {
           done: true,
-          progress: outcome.progress,
+          progress: [],
           result: this.#report(outcome)
         }
-      : { done: false, progress: outcome.progress };
+      : { done: false, progress: [] };
+  }
+
+  /**
+   * Tell the credential pool what the session's own client reported.
+   *
+   * The pool's state lives on the workspace object, which is also where the
+   * egress gateway reads it, so the reading goes there rather than being acted
+   * on here. Whether it means anything at all is
+   * `readRateLimitEvent`'s to decide, in the plugin — today it means nothing for
+   * every status anyone has seen, and the plugin's comment says why that is a
+   * finding rather than a gap.
+   */
+  async #noteRateLimit(
+    stub: { claudeNoteRateLimit: (info: RateLimitInfo) => Promise<void> },
+    info: RateLimitInfo
+  ): Promise<void> {
+    try {
+      await stub.claudeNoteRateLimit(info);
+    } catch (err) {
+      console.warn("[claude-coder] could not record the bucket reading", {
+        err: String(err)
+      });
+    }
   }
 
   /**

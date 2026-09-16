@@ -68,6 +68,8 @@
     "sharp": false,
     "workerd": false,
     "core-js-pure": false,
-    "@mongodb-js/zstd": false
+    "@mongodb-js/zstd": false,
+    "github:dynamicagents/core#74457418d3d11ffc02e448bd49109bfdd3848a03": true,
+    "github:dynamicagents/plugins#3a1e1e0719588ff71b6cb20532b0e18871644d9a": true
   }
 }

@@ -201,17 +201,6 @@ export const CLAUDE_CODE_SESSION = {
   timeoutMs: 40 * 60_000,
 
   /**
-   * How long one chunk blocks before checkpointing and yielding.
-   *
-   * Inside `CHUNK_SOFT_MS` (15 min) and well inside `STEP_TIMEOUT_MS` (30 min).
-   * Forty minutes of session is about five chunks against
-   * `MAX_CHUNKS_PER_BRANCH` (40), so the structural backstop is nowhere near
-   * binding — which is the point: a chunk that returned the moment it had
-   * nothing to read would burn all forty in seconds.
-   */
-  windowMs: 8 * 60_000,
-
-  /**
    * Advisory, all three. Claude Code's own subagent tree is invisible to
    * Dynamic Agents' scheduler and multiplies whatever they say; `timeoutMs` is what
    * actually stops a run.

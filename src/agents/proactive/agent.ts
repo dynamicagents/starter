@@ -4,7 +4,7 @@ import type {
   TurnPushContext
 } from "@dynamicagents/core/a2a";
 import { DynamicAgent, type PluginHost } from "@dynamicagents/core/host";
-import { sessionMessage } from "@dynamicagents/core/agent";
+import { parseTurn, sessionMessage } from "@dynamicagents/core/agent";
 import { noReplyTool, NO_REPLY_TOOL_NAME } from "@dynamicagents/plugins/triage";
 import { MAX_STEPS, PROACTIVE_CONFIG } from "@/config";
 import { soulPrompt } from "./soul";
@@ -106,7 +106,11 @@ export class ProactiveAgent extends DynamicAgent<Env> {
         // tool surface is resolved once, before the turn starts.
         [NO_REPLY_TOOL_NAME]: noReplyTool
       },
-      models: this.modelPair(),
+      models: this.modelPair({
+        phase: "round",
+        taskId: push?.taskId,
+        channel: parseTurn(text)?.channel
+      }),
       maxSteps: MAX_STEPS,
       unexpectedReply: UNEXPECTED_REPLY,
       // This agent runs exactly one turn per task, so the bare step index is a

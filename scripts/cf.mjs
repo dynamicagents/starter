@@ -8,6 +8,8 @@
 //   logs   [flags]             historical Worker logs (Observability telemetry)
 //   wf     [name [instance]]   Workflows: list defs / list instances / one instance
 //   ai     [flags | <logId>]   AI Gateway calls: digest, or one call's prompt + reply
+//                              --task/--agent/--phase/--channel/--event select by
+//                              what core tags each call with; --all totals every match
 //   fields [--worker <name>]   discover available log fields for a dataset
 //   containers [name]          container apps: image, version, rollout progress
 //
@@ -37,6 +39,8 @@
 //   npm run cf -- wf handle-task
 //   npm run cf -- wf handle-task 27to4pc4w7eo0psa59o
 //   npm run cf -- ai --since 2h
+//   npm run cf -- ai --task <taskId> --all
+//   npm run cf -- ai --agent proactive --phase triage --since 1d
 //   npm run cf -- ai 01KY4PSY6T1HBA7A2V22NKCFZC
 //   npm run cf -- containers
 //   npm run cf -- GET workflows -q per_page=50
@@ -71,7 +75,10 @@ const USAGE = `cf.mjs — Cloudflare API proxy (credentials from ${ENV_FILE})
   wf <name>                              list recent instances of a workflow
   wf <name> <instanceId> [--json]        one instance, per-step pass/fail
   ai [--since 2h] [--model <m>]          AI Gateway calls, as a digest
-     [--limit 20] [--json|--raw]
+     [--task <id>] [--agent <name>]      …selected by what core tags a call with
+     [--phase <p>] [--channel <id>]
+     [--event <taskId:r1|taskId:s1>]
+     [--limit 20] [--all] [--json|--raw] --all totals every match, not a page
   ai <logId> [--full] [--max N]          one call: prompt + reply (bodies)
   fields [--worker <name>]               list available log fields
   containers [name] [--json|--raw]       container apps: which image is actually
@@ -445,82 +452,180 @@ function messageText(msg) {
   return JSON.stringify(msg.content ?? msg);
 }
 
+// `cf ai` flags that match one of the AI Gateway metadata keys core stamps on
+// every model call — see `gatewayLogFields` in `@dynamicagents/core/agent`.
+const AI_METADATA_FLAGS = ["task", "agent", "phase", "channel"];
+
+// Past this many matches `--all` refuses rather than paging for minutes.
+const AI_ALL_MAX = 2000;
+
+/**
+ * The Logs API's `filters`, as it actually accepts them: one JSON-encoded array
+ * in a single query parameter, each `value` itself an array. Every bracketed
+ * form (`filters[0][key]=…`) is accepted and **silently ignored** — the full,
+ * unfiltered set comes back — so a filter here that stops being applied looks
+ * like a match, not an error. Filters AND together, on the row.
+ *
+ * `metadata.value` matches a value under *any* key, which is why the metadata
+ * flags need no key filter beside them: an agent name, a phase, a task id and a
+ * channel id do not collide. Metadata values compare as strings — `"0"` matches
+ * a stored `0` and the number `0` matches nothing.
+ */
+function aiFilters(flags) {
+  const filters = [];
+  if (flags.since)
+    filters.push({
+      key: "created_at",
+      operator: "gt",
+      value: [new Date(Date.now() - parseSince(flags.since)).toISOString()]
+    });
+  if (flags.model)
+    filters.push({ key: "model", operator: "contains", value: [flags.model] });
+  for (const flag of AI_METADATA_FLAGS)
+    if (flags[flag])
+      filters.push({
+        key: "metadata.value",
+        operator: "eq",
+        value: [String(flags[flag])]
+      });
+  if (flags.event)
+    filters.push({ key: "event_id", operator: "eq", value: [flags.event] });
+  return filters;
+}
+
+/**
+ * The event id a caller named, or nothing. AI Gateway fills `event_id` with a
+ * random UUID for a call that names none (verified), so on an untagged row the
+ * field is present and means nothing.
+ */
+const namedEventId = (log) =>
+  log.event_id &&
+  !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
+    log.event_id
+  )
+    ? log.event_id
+    : undefined;
+
+/** `name (count), …`, most frequent first. */
+function tally(logs, pick) {
+  const counts = {};
+  for (const l of logs) {
+    const k = pick(l);
+    if (k !== undefined) counts[k] = (counts[k] ?? 0) + 1;
+  }
+  return Object.entries(counts)
+    .sort((a, b) => b[1] - a[1])
+    .map(([k, v]) => `${k} (${v})`)
+    .join(", ");
+}
+
 async function cmdAi(args) {
   const { flags, pos } = parseFlags(args, {
-    bool: ["--json", "--raw", "--full"],
-    value: ["--since", "--model", "--limit", "--gateway", "--max"]
+    bool: ["--json", "--raw", "--full", "--all"],
+    value: [
+      "--since",
+      "--model",
+      "--limit",
+      "--gateway",
+      "--max",
+      "--event",
+      ...AI_METADATA_FLAGS.map((f) => `--${f}`)
+    ]
   });
   const gw = flags.gateway ?? AI_GW_DEFAULT;
   if (pos[0]) return cmdAiDetail(gw, pos[0], flags);
 
-  const limit = parseLimit(flags.limit, 20);
+  const limit = flags.all ? AI_MAX_LIMIT : parseLimit(flags.limit, 20);
   if (limit > AI_MAX_LIMIT)
     die(`--limit ${limit} is above the API maximum of ${AI_MAX_LIMIT}`);
-  // Both filters go to the API, for the same reason `logs --grep` does: applied
-  // here they would run *after* `per_page`, so `--since 2h` would search the
-  // newest 20 calls and confidently report "no AI Gateway calls match" for a
-  // window holding hundreds. The semantics are unchanged — `model` is a
-  // case-insensitive substring match server-side too (verified: `opus`,
-  // `claude-opus-5` and `CLAUDE-OPUS-5` all return the same set).
-  const query = [
-    ["per_page", String(limit)],
-    ["order_by", "created_at"],
-    ["order_by_direction", "desc"]
-  ];
-  if (flags.since)
-    query.push([
-      "start_date",
-      new Date(Date.now() - parseSince(flags.since)).toISOString()
-    ]);
-  if (flags.model) query.push(["model", String(flags.model)]);
+  // Every filter goes to the API, for the same reason `logs --grep` does:
+  // applied here they would run *after* `per_page`, so `--since 2h` would search
+  // the newest 20 calls and confidently report "no AI Gateway calls match" for a
+  // window holding hundreds. `model` is a case-insensitive substring match
+  // server-side (verified: `glm` and `GLM` return the same set).
+  const filters = aiFilters(flags);
+  const page = async (n) => {
+    const query = [
+      ["per_page", String(limit)],
+      ["page", String(n)],
+      ["order_by", "created_at"],
+      ["order_by_direction", "desc"]
+    ];
+    if (filters.length > 0) query.push(["filters", JSON.stringify(filters)]);
+    const { res, text } = await request(
+      "GET",
+      acct(`ai-gateway/gateways/${gw}/logs`),
+      { query }
+    );
+    ensureOk(res, text);
+    return text;
+  };
 
-  const { res, text } = await request(
-    "GET",
-    acct(`ai-gateway/gateways/${gw}/logs`),
-    { query }
-  );
-  ensureOk(res, text);
-  if (flags.json || flags.raw) return void printBody(text, { raw: flags.raw });
+  const first = await page(1);
+  if ((flags.json || flags.raw) && !flags.all)
+    return void printBody(first, { raw: flags.raw });
 
-  const json = parseJson(text);
-  // Now the count of calls *matching the filters*, not of everything stored —
-  // which is the number worth printing.
+  const json = parseJson(first);
+  // The count of calls *matching the filters*, not of everything stored — which
+  // is the number worth printing.
   const total = json?.result_info?.total_count;
   const logs = json?.result ?? [];
+  if (flags.all && total != null && total > logs.length) {
+    if (total > AI_ALL_MAX)
+      die(
+        `--all would page through ${total} calls; narrow it (max ${AI_ALL_MAX})`
+      );
+    for (let n = 2; logs.length < total; n++) {
+      const more = parseJson(await page(n))?.result ?? [];
+      if (more.length === 0) break;
+      logs.push(...more);
+    }
+  }
+  if (flags.all && (flags.json || flags.raw))
+    return void out(JSON.stringify(logs, null, flags.raw ? 0 : 2));
   if (logs.length === 0) return void out("no AI Gateway calls match");
 
-  const byModel = {};
   let cost = 0;
+  let tokensIn = 0;
+  let tokensOut = 0;
   for (const l of logs) {
-    byModel[l.model ?? "?"] = (byModel[l.model ?? "?"] ?? 0) + 1;
     cost += l.cost ?? 0;
+    tokensIn += l.tokens_in ?? 0;
+    tokensOut += l.tokens_out ?? 0;
   }
   const times = logs.map((l) => Date.parse(l.created_at));
-  const modelStr = Object.entries(byModel)
-    .sort((a, b) => b[1] - a[1])
-    .map(([k, v]) => `${k} (${v})`)
-    .join(", ");
   out(
-    `${logs.length} calls${flags.since ? ` in last ${flags.since}` : ""} · $${cost.toFixed(5)} · ${modelStr}`
+    `${logs.length} calls${flags.since ? ` in last ${flags.since}` : ""} · $${cost.toFixed(5)} · ${tokensIn}→${tokensOut} tok · ${tally(logs, (l) => l.model ?? "?")}`
   );
-  const filtered = Boolean(flags.since || flags.model);
+  const byAgent = tally(logs, (l) => l.metadata?.agent);
+  const byPhase = tally(logs, (l) => l.metadata?.phase);
+  if (byAgent || byPhase)
+    out(
+      [byAgent && `agent: ${byAgent}`, byPhase && `phase: ${byPhase}`]
+        .filter(Boolean)
+        .join(" · ")
+    );
   out(
-    `${hhmmss(Math.min(...times))} → ${hhmmss(Math.max(...times))}${total != null ? `  ·  ${total} ${filtered ? "matching" : "stored"}` : ""}`
+    `${hhmmss(Math.min(...times))} → ${hhmmss(Math.max(...times))}${total != null ? `  ·  ${total} ${filters.length > 0 ? "matching" : "stored"}` : ""}`
   );
   out("");
   for (const l of logs) {
     const io = `${l.tokens_in ?? 0}→${l.tokens_out ?? 0}`.padEnd(11);
     const c = `$${(l.cost ?? 0).toFixed(5)}`.padEnd(9);
     const st = l.success ? (l.cached ? "cached" : "ok") : "FAIL";
+    const where = [l.metadata?.agent, l.metadata?.phase, namedEventId(l)]
+      .filter(Boolean)
+      .join(" ");
     out(
-      `${hhmmss(Date.parse(l.created_at))}  ${l.id}  ${(l.model ?? "?").padEnd(24)} ${io} ${c} ${`${l.duration ?? "?"}ms`.padEnd(8)} ${st}`
+      `${hhmmss(Date.parse(l.created_at))}  ${l.id}  ${(l.model ?? "?").padEnd(24)} ${io} ${c} ${`${l.duration ?? "?"}ms`.padEnd(8)} ${st.padEnd(6)} ${where}`.trimEnd()
     );
   }
-  // `total` is authoritative now, so this can say what is actually missing
-  // rather than guessing from a page length.
+  // `total` is authoritative, so this can say what is actually missing rather
+  // than guessing from a page length — and the totals above cover only the rows
+  // shown, which is what `--all` exists for.
   if (total != null && total > logs.length)
     out(
-      `\n⚠ showing ${logs.length} of ${total} — raise --limit (max ${AI_MAX_LIMIT}) or narrow --since`
+      `\n⚠ showing ${logs.length} of ${total}, and the totals cover only those — pass --all, raise --limit (max ${AI_MAX_LIMIT}) or narrow --since`
     );
 }
 
@@ -563,6 +668,15 @@ async function cmdAiDetail(gw, id, flags) {
   out(
     `${m.created_at ?? "?"} · ${m.model ?? "?"} (${m.provider ?? "?"}) · ${m.tokens_in ?? 0}→${m.tokens_out ?? 0} tok · $${(m.cost ?? 0).toFixed(5)} · ${m.duration ?? "?"}ms · ${st}`
   );
+  if (m.metadata || namedEventId(m))
+    out(
+      [
+        namedEventId(m) && `event: ${namedEventId(m)}`,
+        m.metadata && JSON.stringify(m.metadata)
+      ]
+        .filter(Boolean)
+        .join(" · ")
+    );
 
   out(rule);
   const msgs = reqBody.messages;

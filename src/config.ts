@@ -195,10 +195,11 @@ export const CLAUDE_CODE_SESSION = {
    * checkout somebody has to read before the next round can use it. Depth is
    * what stops that.
    *
-   * It is bought, not free: per turn, so it compounds over a session, and the
-   * client prices `xhigh` at 1.6x `high` for this model. Against the estimate
-   * above, expect nearer two substantial subtasks per bucket than four. Drop to
-   * `high` for volume, the way `claude-sonnet-5` is the lever for the model.
+   * It is bought, not free: per turn, so it compounds over a session, at a
+   * multiple `@dynamicagents/plugins/claude-code` documents. Against the
+   * estimate above, expect nearer two substantial subtasks per bucket than
+   * four. Drop to `high` for volume, the way `claude-sonnet-5` is for the
+   * model.
    *
    * Spelled as a level the CLI knows, because one it does not know is **warned
    * about on stderr and ignored** — the session then runs at the default and

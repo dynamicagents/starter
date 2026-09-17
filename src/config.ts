@@ -1,7 +1,10 @@
 import type { CoreConfigOverrides } from "@dynamicagents/core";
-// Type-only, so nothing reaches a bundle: these two names are what make a
-// mistyped or renamed tuning field fail at `tsc` instead of being spread into a
-// plugin config and silently ignored.
+// Type-only, so nothing reaches a bundle: these names are what make a mistyped
+// or renamed tuning field fail at `tsc` instead of being spread into a plugin
+// config and silently ignored. A spread is the reason they are needed — a key
+// the plugin does not declare is an error written inline and no error at all
+// through `...`, so only the `satisfies` on each constant catches it.
+import type { ClaudeCodeConfig } from "@dynamicagents/plugins/claude-code";
 import type { RecallTuning } from "@dynamicagents/plugins/recall";
 import type { TriageTuning } from "@dynamicagents/plugins/triage";
 
@@ -268,7 +271,7 @@ export const CLAUDE_CODE_SESSION = {
    * cloned repository ships. Containment is the credential swap.
    */
   permissionMode: "bypassPermissions"
-} as const;
+} as const satisfies Omit<ClaudeCodeConfig, "credentials" | "workspaceName">;
 
 /**
  * The proactive agent: single-turn, no delegation, so most of the delegation

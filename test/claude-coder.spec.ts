@@ -112,16 +112,15 @@ describe("the parent's surface", () => {
 });
 
 describe("what the main agent asks a person before doing", () => {
-  it("holds opening a pull request, and nothing else", async () => {
-    // The rule `test/coder-surface.spec.ts` pins for the coder, over this agent's
-    // own `parentPlugins`: a separate list, so a rename there that dropped the
-    // rule would let a pull request through unasked and the coder's spec would
-    // still pass.
+  it("holds nothing at all", async () => {
+    // Over this agent's own `parentPlugins`, which is a separate list from the
+    // coder's — so a rule added on one side is caught whichever side it lands on.
+    // Nothing here is gated; `test/coder-surface.spec.ts` says why.
     const surface = await parent().mainAgentSurface({
       session: { getCompactions: async () => [] } as never
     });
 
-    expect(Object.keys(surface.toolApproval)).toEqual(["repo_open_pr"]);
+    expect(Object.keys(surface.toolApproval)).toEqual([]);
   });
 });
 
@@ -537,8 +536,19 @@ describe("the brief a session starts from", () => {
     over: Partial<RecipeExecutionRequest> = {}
   ): RecipeExecutionRequest => ({ ...request(), ...over });
 
-  it("is the bare prompt when there is nothing to add", () => {
-    expect(sessionBrief(withPrompt())).toBe("add a --json flag");
+  it("carries what the container holds, when there is nothing else to add", () => {
+    const brief = sessionBrief(withPrompt());
+
+    expect(brief.startsWith("add a --json flag")).toBe(true);
+    // Unconditional, because it is true of every session: a model reaches for
+    // `gh` unprompted, this one is authenticated as nobody, and neither "it is
+    // missing" nor "it is signed in" is what it will assume. Discovering the
+    // difference by failing costs a turn each time.
+    expect(brief).toContain("`gh` in this container");
+    expect(brief).toContain("authenticated as nobody");
+    // …and who does hold the credential, or the session tries to route around
+    // the boundary rather than reporting back through it.
+    expect(brief).toContain("belong to the agent");
   });
 
   it("carries the workspace note where the session will read it", () => {

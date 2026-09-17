@@ -123,7 +123,29 @@ export const ARC_PLAYER_CONFIG: CoreConfigOverrides = {
  */
 export const CODER_CONFIG: CoreConfigOverrides = {
   model: MODEL,
-  mainAgentLimits: { maxTurns: 60, maxWallMs: 3 * 60 * 60_000 },
+  // The deferral allowance, and the coding agents are the only ones that have
+  // one. It exists for a specific wait: a pull request is opened, a review is
+  // requested automatically, and it lands somewhere between two and five minutes
+  // later — so the work is not finished, nothing has failed, and there is nobody
+  // to ask. Every other agent here either answers or hands off, and waiting would
+  // only be a way to take longer.
+  //
+  // Sized against that wait rather than round: 30 seconds is the floor a review
+  // is worth polling at, fifteen minutes is when one that never started is not
+  // going to, and 30 of those checks is the fifteen minutes. The allowance is
+  // twice that because one task legitimately opens more than one pull request,
+  // and running out mid-wait costs the agent the answer it was two checks from.
+  //
+  // It is not charged to `maxWallMs` — a parked round holds nothing — so these
+  // are what bound it. Both must be positive or the tool is not offered at all,
+  // and `roundObservationWindow` must be too, since that is what carries the
+  // record of having waited into the round that wakes.
+  mainAgentLimits: {
+    maxTurns: 60,
+    maxWallMs: 3 * 60 * 60_000,
+    maxDeferrals: 60,
+    maxDeferredMs: 30 * 60_000
+  },
   subagentLimits: { maxTurns: 80, maxWallMs: 90 * 60_000 },
   toolOutputWindow: 6,
   roundObservationWindow: 3,

@@ -137,6 +137,28 @@ export function sessionFooter(result: {
 }
 
 /**
+ * What `gh` is, in a container that holds no credential.
+ *
+ * A session reaches for it unprompted — it is the obvious way to read an issue or
+ * a review — and until it was installed that cost a turn per attempt to exit 127.
+ * It is there now and signed in to nothing, which is a *third* state neither the
+ * model nor its training expects: reads of public repositories work, and every
+ * write fails in a way that reads like a misconfiguration rather than a boundary.
+ *
+ * So both halves are stated, and the second names who does hold the credential.
+ * The Dockerfile carries why it is unauthenticated.
+ */
+const GH_NOTE = `## \`gh\` in this container
+
+\`gh\` is installed and authenticated as nobody. It can read anything public — issues,
+pull requests, reviews, Actions logs — and it cannot write, or read a private
+repository, however the call is phrased. There is no credential here to fix that with.
+
+Branches, commits, pushes, pull requests and replies to a review belong to the agent
+that briefed you, which holds the credential on the other side of this container.
+Report what you changed and let it deliver.`;
+
+/**
  * What the session is asked to do.
  *
  * The subtask's own prompt, plus the verbatim history the delegating model
@@ -147,12 +169,16 @@ export function sessionFooter(result: {
  * inline for the same reason: the session cannot query the host, and a broken
  * install or a workspace that has stopped accepting writes is the difference
  * between a failure worth retrying and one that never will be.
+ *
+ * {@link GH_NOTE} is here for the same reason and earns its tokens the same way:
+ * what a session cannot find out by looking, and would otherwise spend turns
+ * discovering by failing.
  */
 export function sessionBrief(
   request: RecipeExecutionRequest,
   note?: string
 ): string {
-  const parts = [request.prompt];
+  const parts = [request.prompt, "", GH_NOTE];
   if (note) {
     parts.push("", "## The state of this workspace", "", note);
   }

@@ -78,12 +78,16 @@ describe("the main agent's tools", () => {
       "repo_clone",
       "repo_commit",
       "repo_diff",
-      // The three that read and write the forge's own state. They are the
-      // parent's for the same reason the rest of git is: the subagent holds the
-      // shell and must not also speak for this agent in public.
+      // The ones that read and write the forge's own state, answering a review
+      // included. They are the parent's for the same reason the rest of git is:
+      // the subagent holds the shell and must not also speak for this agent in
+      // public.
       "repo_issue_view",
       "repo_open_pr",
       "repo_pr_comment",
+      "repo_pr_review_status",
+      "repo_pr_thread_reply",
+      "repo_pr_threads",
       "repo_pr_view",
       "repo_push",
       "repo_status",
@@ -237,14 +241,16 @@ describe("the container config", () => {
 });
 
 describe("what the main agent asks a person before doing", () => {
-  it("holds opening a pull request, and nothing else", async () => {
-    // The coder is the agent that opens pull requests, so it is the one that has
-    // to ask. A rename that dropped the rule would let one through unasked, and a
-    // rule added for a push or a comment would stop a round that should not wait.
+  it("holds nothing at all", async () => {
+    // `repo_open_pr` was the only gated call in this Worker, and a pull request
+    // was judged not worth stopping for: it is the point of the work, it lands on
+    // a branch, and it is reviewable after the fact. So nothing here waits on a
+    // person — pinned, because a rule added by accident stops a round that should
+    // not wait, and only this notices.
     const surface = await parent().mainAgentSurface({
       session: { getCompactions: async () => [] } as never
     });
 
-    expect(Object.keys(surface.toolApproval)).toEqual(["repo_open_pr"]);
+    expect(Object.keys(surface.toolApproval)).toEqual([]);
   });
 });

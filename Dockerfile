@@ -165,6 +165,53 @@ RUN if [ -n "$CLAUDE_CODE_VERSION" ]; then \
       echo "no CLAUDE_CODE_VERSION build arg: this image has no Claude Code"; \
     fi
 
+# --- The GitHub CLI, for reading a public repository ------------------------
+#
+# Behind its own build arg for the reason Claude Code is: `image_vars` in
+# wrangler.jsonc decides per `containers[]` entry, so the `coder` image passes
+# nothing and stays smaller.
+#
+# **It is unauthenticated, and that is the whole design.** The container holds no
+# forge credential and must not — the `repo` module in `@dynamicagents/plugins`
+# carries the argument, and it has not changed: git executes whatever `.git/config`
+# and `.git/hooks` name, and the model has a root shell on that filesystem. What
+# changed is that *reading a public repository needs no credential*, and reading
+# is most of what a session reaches for `gh` to do.
+#
+# The catch, and the reason COMPUTER_VAR_GH_TOKEN exists below: `gh` refuses to
+# run at all without a token, even against a public repository. It exits with
+# "To get started with GitHub CLI, please run: gh auth login" before it makes a
+# request. So it is given one that is not a credential, and the egress gateway
+# deletes the header on the way out — the same swap the Anthropic credential
+# already rides on, inverted. GitHub sees an anonymous request and answers with
+# public data.
+#
+# What that buys, and what it does not:
+#   - public reads work, and are rate limited to 60 requests/hour for the whole
+#     egress IP, which is shared. It can be exhausted by someone else.
+#   - every write fails, and so does every private repository.
+#   - the forge work — branches, commits, pushes, pull requests, review replies —
+#     belongs to the parent's `repo_*` tools, which hold the credential Worker-side.
+#
+# A pinned release tarball rather than the apt repository: `gh` is a static Go
+# binary that needs no dependency resolution, so this is one layer and no second
+# keyring, and the checksum is verified because the build reaches the network for
+# it. Only `bin/gh` is kept; the tarball also carries manpages and completions
+# that nothing in here reads.
+ARG GH_VERSION=""
+ARG GH_SHA256=""
+RUN if [ -n "$GH_VERSION" ]; then \
+      curl -fsSL -o /tmp/gh.tar.gz \
+        "https://github.com/cli/cli/releases/download/v${GH_VERSION}/gh_${GH_VERSION}_linux_amd64.tar.gz" \
+      && echo "${GH_SHA256}  /tmp/gh.tar.gz" | sha256sum -c - \
+      && tar -xzf /tmp/gh.tar.gz -C /tmp \
+      && install -m 0755 "/tmp/gh_${GH_VERSION}_linux_amd64/bin/gh" /usr/local/bin/gh \
+      && rm -rf /tmp/gh.tar.gz "/tmp/gh_${GH_VERSION}_linux_amd64" \
+      && gh --version; \
+    else \
+      echo "no GH_VERSION build arg: this image has no GitHub CLI"; \
+    fi
+
 # Fail the BUILD, not round three, if the base image stops delivering the
 # toolchain. npm ignores `engines` unless a repo opts in, so nothing downstream
 # would tell you.
@@ -222,7 +269,24 @@ RUN node -e "const m=Number(process.versions.node.split('.')[0]); if (m < 24) { 
 # credential, running a cloned repository's `postinstall` by design. If this
 # image is ever changed to exec as a non-root user, delete this line — the guard
 # it clears will no longer be firing.
-ENV COMPUTER_VAR_CI=1 \
+# GH_TOKEN is a placeholder, not a credential, and it is worth being explicit
+# about what it is doing. `gh` will not make a request without one, so this exists
+# only to get it past its own check; the egress gateway strips `authorization`
+# from everything not bound for Anthropic, so what reaches GitHub is an anonymous
+# request. See the GH_VERSION block above for what that can and cannot read.
+#
+# The prefix is load-bearing here as everywhere in this block: unprefixed it
+# configures `computerd`, which never calls GitHub, while every `gh` the model
+# runs keeps failing.
+#
+# **It only works behind an intercepting gateway.** This ENV is in both images
+# because the block is shared, and it is inert in the one without the CLI. Give
+# `gh` to a workspace whose egress is `direct` and nothing strips the header: the
+# placeholder reaches GitHub as a real credential and every call answers 401.
+# Measured both ways — a placeholder gets `gh` past its own auth check and out to
+# the network, and the same request with no `authorization` header answers 200.
+ENV COMPUTER_VAR_GH_TOKEN=not-a-credential-the-gateway-strips-this \
+    COMPUTER_VAR_CI=1 \
     COMPUTER_VAR_HUSKY=0 \
     COMPUTER_VAR_DISABLE_AUTOUPDATER=1 \
     COMPUTER_VAR_IS_SANDBOX=1 \

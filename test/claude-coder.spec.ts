@@ -619,3 +619,26 @@ describe("the permission mode this deployment runs sessions under", () => {
     expect(CLAUDE_CODE_SESSION.permissionMode).toBe("bypassPermissions");
   });
 });
+
+/**
+ * The effort level, pinned for the same reason and against the same kind of
+ * silence.
+ *
+ * A level the CLI does not recognise is warned about on stderr and then
+ * ignored, so a typo does not fail the session — it runs at the model's default
+ * and reports nothing unusual.
+ *
+ * `maxTurns` is pinned absent for a related silence: the plugin no longer
+ * accepts one, and this object is spread into its config, where an excess key is
+ * dropped without complaint. Adding it back here would read as a limit and be
+ * nothing at all.
+ */
+describe("how hard this deployment asks a session to think", () => {
+  it("buys depth, because a half-finished checkout costs more than a turn", () => {
+    expect(CLAUDE_CODE_SESSION.effort).toBe("xhigh");
+  });
+
+  it("sets no turn ceiling, which would be inert rather than a limit", () => {
+    expect(CLAUDE_CODE_SESSION).not.toHaveProperty("maxTurns");
+  });
+});

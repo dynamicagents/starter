@@ -187,6 +187,27 @@ export const CLAUDE_CODE_SESSION = {
   model: "claude-opus-5",
 
   /**
+   * `xhigh`, the level above Opus 5's own default of `high`.
+   *
+   * Same argument as the model. The bucket is spent either way once a session
+   * starts, and the failure that costs a deployment real time is not an
+   * expensive subtask — it is a cheap one that half-finishes and leaves a
+   * checkout somebody has to read before the next round can use it. Depth is
+   * what stops that.
+   *
+   * It is bought, not free: per turn, so it compounds over a session, and the
+   * client prices `xhigh` at 1.6x `high` for this model. Against the estimate
+   * above, expect nearer two substantial subtasks per bucket than four. Drop to
+   * `high` for volume, the way `claude-sonnet-5` is the lever for the model.
+   *
+   * Spelled as a level the CLI knows, because one it does not know is **warned
+   * about on stderr and ignored** — the session then runs at the default and
+   * nothing downstream says so. `EffortLevel` in
+   * `@dynamicagents/plugins/claude-code` is the type that catches that.
+   */
+  effort: "xhigh",
+
+  /**
    * Forty minutes, and **this is the ceiling on a session** — see above.
    *
    * Longer than the workspace base's twenty-minute default container-idle
@@ -212,11 +233,14 @@ export const CLAUDE_CODE_SESSION = {
   windowMs: 8 * 60_000,
 
   /**
-   * Advisory, all three. Claude Code's own subagent tree is invisible to
-   * Dynamic Agents' scheduler and multiplies whatever they say; `timeoutMs` is what
-   * actually stops a run.
+   * Caps on Claude Code's own subagent tree, and advisory rather than enforced:
+   * that tree is invisible to Dynamic Agents' scheduler and multiplies whatever
+   * they say. `timeoutMs` is what actually stops a run.
+   *
+   * No turn ceiling sits beside them because there is none to set —
+   * `@dynamicagents/plugins/claude-code` does not pass `--max-turns` at all, and
+   * its README carries the reason.
    */
-  maxTurns: 60,
   maxSubagentDepth: 1,
   maxConcurrentSubagents: 4,
 

@@ -534,6 +534,10 @@ async function cmdAi(args) {
   });
   const gw = flags.gateway ?? AI_GW_DEFAULT;
   if (pos[0]) return cmdAiDetail(gw, pos[0], flags);
+  // `--raw` is the API's body verbatim, and `--all` is several bodies merged:
+  // there is no verbatim form of that, only a different shape under the name.
+  if (flags.raw && flags.all)
+    die("--raw prints one API response; use --json with --all");
 
   const limit = flags.all ? AI_MAX_LIMIT : parseLimit(flags.limit, 20);
   if (limit > AI_MAX_LIMIT)
@@ -581,8 +585,7 @@ async function cmdAi(args) {
       logs.push(...more);
     }
   }
-  if (flags.all && (flags.json || flags.raw))
-    return void out(JSON.stringify(logs, null, flags.raw ? 0 : 2));
+  if (flags.all && flags.json) return void out(JSON.stringify(logs, null, 2));
   if (logs.length === 0) return void out("no AI Gateway calls match");
 
   let cost = 0;

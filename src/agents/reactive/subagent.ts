@@ -2,6 +2,7 @@ import type { AgentPlugin, CoreConfigOverrides } from "@dynamicagents/core";
 import type { PluginHost } from "@dynamicagents/core/host";
 import { RecipeSubagentHost } from "@dynamicagents/core/round";
 import { REACTIVE_CONFIG } from "@/config";
+import { reactive } from "./definition";
 import { plugins } from "./plugins";
 
 /**
@@ -14,7 +15,7 @@ import { plugins } from "./plugins";
  */
 export class ReactiveSubagent extends RecipeSubagentHost<Env> {
   protected agentConfig(): CoreConfigOverrides {
-    return REACTIVE_CONFIG;
+    return { ...REACTIVE_CONFIG, agentName: reactive.tenant };
   }
 
   protected agentPlugins(host: PluginHost<Env>): AgentPlugin[] {

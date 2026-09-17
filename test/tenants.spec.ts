@@ -12,18 +12,6 @@ import {
   makeGatekeeperToken
 } from "@dynamicagents/core/testing";
 import worker from "@/index";
-import {
-  ARC_PLAYER_CONFIG,
-  CLAUDE_CODER_CONFIG,
-  CODER_CONFIG,
-  PROACTIVE_CONFIG,
-  REACTIVE_CONFIG
-} from "@/config";
-import { reactive } from "@/agents/reactive/definition";
-import { proactive } from "@/agents/proactive/definition";
-import { arcPlayer } from "@/agents/arc-player/definition";
-import { coder } from "@/agents/coder/definition";
-import { claudeCoder } from "@/agents/claude-coder/definition";
 
 /**
  * Five agents, one Worker, one endpoint.
@@ -197,29 +185,6 @@ describe("per-tenant cards", () => {
     // a gatekeeper registering them. Counted off `TENANTS` rather than a literal,
     // which is what went stale when the fourth agent arrived.
     expect(new Set(names).size).toBe(TENANTS.length);
-  });
-});
-
-describe("AI Gateway attribution", () => {
-  it("names each agent's model calls after the tenant it is mounted under", () => {
-    // Two spellings of one name, in `definition.ts` and `config.ts`. A config
-    // that spreads a sibling's — `ARC_PLAYER_CONFIG` spreads `REACTIVE_CONFIG` —
-    // inherits the sibling's name unless it sets its own, and every call it
-    // makes is then billed to the wrong agent without anything failing.
-    const pairs = [
-      [reactive, REACTIVE_CONFIG],
-      [proactive, PROACTIVE_CONFIG],
-      [arcPlayer, ARC_PLAYER_CONFIG],
-      [coder, CODER_CONFIG],
-      [claudeCoder, CLAUDE_CODER_CONFIG]
-    ] as const;
-
-    expect(pairs.map(([definition]) => definition.tenant).sort()).toEqual(
-      [...TENANTS].sort()
-    );
-    for (const [definition, config] of pairs) {
-      expect(config.agentName).toBe(definition.tenant);
-    }
   });
 });
 

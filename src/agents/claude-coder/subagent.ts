@@ -24,6 +24,7 @@ import {
   truncateOutput
 } from "@dynamicagents/plugins/computer";
 import { CLAUDE_CODE_SESSION, CLAUDE_CODER_CONFIG } from "@/config";
+import { claudeCoder } from "./definition";
 import { openWorkspace } from "@dynamicagents/plugins/computer";
 import { claudeCodeConfig } from "./claude-code";
 import { subagentPlugins } from "./plugins";
@@ -168,7 +169,7 @@ export function sessionBrief(
 
 export class ClaudeCoderSubagent extends RecipeSubagentHost<Env> {
   protected agentConfig(): CoreConfigOverrides {
-    return CLAUDE_CODER_CONFIG;
+    return { ...CLAUDE_CODER_CONFIG, agentName: claudeCoder.tenant };
   }
 
   protected agentPlugins(host: PluginHost<Env>): AgentPlugin[] {

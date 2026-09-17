@@ -6,6 +6,7 @@ import {
   type SubagentClass
 } from "@dynamicagents/core/round";
 import { REACTIVE_CONFIG } from "@/config";
+import { reactive } from "./definition";
 import { roundPolicy } from "@/round-policy";
 import { plugins } from "./plugins";
 import { soulPrompt } from "./soul";
@@ -21,8 +22,14 @@ import { ReactiveSubagent } from "./subagent";
  * wrong.
  */
 export class ReactiveAgent extends RoundAgentBase<Env> {
+  /**
+   * `agentName` is what AI Gateway logs this agent's calls under. It is the
+   * tenant, read off the definition, so the two cannot disagree — a config that
+   * spreads a sibling's would otherwise carry the sibling's name. Every agent
+   * and subagent here does the same.
+   */
   protected agentConfig(): CoreConfigOverrides {
-    return REACTIVE_CONFIG;
+    return { ...REACTIVE_CONFIG, agentName: reactive.tenant };
   }
 
   protected agentPlugins(host: PluginHost<Env>): AgentPlugin[] {

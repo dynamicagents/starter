@@ -7,6 +7,7 @@ import { DynamicAgent, type PluginHost } from "@dynamicagents/core/host";
 import { parseTurn, sessionMessage } from "@dynamicagents/core/agent";
 import { noReplyTool, NO_REPLY_TOOL_NAME } from "@dynamicagents/plugins/triage";
 import { MAX_STEPS, PROACTIVE_CONFIG } from "@/config";
+import { proactive } from "./definition";
 import { soulPrompt } from "./soul";
 import { plugins } from "./plugins";
 import { runTurn, type TurnOutcome } from "./loop";
@@ -40,7 +41,7 @@ const UNEXPECTED_REPLY =
  */
 export class ProactiveAgent extends DynamicAgent<Env> {
   protected agentConfig(): CoreConfigOverrides {
-    return PROACTIVE_CONFIG;
+    return { ...PROACTIVE_CONFIG, agentName: proactive.tenant };
   }
 
   protected agentPlugins(host: PluginHost<Env>): AgentPlugin[] {

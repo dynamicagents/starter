@@ -67,7 +67,6 @@ const MODEL = {
  * lower the threshold without lowering the tail with it.
  */
 export const REACTIVE_CONFIG: CoreConfigOverrides = {
-  agentName: "reactive",
   model: MODEL,
   mainAgentLimits: { maxTurns: 20, maxWallMs: 60 * 60_000 },
   subagentLimits: { maxTurns: 20, maxWallMs: 30 * 60_000 },
@@ -94,7 +93,6 @@ export const REACTIVE_CONFIG: CoreConfigOverrides = {
  */
 export const ARC_PLAYER_CONFIG: CoreConfigOverrides = {
   ...REACTIVE_CONFIG,
-  agentName: "arc-player",
   mainAgentLimits: { maxTurns: 40, maxWallMs: 2 * 60 * 60_000 },
   subagentLimits: { maxTurns: 60, maxWallMs: 60 * 60_000 },
   maxSubtasks: 4
@@ -121,7 +119,6 @@ export const ARC_PLAYER_CONFIG: CoreConfigOverrides = {
  * a whole container to do safely; see `src/agents/claude-coder/agent.ts`.
  */
 export const CODER_CONFIG: CoreConfigOverrides = {
-  agentName: "coder",
   model: MODEL,
   mainAgentLimits: { maxTurns: 60, maxWallMs: 3 * 60 * 60_000 },
   subagentLimits: { maxTurns: 80, maxWallMs: 90 * 60_000 },
@@ -158,7 +155,6 @@ export const CODER_CONFIG: CoreConfigOverrides = {
  */
 export const CLAUDE_CODER_CONFIG: CoreConfigOverrides = {
   ...CODER_CONFIG,
-  agentName: "claude-coder",
   maxSubtasks: 1
 };
 
@@ -262,7 +258,6 @@ export const CLAUDE_CODE_SESSION = {
  * cheap per message, unlike a delegating agent's branch results.
  */
 export const PROACTIVE_CONFIG: CoreConfigOverrides = {
-  agentName: "proactive",
   model: { ...MODEL, fallbackChatModelId: "@cf/google/gemma-4-26b-a4b-it" },
   session: {
     memoryMaxTokens: 1200,

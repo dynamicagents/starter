@@ -7,6 +7,7 @@ import {
 } from "@dynamicagents/core/round";
 import { makeScorecardStore } from "@dynamicagents/plugins/arc-agi";
 import { ARC_PLAYER_CONFIG } from "@/config";
+import { arcPlayer } from "./definition";
 import { roundPolicy } from "@/round-policy";
 import { plugins } from "./plugins";
 import { soulPrompt } from "./soul";
@@ -27,7 +28,7 @@ import { ArcPlayerSubagent } from "./subagent";
  */
 export class ArcPlayerAgent extends RoundAgentBase<Env> {
   protected agentConfig(): CoreConfigOverrides {
-    return ARC_PLAYER_CONFIG;
+    return { ...ARC_PLAYER_CONFIG, agentName: arcPlayer.tenant };
   }
 
   protected agentPlugins(host: PluginHost<Env>): AgentPlugin[] {

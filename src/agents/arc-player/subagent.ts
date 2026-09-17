@@ -2,6 +2,7 @@ import type { AgentPlugin, CoreConfigOverrides } from "@dynamicagents/core";
 import type { PluginHost } from "@dynamicagents/core/host";
 import { RecipeSubagentHost } from "@dynamicagents/core/round";
 import { ARC_PLAYER_CONFIG } from "@/config";
+import { arcPlayer } from "./definition";
 import { plugins } from "./plugins";
 
 /**
@@ -14,7 +15,7 @@ import { plugins } from "./plugins";
  */
 export class ArcPlayerSubagent extends RecipeSubagentHost<Env> {
   protected agentConfig(): CoreConfigOverrides {
-    return ARC_PLAYER_CONFIG;
+    return { ...ARC_PLAYER_CONFIG, agentName: arcPlayer.tenant };
   }
 
   protected agentPlugins(host: PluginHost<Env>): AgentPlugin[] {

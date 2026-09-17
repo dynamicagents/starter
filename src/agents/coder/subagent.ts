@@ -2,6 +2,7 @@ import type { AgentPlugin, CoreConfigOverrides } from "@dynamicagents/core";
 import type { PluginHost } from "@dynamicagents/core/host";
 import { RecipeSubagentHost } from "@dynamicagents/core/round";
 import { CODER_CONFIG } from "@/config";
+import { coder } from "./definition";
 import { subagentPlugins } from "./plugins";
 
 /**
@@ -13,7 +14,7 @@ import { subagentPlugins } from "./plugins";
  */
 export class CoderSubagent extends RecipeSubagentHost<Env> {
   protected agentConfig(): CoreConfigOverrides {
-    return CODER_CONFIG;
+    return { ...CODER_CONFIG, agentName: coder.tenant };
   }
 
   /**

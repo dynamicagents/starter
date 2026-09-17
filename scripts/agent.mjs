@@ -177,7 +177,8 @@ ${
     : `import { DynamicAgent } from "@dynamicagents/core/host";`
 }
 import { ${screaming}_CONFIG } from "@/config";
-${isRound ? 'import { roundPolicy } from "@/round-policy";\n' : ""}import { plugins } from "./plugins";
+${isRound ? 'import { roundPolicy } from "@/round-policy";\n' : ""}import { ${camel} } from "./definition";
+import { plugins } from "./plugins";
 import { soulPrompt } from "./soul";
 ${isRound ? `import { ${pascal}Subagent } from "./subagent";\n` : ""}
 /**
@@ -191,7 +192,7 @@ ${isRound ? `import { ${pascal}Subagent } from "./subagent";\n` : ""}
  */
 export class ${pascal}Agent extends ${isRound ? "RoundAgentBase" : "DynamicAgent"}<Env> {
   protected agentConfig(): CoreConfigOverrides {
-    return ${screaming}_CONFIG;
+    return { ...${screaming}_CONFIG, agentName: ${camel}.tenant };
   }
 
   protected agentPlugins(host: PluginHost<Env>): AgentPlugin[] {
@@ -239,6 +240,7 @@ const SUBAGENT_TS = `import type { AgentPlugin, CoreConfigOverrides } from "@dyn
 import type { PluginHost } from "@dynamicagents/core/host";
 import { RecipeSubagentHost } from "@dynamicagents/core/round";
 import { ${screaming}_CONFIG } from "@/config";
+import { ${camel} } from "./definition";
 import { plugins } from "./plugins";
 
 /**
@@ -250,7 +252,7 @@ import { plugins } from "./plugins";
  */
 export class ${pascal}Subagent extends RecipeSubagentHost<Env> {
   protected agentConfig(): CoreConfigOverrides {
-    return ${screaming}_CONFIG;
+    return { ...${screaming}_CONFIG, agentName: ${camel}.tenant };
   }
 
   protected agentPlugins(host: PluginHost<Env>): AgentPlugin[] {

@@ -47,6 +47,13 @@ import { subagentPlugins } from "./plugins";
 /** Where this facet keeps its place in the session's event stream. */
 const CURSOR_KEY = "claude-cursor";
 
+/**
+ * Which session this facet started, and in which workspace — what
+ * {@link ClaudeCoderSubagent.abortExecution} needs to stop it with no drain in
+ * hand.
+ */
+const SESSION_KEY = "claude-session";
+
 /** Bound on the report text, so one runaway session cannot fill the row. */
 const REPORT_MAX = 24_000;
 
@@ -397,6 +404,12 @@ export class ClaudeCoderSubagent extends RecipeSubagentHost<Env> {
       onCheckpoint: (at: DrainCursor) => this.ctx.storage.put(CURSOR_KEY, at)
     };
 
+    if (!cursor)
+      await this.ctx.storage.put(SESSION_KEY, {
+        name,
+        subtaskId: request.subtaskId
+      });
+
     let outcome: DrainOutcome;
     try {
       outcome = cursor
@@ -542,6 +555,40 @@ export class ClaudeCoderSubagent extends RecipeSubagentHost<Env> {
         err: String(err)
       });
       return await super.abortRun();
+    }
+  }
+
+  /**
+   * Stop the session a failed or canceled branch leaves behind.
+   *
+   * Core calls this for such a branch once {@link abortRun} has had its turn.
+   * That stops a drain this instance is holding; this reaches the session with
+   * none — a drain that lost its subscriber to a retry, or an isolate that went
+   * away — by the id it was started under. Left running, it goes on editing the
+   * checkout while a later round delegates the same work again. Best-effort,
+   * like every teardown core runs.
+   */
+  override async abortExecution(toolFamilies: string[]): Promise<void> {
+    await super.abortExecution(toolFamilies);
+    const session = await this.ctx.storage.get<{
+      name: string;
+      subtaskId: number;
+    }>(SESSION_KEY);
+    if (!session) return;
+    try {
+      const stub = this.env.CLAUDE_CODER_WORKSPACE.get(
+        this.env.CLAUDE_CODER_WORKSPACE.idFromName(session.name)
+      );
+      using workspace = await openWorkspace(stub);
+      await this.#session.stop(
+        workspace.runtime as SessionRuntime,
+        session.subtaskId
+      );
+    } catch (err) {
+      // A session that has already exited lands here too.
+      console.warn("[claude-coder] could not stop the session on teardown", {
+        err: String(err)
+      });
     }
   }
 

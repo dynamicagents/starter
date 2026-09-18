@@ -178,18 +178,21 @@ RUN if [ -n "$CLAUDE_CODE_VERSION" ]; then \
 # changed is that *reading a public repository needs no credential*, and reading
 # is most of what a session reaches for `gh` to do.
 #
-# The catch, and the reason COMPUTER_VAR_GH_TOKEN exists below: `gh` refuses to
-# run at all without a token, even against a public repository. It exits with
-# "To get started with GitHub CLI, please run: gh auth login" before it makes a
-# request. So it is given one that is not a credential, and the egress gateway
-# deletes the header on the way out — the same swap the Anthropic credential
-# already rides on, inverted. GitHub sees an anonymous request and answers with
-# public data.
+# The catch: `gh` refuses to run at all without a token, even against a public
+# repository — it exits asking for `gh auth login` before it makes a request. So
+# the claude-coder sessions are launched with a placeholder GH_TOKEN, and the
+# egress gateway deletes the header on the way out: the same swap the Anthropic
+# credential rides on, inverted. The placeholder lives in the session env, not in
+# this image, because it is only harmless behind that gateway — the `claude-coder`
+# agent's `claude-code.ts` carries why.
 #
 # What that buys, and what it does not:
-#   - public reads work, and are rate limited to 60 requests/hour for the whole
-#     egress IP, which is shared. It can be exhausted by someone else.
-#   - every write fails, and so does every private repository.
+#   - REST reads of public repositories: `gh api repos/<o>/<r>/pulls/<n>`, its
+#     `/comments`, `/files`, `/reviews`. 60 requests an hour for the whole egress
+#     IP, which is shared, so it can be exhausted by someone else.
+#   - **not** `gh pr view`, `gh issue view` or anything else built on GraphQL:
+#     GitHub gives anonymous callers a GraphQL quota of zero.
+#   - no write, and no private repository.
 #   - the forge work — branches, commits, pushes, pull requests, review replies —
 #     belongs to the parent's `repo_*` tools, which hold the credential Worker-side.
 #
@@ -269,24 +272,7 @@ RUN node -e "const m=Number(process.versions.node.split('.')[0]); if (m < 24) { 
 # credential, running a cloned repository's `postinstall` by design. If this
 # image is ever changed to exec as a non-root user, delete this line — the guard
 # it clears will no longer be firing.
-# GH_TOKEN is a placeholder, not a credential, and it is worth being explicit
-# about what it is doing. `gh` will not make a request without one, so this exists
-# only to get it past its own check; the egress gateway strips `authorization`
-# from everything not bound for Anthropic, so what reaches GitHub is an anonymous
-# request. See the GH_VERSION block above for what that can and cannot read.
-#
-# The prefix is load-bearing here as everywhere in this block: unprefixed it
-# configures `computerd`, which never calls GitHub, while every `gh` the model
-# runs keeps failing.
-#
-# **It only works behind an intercepting gateway.** This ENV is in both images
-# because the block is shared, and it is inert in the one without the CLI. Give
-# `gh` to a workspace whose egress is `direct` and nothing strips the header: the
-# placeholder reaches GitHub as a real credential and every call answers 401.
-# Measured both ways — a placeholder gets `gh` past its own auth check and out to
-# the network, and the same request with no `authorization` header answers 200.
-ENV COMPUTER_VAR_GH_TOKEN=not-a-credential-the-gateway-strips-this \
-    COMPUTER_VAR_CI=1 \
+ENV COMPUTER_VAR_CI=1 \
     COMPUTER_VAR_HUSKY=0 \
     COMPUTER_VAR_DISABLE_AUTOUPDATER=1 \
     COMPUTER_VAR_IS_SANDBOX=1 \

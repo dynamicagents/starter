@@ -22,6 +22,10 @@ import {
   type ClaudeCoderSubagent
 } from "@/agents/claude-coder/subagent";
 import { CLAUDE_CODER_CONFIG, CLAUDE_CODE_SESSION } from "@/config";
+import {
+  claudeCodeConfig,
+  GH_TOKEN_PLACEHOLDER
+} from "@/agents/claude-coder/claude-code";
 
 /**
  * The claude-coder's wiring, pinned.
@@ -77,6 +81,19 @@ describe("the parent's surface", () => {
     expect(names).toContain("sb_exists");
     expect(names).toContain("repo_clone");
     expect(names).toContain("repo_open_pr");
+  });
+
+  /**
+   * Asserted here as well as in `coder-surface.spec.ts`, because this agent's
+   * `parentPlugins` is its own list: a review tool dropped from it would leave
+   * this agent unable to answer a review while the coder's spec still passed.
+   */
+  it("can find out whether a review has landed, read it, and answer it", async () => {
+    const names = await toolNames();
+
+    expect(names).toContain("repo_pr_review_status");
+    expect(names).toContain("repo_pr_threads");
+    expect(names).toContain("repo_pr_thread_reply");
   });
 
   /**
@@ -643,5 +660,32 @@ describe("how hard this deployment asks a session to think", () => {
 
   it("sets no turn ceiling, which would be inert rather than a limit", () => {
     expect(CLAUDE_CODE_SESSION).not.toHaveProperty("maxTurns");
+  });
+});
+
+/**
+ * Where `gh`'s placeholder token lives, which is the whole of its safety.
+ *
+ * It is only harmless behind the sessions' egress gateway, which strips it. In
+ * the image it would also reach the coder's container, whose egress is `direct`,
+ * and be presented to GitHub as a credential by anything that reads `GH_TOKEN`.
+ */
+describe("gh's placeholder token", () => {
+  it("rides in the session env, which only the gateway-fronted sessions get", () => {
+    const config = claudeCodeConfig(env as never, () => "ws");
+
+    expect(config.env?.GH_TOKEN).toBe(GH_TOKEN_PLACEHOLDER);
+  });
+
+  it("tells the session which gh commands can work at all", () => {
+    const brief = sessionBrief({
+      prompt: "look at the issue",
+      references: []
+    } as never);
+
+    // GitHub gives anonymous callers a GraphQL quota of zero, so the high-level
+    // commands a model reaches for first are the ones that cannot work.
+    expect(brief).toContain("gh api repos/");
+    expect(brief).toContain("GraphQL");
   });
 });

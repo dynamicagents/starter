@@ -142,17 +142,22 @@ export function sessionFooter(result: {
  * A session reaches for it unprompted — it is the obvious way to read an issue or
  * a review — and until it was installed that cost a turn per attempt to exit 127.
  * It is there now and signed in to nothing, which is a *third* state neither the
- * model nor its training expects: reads of public repositories work, and every
- * write fails in a way that reads like a misconfiguration rather than a boundary.
+ * model nor its training expects — and a narrower one than it sounds: REST reads
+ * of public repositories work, while every GraphQL-backed command (`gh pr view`
+ * among them) and every write fails in a way that reads like a misconfiguration
+ * rather than a boundary.
  *
  * So both halves are stated, and the second names who does hold the credential.
  * The Dockerfile carries why it is unauthenticated.
  */
 const GH_NOTE = `## \`gh\` in this container
 
-\`gh\` is installed and authenticated as nobody. It can read anything public — issues,
-pull requests, reviews, Actions logs — and it cannot write, or read a private
-repository, however the call is phrased. There is no credential here to fix that with.
+\`gh\` is installed and authenticated as nobody, so only its REST calls work: use
+\`gh api repos/OWNER/REPO/pulls/N\` (and \`/comments\`, \`/files\`, \`/reviews\`), or the
+same under \`issues/N\`, for public repositories. \`gh pr view\`, \`gh issue view\` and
+the other high-level commands go through GitHub's GraphQL API, which refuses anonymous
+callers outright — they will fail however they are phrased. Nothing writes, and no
+private repository can be read. There is no credential here to fix that with.
 
 Branches, commits, pushes, pull requests and replies to a review belong to the agent
 that briefed you, which holds the credential on the other side of this container.

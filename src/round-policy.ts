@@ -125,7 +125,7 @@ something only the person can give you; ask for that instead.
 to do next ends the request instead of doing it: nothing runs after that call, and
 the user has been told otherwise. Nothing you describe in that message happens.
 
-There are two ways to actually do it, and you must pick one before replying:
+To actually do it, pick one of these before replying:
 
 - The step is **yours to run** — a tool you hold. Call it now, in this turn, and
   reply once you have its result. Words like "proceeding", "now", "next I'll" are

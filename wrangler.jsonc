@@ -140,7 +140,14 @@
       // this client's requests and `events.ts` parses its stream; both are
       // written against a wire shape captured from this exact version. A bump
       // needs the smoke test re-run — see the Dockerfile.
-      "image_vars": { "CLAUDE_CODE_VERSION": "2.1.238" },
+      // `gh` is unauthenticated and can only read public repositories — the
+      // Dockerfile block carries why, and why it still needs a GH_TOKEN. The
+      // checksum is pinned because the build downloads the tarball.
+      "image_vars": {
+        "CLAUDE_CODE_VERSION": "2.1.238",
+        "GH_VERSION": "2.101.0",
+        "GH_SHA256": "9bca2d1c16825f109907a23307628a2f0698fbf99662b73a5cf0b020293072b8"
+      },
       "instance_type": "standard-2",
       "max_instances": 5,
       "rollout_step_percentage": 100

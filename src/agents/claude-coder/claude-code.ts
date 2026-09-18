@@ -5,6 +5,26 @@ import { CLAUDE_CODE_SESSION } from "@/config";
 export const CREDENTIALS_KEY = "claude-credentials";
 
 /**
+ * What `gh` is given so that it will start at all — never a credential.
+ *
+ * `gh` refuses to make any request without a token, even against a public
+ * repository. The sessions' egress gateway deletes `authorization` from every
+ * request not bound for Anthropic, so what reaches GitHub is anonymous: REST
+ * reads of public repositories work, and GraphQL — which GitHub gives anonymous
+ * callers a quota of zero on — does not, so `gh pr view` and `gh issue view`
+ * fail where `gh api repos/…` succeeds.
+ *
+ * Set here rather than in the image because it is only harmless **behind that
+ * gateway**. The Dockerfile is shared with the coder, whose workspace egresses
+ * `direct`: there nothing strips the header, and anything reading `GH_TOKEN` —
+ * a repository script, an `npx`'d client — would present this as a credential
+ * and get a 401 where it would otherwise have had anonymous access. A session's
+ * env reaches only `claude` and the commands it runs, which is exactly the
+ * process tree the gateway covers.
+ */
+export const GH_TOKEN_PLACEHOLDER = "not-a-credential-the-gateway-strips-this";
+
+/**
  * One `ClaudeCodeConfig`, built once and shared by everything that needs it.
  *
  * Three places hold this object and they must hold the *same* one: the workspace
@@ -39,7 +59,8 @@ export function claudeCodeConfig(
         Boolean
       ),
     workspaceName,
-    ...CLAUDE_CODE_SESSION
+    ...CLAUDE_CODE_SESSION,
+    env: { GH_TOKEN: GH_TOKEN_PLACEHOLDER }
     /**
      * `restrictToHosts` is deliberately **unset**, which means unrestricted.
      *

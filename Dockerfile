@@ -165,6 +165,56 @@ RUN if [ -n "$CLAUDE_CODE_VERSION" ]; then \
       echo "no CLAUDE_CODE_VERSION build arg: this image has no Claude Code"; \
     fi
 
+# --- The GitHub CLI, for reading a public repository ------------------------
+#
+# Behind its own build arg for the reason Claude Code is: `image_vars` in
+# wrangler.jsonc decides per `containers[]` entry, so the `coder` image passes
+# nothing and stays smaller.
+#
+# **It is unauthenticated, and that is the whole design.** The container holds no
+# forge credential and must not — the `repo` module in `@dynamicagents/plugins`
+# carries the argument, and it has not changed: git executes whatever `.git/config`
+# and `.git/hooks` name, and the model has a root shell on that filesystem. What
+# changed is that *reading a public repository needs no credential*, and reading
+# is most of what a session reaches for `gh` to do.
+#
+# The catch: `gh` refuses to run at all without a token, even against a public
+# repository — it exits asking for `gh auth login` before it makes a request. So
+# the claude-coder sessions are launched with a placeholder GH_TOKEN, and the
+# egress gateway deletes the header on the way out: the same swap the Anthropic
+# credential rides on, inverted. The placeholder lives in the session env, not in
+# this image, because it is only harmless behind that gateway — the `claude-coder`
+# agent's `claude-code.ts` carries why.
+#
+# What that buys, and what it does not:
+#   - REST reads of public repositories: `gh api repos/<o>/<r>/pulls/<n>`, its
+#     `/comments`, `/files`, `/reviews`. 60 requests an hour for the whole egress
+#     IP, which is shared, so it can be exhausted by someone else.
+#   - **not** `gh pr view`, `gh issue view` or anything else built on GraphQL:
+#     GitHub gives anonymous callers a GraphQL quota of zero.
+#   - no write, and no private repository.
+#   - the forge work — branches, commits, pushes, pull requests, review replies —
+#     belongs to the parent's `repo_*` tools, which hold the credential Worker-side.
+#
+# A pinned release tarball rather than the apt repository: `gh` is a static Go
+# binary that needs no dependency resolution, so this is one layer and no second
+# keyring, and the checksum is verified because the build reaches the network for
+# it. Only `bin/gh` is kept; the tarball also carries manpages and completions
+# that nothing in here reads.
+ARG GH_VERSION=""
+ARG GH_SHA256=""
+RUN if [ -n "$GH_VERSION" ]; then \
+      curl -fsSL -o /tmp/gh.tar.gz \
+        "https://github.com/cli/cli/releases/download/v${GH_VERSION}/gh_${GH_VERSION}_linux_amd64.tar.gz" \
+      && echo "${GH_SHA256}  /tmp/gh.tar.gz" | sha256sum -c - \
+      && tar -xzf /tmp/gh.tar.gz -C /tmp \
+      && install -m 0755 "/tmp/gh_${GH_VERSION}_linux_amd64/bin/gh" /usr/local/bin/gh \
+      && rm -rf /tmp/gh.tar.gz "/tmp/gh_${GH_VERSION}_linux_amd64" \
+      && gh --version; \
+    else \
+      echo "no GH_VERSION build arg: this image has no GitHub CLI"; \
+    fi
+
 # Fail the BUILD, not round three, if the base image stops delivering the
 # toolchain. npm ignores `engines` unless a repo opts in, so nothing downstream
 # would tell you.

@@ -22,6 +22,10 @@ import {
   type ClaudeCoderSubagent
 } from "@/agents/claude-coder/subagent";
 import { CLAUDE_CODER_CONFIG, CLAUDE_CODE_SESSION } from "@/config";
+import {
+  claudeCodeConfig,
+  GH_TOKEN_PLACEHOLDER
+} from "@/agents/claude-coder/claude-code";
 
 /**
  * The claude-coder's wiring, pinned.
@@ -80,6 +84,19 @@ describe("the parent's surface", () => {
   });
 
   /**
+   * Asserted here as well as in `coder-surface.spec.ts`, because this agent's
+   * `parentPlugins` is its own list: a review tool dropped from it would leave
+   * this agent unable to answer a review while the coder's spec still passed.
+   */
+  it("can find out whether a review has landed, read it, and answer it", async () => {
+    const names = await toolNames();
+
+    expect(names).toContain("repo_pr_review_status");
+    expect(names).toContain("repo_pr_threads");
+    expect(names).toContain("repo_pr_thread_reply");
+  });
+
+  /**
    * The whole point of the agent. A parent that could edit would edit, and the
    * session it exists to delegate to would never run.
    */
@@ -112,16 +129,15 @@ describe("the parent's surface", () => {
 });
 
 describe("what the main agent asks a person before doing", () => {
-  it("holds opening a pull request, and nothing else", async () => {
-    // The rule `test/coder-surface.spec.ts` pins for the coder, over this agent's
-    // own `parentPlugins`: a separate list, so a rename there that dropped the
-    // rule would let a pull request through unasked and the coder's spec would
-    // still pass.
+  it("holds nothing at all", async () => {
+    // Over this agent's own `parentPlugins`, which is a separate list from the
+    // coder's — so a rule added on one side is caught whichever side it lands on.
+    // Nothing here is gated; `test/coder-surface.spec.ts` says why.
     const surface = await parent().mainAgentSurface({
       session: { getCompactions: async () => [] } as never
     });
 
-    expect(Object.keys(surface.toolApproval)).toEqual(["repo_open_pr"]);
+    expect(Object.keys(surface.toolApproval)).toEqual([]);
   });
 });
 
@@ -537,8 +553,19 @@ describe("the brief a session starts from", () => {
     over: Partial<RecipeExecutionRequest> = {}
   ): RecipeExecutionRequest => ({ ...request(), ...over });
 
-  it("is the bare prompt when there is nothing to add", () => {
-    expect(sessionBrief(withPrompt())).toBe("add a --json flag");
+  it("carries what the container holds, when there is nothing else to add", () => {
+    const brief = sessionBrief(withPrompt());
+
+    expect(brief.startsWith("add a --json flag")).toBe(true);
+    // Unconditional, because it is true of every session: a model reaches for
+    // `gh` unprompted, this one is authenticated as nobody, and neither "it is
+    // missing" nor "it is signed in" is what it will assume. Discovering the
+    // difference by failing costs a turn each time.
+    expect(brief).toContain("`gh` in this container");
+    expect(brief).toContain("authenticated as nobody");
+    // …and who does hold the credential, or the session tries to route around
+    // the boundary rather than reporting back through it.
+    expect(brief).toContain("belong to the agent");
   });
 
   it("carries the workspace note where the session will read it", () => {
@@ -633,5 +660,32 @@ describe("how hard this deployment asks a session to think", () => {
 
   it("sets no turn ceiling, which would be inert rather than a limit", () => {
     expect(CLAUDE_CODE_SESSION).not.toHaveProperty("maxTurns");
+  });
+});
+
+/**
+ * Where `gh`'s placeholder token lives, which is the whole of its safety.
+ *
+ * It is only harmless behind the sessions' egress gateway, which strips it. In
+ * the image it would also reach the coder's container, whose egress is `direct`,
+ * and be presented to GitHub as a credential by anything that reads `GH_TOKEN`.
+ */
+describe("gh's placeholder token", () => {
+  it("rides in the session env, which only the gateway-fronted sessions get", () => {
+    const config = claudeCodeConfig(env as never, () => "ws");
+
+    expect(config.env?.GH_TOKEN).toBe(GH_TOKEN_PLACEHOLDER);
+  });
+
+  it("tells the session which gh commands can work at all", () => {
+    const brief = sessionBrief({
+      prompt: "look at the issue",
+      references: []
+    } as never);
+
+    // GitHub gives anonymous callers a GraphQL quota of zero, so the high-level
+    // commands a model reaches for first are the ones that cannot work.
+    expect(brief).toContain("gh api repos/");
+    expect(brief).toContain("GraphQL");
   });
 });

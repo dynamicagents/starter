@@ -123,7 +123,38 @@ export const ARC_PLAYER_CONFIG: CoreConfigOverrides = {
  */
 export const CODER_CONFIG: CoreConfigOverrides = {
   model: MODEL,
-  mainAgentLimits: { maxTurns: 60, maxWallMs: 3 * 60 * 60_000 },
+  // The deferral allowance, and the coding agents are the only ones that have
+  // one. It exists for a specific wait: a pull request is opened, a review is
+  // requested automatically, and it lands somewhere between two and five minutes
+  // later — so the work is not finished, nothing has failed, and there is nobody
+  // to ask. Every other agent here either answers or hands off, and waiting would
+  // only be a way to take longer.
+  //
+  // Sized against that wait rather than round: 30 seconds is the floor a review
+  // is worth polling at, fifteen minutes is when one that never started is not
+  // going to, and 30 of those checks is the fifteen minutes. The allowance is
+  // twice that because one task legitimately opens more than one pull request,
+  // and running out mid-wait costs the agent the answer it was two checks from.
+  //
+  // The *time* is free: it is not charged to `maxWallMs`, since a parked round
+  // holds nothing. The *checks* are not. Every round is charged its turns, the
+  // one that waits and each one that wakes to look, and a poll is about two —
+  // the status check and the `check_back` call. So a review polled every 30
+  // seconds for its full fifteen minutes spends about 60 turns, and `maxTurns` is
+  // twice the coder's working budget to carry one such wait beside the work
+  // rather than instead of it. That also makes turns, not `maxDeferrals`, the
+  // bound a long run of short polls meets first; a model that picks its wait
+  // from how fast the thing changes spends fewer of them.
+  //
+  // Both deferral bounds must be positive or the tool is not offered at all, and
+  // `roundObservationWindow` must be too, since that is what carries the record
+  // of having waited into the round that wakes.
+  mainAgentLimits: {
+    maxTurns: 120,
+    maxWallMs: 3 * 60 * 60_000,
+    maxDeferrals: 60,
+    maxDeferredMs: 30 * 60_000
+  },
   subagentLimits: { maxTurns: 80, maxWallMs: 90 * 60_000 },
   toolOutputWindow: 6,
   roundObservationWindow: 3,

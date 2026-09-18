@@ -225,6 +225,9 @@ RUN node -e "const m=Number(process.versions.node.split('.')[0]); if (m < 24) { 
 # The workspace object shells out to this to trust the interception CA, so a
 # base image that stopped shipping it must fail here rather than at round three.
   && command -v update-ca-certificates \
+# The workspace object bind-mounts container disk over node_modules with these;
+# `@dynamicagents/plugins/computer` carries why.
+  && command -v mount && command -v mountpoint && command -v sha256sum \
   && test -x /usr/local/bin/computerd
 
 # Everything below exists because tool output lands in a model's context window.

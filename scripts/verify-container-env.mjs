@@ -66,10 +66,11 @@ function reaches(name) {
   );
 }
 
-const path = new URL("../Dockerfile", import.meta.url);
-const unreachable = envNames(readFileSync(path, "utf8")).filter(
-  (name) => !reaches(name)
+const dockerfile = readFileSync(
+  new URL("../Dockerfile", import.meta.url),
+  "utf8"
 );
+const unreachable = envNames(dockerfile).filter((name) => !reaches(name));
 
 if (unreachable.length > 0) {
   for (const name of unreachable) {
@@ -85,3 +86,31 @@ if (unreachable.length > 0) {
 console.log(
   `✓ Dockerfile: every ENV either reaches a command or configures computerd`
 );
+
+/**
+ * The `computerd` stage's tag is the installed `@cloudflare/computer` version.
+ *
+ * The library in the Worker and the daemon in the image are released as a pair,
+ * and a mismatch builds and deploys cleanly — it fails only in a running
+ * container.
+ */
+const tag = /computer-computerd-linux-x64:(\S+)/.exec(dockerfile)?.[1];
+const { version } = JSON.parse(
+  readFileSync(
+    new URL(
+      "../node_modules/@cloudflare/computer/package.json",
+      import.meta.url
+    ),
+    "utf8"
+  )
+);
+
+if (tag !== version) {
+  console.error(
+    `Dockerfile: computerd is ${tag ?? "not pinned"} but @cloudflare/computer ` +
+      `is ${version} — they are released as a pair. Set the tag to ${version}.`
+  );
+  process.exit(1);
+}
+
+console.log(`✓ Dockerfile: computerd ${tag} matches @cloudflare/computer`);

@@ -26,9 +26,8 @@
 # `NODE_OPTIONS` below is the other half, and belongs here because it is an
 # image property.
 #
-# The tag on the `computerd` stage MUST track the `@cloudflare/computer` version
-# in package.json. The library running in the Worker speaks capnweb to the
-# daemon baked in here; they are released as a pair.
+# The `computerd` tag is paired with `@cloudflare/computer`;
+# `scripts/verify-container-env.mjs` holds it to the installed version.
 #
 # Add to this file deliberately. Every layer is image size, image size is
 # container cold start, and cold start is already the slow part of a round.
@@ -36,7 +35,7 @@
 # A single layer over `scratch` holding one file: the 126 MB SEA binary at
 # /usr/local/bin/computerd. Nothing else is in this image, so it is a staging
 # stage and never a base.
-FROM ghcr.io/cloudflare/computer-computerd-linux-x64:0.3.0 AS computerd
+FROM ghcr.io/cloudflare/computer-computerd-linux-x64:0.3.1 AS computerd
 
 # `debian:stable-slim`, matching the upstream reference recipe
 # (examples/container/Dockerfile) exactly — and the base is the load-bearing

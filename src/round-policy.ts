@@ -247,7 +247,7 @@ you need in it, and offer options when the possible answers are few.
 `;
 
 /**
- * The fourth ending, and the only one that costs nothing.
+ * The fourth ending: free to sit in, not free to check.
  *
  * Appended to {@link roundContract} for a round that may still wait — which is
  * every open round of an agent with a deferral allowance, until that allowance
@@ -266,15 +266,17 @@ export const waitGuidance = `
 ## When you are waiting on something
 
 \`${CHECK_BACK_TOOL_NAME}\` ends this round, waits, and starts the next one where this
-left off. It costs you nothing — no turn, none of your time — and nobody is told
-anything, so it is not an interruption for anyone.
+left off. The wait itself costs none of your time and nobody is told anything, so it
+is not an interruption for anyone. **Checking is not free**: the round that waits
+and every round that wakes to look are turns like any other, and they come out of
+the same budget as your work.
 
 Use it when carrying on means waiting for something you cannot hurry and can look
 at again: a review being written, a build running, a deploy landing. Say in "why"
 what you are waiting for and what you will check, because the round that wakes
 reads that and nothing else about why it stopped. Pick the wait from how fast the
-thing actually changes — a check that comes back identical spent a wait you could
-have spent on a longer one.
+thing actually changes — a check that comes back identical spent turns you would
+have kept by waiting longer.
 
 When you wake you will see a \`[check_back]\` line recording the wait. **Check the
 thing you named before deciding anything else**, and then decide again like any

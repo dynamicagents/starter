@@ -213,6 +213,14 @@ describe("a round that may wait", () => {
     expect(announcing).toContain("sentence saying you will check later");
   });
 
+  it("says the checks cost turns, because they do", () => {
+    // Core charges every round its turns, deferred ones included — only the time
+    // spent waiting is forgiven. Told a poll was free, a model polls at the floor
+    // and spends the working budget on checks that come back identical.
+    expect(waitGuidance).toContain("Checking is not free");
+    expect(waitGuidance).not.toMatch(/no turn/i);
+  });
+
   it("sends a wait on a person to the question instead", () => {
     // The two are easy to confuse and cost completely different things: a wait is
     // free and ends by itself, a question interrupts someone and may never be

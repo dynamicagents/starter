@@ -375,6 +375,13 @@ export class ClaudeCoderSubagent extends RecipeSubagentHost<Env> {
     // lets the drain live here rather than inside the workspace object.
     using workspace = await openWorkspace(stub);
     const runner = workspace.runtime as SessionRuntime;
+    // Before `#inflight` is armed, so a write that fails leaves no run behind
+    // for `abortRun` to wait on.
+    if (!cursor)
+      await this.ctx.storage.put(SESSION_KEY, {
+        name,
+        subtaskId: request.subtaskId
+      });
     // Resolved in the `finally` below, so {@link abortRun} can wait for this
     // drain to unwind rather than only for the signal to be delivered.
     let drained: () => void = () => {};
@@ -403,12 +410,6 @@ export class ClaudeCoderSubagent extends RecipeSubagentHost<Env> {
       onProgress: (event: ProgressEvent) => this.postProgress(event),
       onCheckpoint: (at: DrainCursor) => this.ctx.storage.put(CURSOR_KEY, at)
     };
-
-    if (!cursor)
-      await this.ctx.storage.put(SESSION_KEY, {
-        name,
-        subtaskId: request.subtaskId
-      });
 
     let outcome: DrainOutcome;
     try {
@@ -440,6 +441,8 @@ export class ClaudeCoderSubagent extends RecipeSubagentHost<Env> {
      * ended.
      */
     await this.ctx.storage.put(CURSOR_KEY, outcome.cursor);
+    // The session has exited, so there is nothing left for a teardown to stop.
+    if (outcome.done) await this.ctx.storage.delete(SESSION_KEY);
 
     // What the client said about the subscription bucket it is spending, if it
     // said anything. Best-effort — a session that did the work must not fail for
@@ -545,6 +548,8 @@ export class ClaudeCoderSubagent extends RecipeSubagentHost<Env> {
         inflight.subtaskId
       );
       await settleDrain(inflight.settled);
+      // Stopped, so the chunk's own teardown after this has nothing to stop.
+      await this.ctx.storage.delete(SESSION_KEY);
       return true;
     } catch (err) {
       // The signal never landed, so the process may still be running and this

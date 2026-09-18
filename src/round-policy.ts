@@ -168,6 +168,7 @@ export function finalRoundNote(
   reason: FinalRoundReason
 ): string {
   if (reason === "no-progress") return noProgressNote();
+  if (reason === "unresponsive-tools") return unresponsiveToolsNote();
   return `
 
 # Your budget is spent
@@ -180,6 +181,34 @@ or take any other action.
 Give them everything you did manage. If something is missing or failed, say so
 plainly in one short sentence — do not apologize at length, and do not describe
 budgets, limits, or this constraint.`;
+}
+
+/**
+ * The arm for a round whose own calls kept running past their time limit.
+ *
+ * Imposed mid-round, from the step after the call that tipped it, so the calls
+ * and their abandon messages are right above this. What it has to prevent is
+ * one more look through the same dead workspace — and a reply that says nothing
+ * about a write that was abandoned rather than refused, since one that reached
+ * the forge before its answer was lost has taken effect.
+ */
+function unresponsiveToolsNote(): string {
+  return `
+
+# Your tools have stopped answering
+
+Calls you made this round ran past their time limit and were abandoned: whatever
+they reach — the workspace, its container — is not responding, and another call
+would wait just as long. You have no tools left except one — call
+\`${FINAL_REPLY_TOOL_NAME}\` now. You cannot delegate, look anything up, or take any
+other action.
+
+Tell the user in a sentence or two that the workspace stopped responding and what
+you were doing when it did, then give them everything you finished before that.
+If an abandoned call was meant to change something outside — a push, a pull
+request — say it may have gone through, so they check before asking for it again.
+
+Do not say you will try again or keep working: nothing runs after this message.`;
 }
 
 /**

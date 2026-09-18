@@ -540,6 +540,49 @@ describe("waiting for an interrupted session to unwind", () => {
 });
 
 /**
+ * A branch that failed at its step, or a cancel that found no drain in hand,
+ * still has to stop the session: core calls `abortExecution` for both, and the
+ * session it started is what is left running.
+ */
+describe("stopping a session nothing is draining", () => {
+  it("does nothing for a facet that never started one", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    warn.mockClear();
+    const stub = freshSubagent("teardown-idle");
+
+    await runInDurableObject(stub, (instance: ClaudeCoderSubagent) =>
+      instance.abortExecution([])
+    );
+
+    expect(warn).not.toHaveBeenCalled();
+  });
+
+  it("reaches for the session it recorded, and never throws for it", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    warn.mockClear();
+    const stub = freshSubagent("teardown-recorded");
+
+    await runInDurableObject(
+      stub,
+      async (instance: ClaudeCoderSubagent, state) => {
+        await state.storage.put("claude-session", {
+          name: "teardown-recorded",
+          subtaskId: 1
+        });
+        // The suite reaches no container, so the stop fails exactly where a
+        // dead one would — and a teardown still has to finish.
+        await instance.abortExecution([]);
+      }
+    );
+
+    expect(warn).toHaveBeenCalledWith(
+      "[claude-coder] could not stop the session on teardown",
+      expect.anything()
+    );
+  });
+});
+
+/**
  * What reaches the session, and in what order.
  *
  * A Claude Code session cannot query the host — it has no tool that reaches it —

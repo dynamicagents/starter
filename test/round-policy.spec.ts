@@ -63,7 +63,11 @@ describe("finalRoundNote", () => {
     // module asserts that; it lives in the runtime's control-tool wiring. What
     // this text owns is telling the model so in plain words, rather than
     // leaving it to notice the tool is simply gone from its schema.
-    for (const reason of ["budget", "no-progress"] as const) {
+    for (const reason of [
+      "budget",
+      "no-progress",
+      "unresponsive-tools"
+    ] as const) {
       expect(finalRoundNote(limits, reason)).toContain("cannot delegate");
     }
   });
@@ -87,6 +91,16 @@ describe("finalRoundNote", () => {
     expect(note).not.toContain("20 turns");
     // What it says instead is the thing that is actually true.
     expect(note).toContain("failed the same way");
+    expect(note).toContain(FINAL_REPLY_TOOL_NAME);
+  });
+
+  it("tells a round whose tools stopped answering that, and not the budget", () => {
+    const note = finalRoundNote(limits, "unresponsive-tools");
+    expect(note).toContain("stopped answering");
+    expect(note).not.toContain("budget");
+    // A write abandoned rather than refused may have landed — a pull request
+    // opened by a call whose answer never came back.
+    expect(note).toContain("may have gone through");
     expect(note).toContain(FINAL_REPLY_TOOL_NAME);
   });
 

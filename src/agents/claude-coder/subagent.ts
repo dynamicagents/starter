@@ -47,6 +47,13 @@ import { subagentPlugins } from "./plugins";
 /** Where this facet keeps its place in the session's event stream. */
 const CURSOR_KEY = "claude-cursor";
 
+/**
+ * Which session this facet started, and in which workspace — what
+ * {@link ClaudeCoderSubagent.abortExecution} needs to stop it with no drain in
+ * hand.
+ */
+const SESSION_KEY = "claude-session";
+
 /** Bound on the report text, so one runaway session cannot fill the row. */
 const REPORT_MAX = 24_000;
 
@@ -368,6 +375,13 @@ export class ClaudeCoderSubagent extends RecipeSubagentHost<Env> {
     // lets the drain live here rather than inside the workspace object.
     using workspace = await openWorkspace(stub);
     const runner = workspace.runtime as SessionRuntime;
+    // Before `#inflight` is armed, so a write that fails leaves no run behind
+    // for `abortRun` to wait on.
+    if (!cursor)
+      await this.ctx.storage.put(SESSION_KEY, {
+        name,
+        subtaskId: request.subtaskId
+      });
     // Resolved in the `finally` below, so {@link abortRun} can wait for this
     // drain to unwind rather than only for the signal to be delivered.
     let drained: () => void = () => {};
@@ -427,6 +441,8 @@ export class ClaudeCoderSubagent extends RecipeSubagentHost<Env> {
      * ended.
      */
     await this.ctx.storage.put(CURSOR_KEY, outcome.cursor);
+    // The session has exited, so there is nothing left for a teardown to stop.
+    if (outcome.done) await this.ctx.storage.delete(SESSION_KEY);
 
     // What the client said about the subscription bucket it is spending, if it
     // said anything. Best-effort — a session that did the work must not fail for
@@ -532,6 +548,8 @@ export class ClaudeCoderSubagent extends RecipeSubagentHost<Env> {
         inflight.subtaskId
       );
       await settleDrain(inflight.settled);
+      // Stopped, so the chunk's own teardown after this has nothing to stop.
+      await this.ctx.storage.delete(SESSION_KEY);
       return true;
     } catch (err) {
       // The signal never landed, so the process may still be running and this
@@ -542,6 +560,40 @@ export class ClaudeCoderSubagent extends RecipeSubagentHost<Env> {
         err: String(err)
       });
       return await super.abortRun();
+    }
+  }
+
+  /**
+   * Stop the session a failed or canceled branch leaves behind.
+   *
+   * Core calls this for such a branch once {@link abortRun} has had its turn.
+   * That stops a drain this instance is holding; this reaches the session with
+   * none — a drain that lost its subscriber to a retry, or an isolate that went
+   * away — by the id it was started under. Left running, it goes on editing the
+   * checkout while a later round delegates the same work again. Best-effort,
+   * like every teardown core runs.
+   */
+  override async abortExecution(toolFamilies: string[]): Promise<void> {
+    await super.abortExecution(toolFamilies);
+    const session = await this.ctx.storage.get<{
+      name: string;
+      subtaskId: number;
+    }>(SESSION_KEY);
+    if (!session) return;
+    try {
+      const stub = this.env.CLAUDE_CODER_WORKSPACE.get(
+        this.env.CLAUDE_CODER_WORKSPACE.idFromName(session.name)
+      );
+      using workspace = await openWorkspace(stub);
+      await this.#session.stop(
+        workspace.runtime as SessionRuntime,
+        session.subtaskId
+      );
+    } catch (err) {
+      // A session that has already exited lands here too.
+      console.warn("[claude-coder] could not stop the session on teardown", {
+        err: String(err)
+      });
     }
   }
 

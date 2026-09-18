@@ -164,11 +164,11 @@
   // (`R2_ACCESS_KEY_ID` and friends) that a Workers R2 binding cannot supply —
   // the binding has no presign API. Every task logged `InvalidBackupConfigError`.
   //
-  // Nothing replaces it, because nothing needs to: the checkout now lives in the
-  // workspace object's own SQLite storage, which survives the container and
-  // costs no credential at all — dependencies included, since those sync like
-  // any other file. A snapshot was only ever worth what it saved rebuilding, and
-  // there is nothing left to rebuild. See `src/workspace/install-plan.ts`.
+  // Nothing replaces it for the checkout: it now lives in the workspace object's
+  // own SQLite storage, which survives the container and costs no credential at
+  // all. Dependencies live on the container's disk and are reinstalled by a new
+  // one; container directory snapshots, not a bucket, are the intended fix. See
+  // `src/workspace/install-plan.ts`.
 
   // `@dynamicagents/plugins/browser` — used by reactive and arc-player.
   // NOTE: requires a PAID Workers plan; Browser Rendering is not on the free

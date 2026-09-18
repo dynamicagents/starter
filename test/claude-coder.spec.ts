@@ -619,3 +619,19 @@ describe("the permission mode this deployment runs sessions under", () => {
     expect(CLAUDE_CODE_SESSION.permissionMode).toBe("bypassPermissions");
   });
 });
+
+/**
+ * Pinned for the same reason as the mode above, against the same kind of
+ * silence: a wrong value in either of these fails nothing and reports nothing,
+ * so only an assertion catches it. `CLAUDE_CODE_SESSION` in `src/config.ts`
+ * carries why each is what it is.
+ */
+describe("how hard this deployment asks a session to think", () => {
+  it("buys depth, because a half-finished checkout costs more than a turn", () => {
+    expect(CLAUDE_CODE_SESSION.effort).toBe("xhigh");
+  });
+
+  it("sets no turn ceiling, which would be inert rather than a limit", () => {
+    expect(CLAUDE_CODE_SESSION).not.toHaveProperty("maxTurns");
+  });
+});

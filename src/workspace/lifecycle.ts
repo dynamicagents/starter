@@ -29,8 +29,8 @@ export type WorkspaceNamespace = DurableObjectNamespace<WorkspaceObjectBase>;
  * otherwise be handed to the *next* task as its starting point.
  *
  * **Not by throwing the container away.** The checkout lives in a Durable Object
- * and survives the container, and so do its dependencies — so `destroy()` would
- * cost a container start and leave the abandoned edits exactly where they were.
+ * and survives the container, so `destroy()` would cost a container start and a
+ * reinstall, and leave the abandoned edits exactly where they were.
  * Exactly backwards. The reset happens in the checkout instead.
  *
  * **`-x` is the load-bearing flag, and `-e node_modules` is what makes it safe.**
@@ -39,7 +39,8 @@ export type WorkspaceNamespace = DurableObjectNamespace<WorkspaceObjectBase>;
  * survive into the next task while `git status` reports the tree as clean. That
  * is the very case this exists to prevent, arriving through the one door
  * `git status` does not show. `-x` closes it, and naming `node_modules` keeps
- * the single artefact that is expensive rather than merely regenerable.
+ * the single artefact that is expensive rather than merely regenerable — and a
+ * mount point, which `git clean` cannot remove.
  *
  * That trade only works because the workspace is a JavaScript one by
  * construction — `INSTALL_PLAN` resolves npm, pnpm or yarn and nothing else. An

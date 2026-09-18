@@ -41,9 +41,8 @@ const COMMAND_TIMEOUT_MS =
  * that domain and states it in its own capability text.
  */
 export const DEPENDENCY_TREE_NOTE =
-  "Recursive listings leave out `node_modules`, which is a dependency tree of " +
-  "tens of thousands of files rather than anything a report should turn on. " +
-  "Naming a path inside it reads it.";
+  "`node_modules` lives on the container's disk, not in the workspace, so " +
+  "these tools cannot see inside it. A subagent's shell can.";
 
 /**
  * The container settings every path into a workspace shares.
@@ -64,8 +63,8 @@ export const DEPENDENCY_TREE_NOTE =
  *
  * A caller's checkout **outlives the task**, which is why `repo_clone` fetches
  * and resets an existing one rather than assuming an empty directory. Its
- * dependencies outlive it too; see `./install-plan.ts` for what still makes an
- * install run.
+ * dependencies do not: they live on the container's disk, and a new container
+ * reinstalls — `@dynamicagents/plugins/computer` owns that.
  */
 export function workspaceContainer(
   binding: DurableObjectNamespace<WorkspaceObjectBase>,

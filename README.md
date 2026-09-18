@@ -292,20 +292,13 @@ checkout lives in its SQLite. `@cloudflare/computer` mounts that filesystem into
 the container over FUSE at `/workspace`, so commands run against the same tree the
 Worker reads over RPC — and the tree survives the container being replaced.
 
-`node_modules` survives with it. The sync carries the dependency tree like any
-other file, so a replacement container is handed one rather than rebuilding it,
-and an install runs on a checkout rather than on a container start. What the
-workspace still watches for is a checkout with no tree at all — one whose install
-never ran, or whose transfer never finished — and it arms an install before
-anything asks for one; see `src/workspace/install-plan.ts`.
+`node_modules` does not. It is a bind mount of the container's own disk, so an
+install runs at disk speed and never crosses the wire, and a new container
+reinstalls. The workspace arms that install as soon as a container comes up or a
+command is about to start one; see `src/workspace/install-plan.ts`. Container
+directory snapshots are the intended fix for the reinstall.
 
-The cost is on the other side: a tree is tens of thousands of files, and they
-cross the wire after the install writes them. That transfer is resumable and the
-workspace drives what a command's own bracket could not finish, which is why the
-container is held past its idle deadline while one is still moving.
-
-**There is deliberately no R2 bucket, and adding one buys nothing** — the checkout
-and its dependencies are already durable.
+**There is deliberately no R2 bucket** — the checkout is already durable.
 [`wrangler.jsonc`](wrangler.jsonc) records why the snapshot approach it replaces
 could not work.
 
@@ -317,9 +310,9 @@ Two consequences worth knowing before you debug something surprising:
   task's work and nobody could recover them once discarded.
 - **A cancelled task resets the working tree rather than destroying the
   container.** That is the opposite of what it used to do, and the reversal is the
-  point: the container _was_ the state, and now it holds none of it. Destroying
-  one costs a container start and leaves the abandoned edits exactly where they
-  were.
+  point: the container _was_ the state, and now it holds none of it but
+  dependencies. Destroying one costs a container start and a reinstall, and
+  leaves the abandoned edits exactly where they were.
 
 Delegated subtasks reach the parent's workspace through a `resolveRuntime` hook —
 `code()`'s for the coder, the `claude-code` plugin's for claude-coder. It runs on

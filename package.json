@@ -38,7 +38,7 @@
     "@dynamicagents/core": "git+https://github.com/dynamicagents/core.git#main",
     "@dynamicagents/plugins": "git+https://github.com/dynamicagents/plugins.git#main",
     "@platformatic/vfs": "^0.4.0",
-    "agents": "^0.23.0",
+    "agents": "^0.24.0",
     "ai": "^7.0.101",
     "drizzle-orm": "^0.45.2",
     "jose": "^6.2.12",

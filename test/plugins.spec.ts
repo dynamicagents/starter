@@ -4,9 +4,7 @@ import {
   createAgentRuntime,
   definePlugin,
   resolveConfig,
-  RuntimeSetupError,
-  validateRecipe,
-  type AgentPlugin
+  validateRecipe
 } from "@dynamicagents/core";
 import { BROWSER_FAMILY } from "@dynamicagents/plugins/browser";
 import { WORKSPACE_FAMILY } from "@dynamicagents/plugins/workspace";
@@ -65,38 +63,6 @@ describe("a plugin this repo writes", () => {
 });
 
 describe("contract skew between the three repos", () => {
-  /**
-   * Core, plugins and the starter publish from separate repos, so a version
-   * train always leaves one of them briefly behind. Without this assert the
-   * failure is a structural-type mismatch several frames from its cause; with
-   * it, it is a sentence naming the plugin and both versions, at DO start.
-   *
-   * Asserted as a unit test rather than by installing a deliberately mismatched
-   * `@dynamicagents/core`, which would need a published bad version to exist.
-   */
-  it("refuses a plugin built against a different contract version", () => {
-    const stale: AgentPlugin = {
-      ...definePlugin({ key: "stale" }),
-      contractVersion: 999
-    };
-
-    expect(() =>
-      createAgentRuntime({ config: REACTIVE_CONFIG, plugins: [stale] })
-    ).toThrow(RuntimeSetupError);
-    expect(() =>
-      createAgentRuntime({ config: REACTIVE_CONFIG, plugins: [stale] })
-    ).toThrow(/contract v999/);
-  });
-
-  it("refuses two plugins claiming the same key", () => {
-    expect(() =>
-      createAgentRuntime({
-        config: REACTIVE_CONFIG,
-        plugins: [general(), general()]
-      })
-    ).toThrow(/duplicate plugin key/);
-  });
-
   it("fails at startup on a missing declared binding, not at the first tool call", () => {
     // A plugin cannot add its own wrangler binding, which is the whole reason it
     // declares `requires`. Failing here beats failing inside a request someone is

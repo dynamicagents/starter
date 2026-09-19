@@ -72,15 +72,13 @@ export interface ActiveRepo {
    * an entry that goes missing only means that workspace falls back to its own
    * alarm.
    *
-   * This used to claim a stale entry was free, on the grounds that it "pokes an
-   * already-empty object and is told there is nothing to do". That was wrong in
-   * both halves: a reclaimed workspace has had its storage deleted, so
-   * `lastUsedAt` reads as `0`, which is maximally idle — it was told it had
-   * reclaimed something, every week, forever, logging a false line and
-   * recreating storage to empty it again. `reclaimIfIdle` now reports nothing to
-   * do when there is nothing there, and {@link forget} keeps this list
-   * proportional to the workspaces that actually exist. Both, because they fix
-   * different halves: one stops the lie, the other stops the growth.
+   * A stale entry is not free, though it looks it. A reclaimed workspace has had
+   * its storage deleted, so `lastUsedAt` reads as `0` — maximally idle — and a
+   * sweep that trusted that would report a reclaim it never made, every week,
+   * forever, recreating storage to empty it again. `reclaimIfIdle` reports
+   * nothing to do when there is nothing there, and {@link forget} keeps this
+   * list proportional to the workspaces that actually exist: one stops the false
+   * report, the other stops the growth.
    */
   seen(): string[];
   /**

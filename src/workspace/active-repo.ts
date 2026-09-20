@@ -76,18 +76,22 @@ export interface ActiveRepo {
    * its storage deleted, so `lastUsedAt` reads as `0` — maximally idle — and a
    * sweep that trusted that would report a reclaim it never made, every week,
    * forever, recreating storage to empty it again. `reclaimIfIdle` reports
-   * nothing to do when there is nothing there, and {@link forget} keeps this
-   * list proportional to the workspaces that actually exist: one stops the false
-   * report, the other stops the growth.
+   * nothing to do when there is nothing there, which stops the false report, and
+   * {@link forget} trims the list — but only for the workspaces a sweep reclaimed
+   * itself, so growth is slowed rather than stopped.
    */
   seen(): string[];
   /**
    * Drop a repository from the candidate list.
    *
-   * Called when its workspace has been reclaimed, so the weekly sweep stops
-   * paying for a workspace that no longer exists. `set()` puts it back on the
-   * next clone, which is the whole reason this is safe to do: forgetting a
-   * candidate loses nothing that the next checkout does not restore.
+   * Called only when the sweep's own `reclaimIfIdle` answered `reclaimed: true`,
+   * so it trims the workspaces that sweep retired and no others. A workspace its
+   * own alarm already removed answers nothing-to-do, so its candidate is never
+   * forgotten and costs an RPC on every future weekly check.
+   *
+   * `set()` puts an entry back on the next clone, which is the whole reason
+   * dropping one is safe: forgetting a candidate loses nothing that the next
+   * checkout does not restore.
    */
   forget(repo: string): void;
 }

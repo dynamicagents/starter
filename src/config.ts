@@ -1,8 +1,10 @@
 import type { CoreConfigOverrides } from "@dynamicagents/core";
-// Type-only, so nothing reaches a bundle. They are what makes a mistyped or
-// renamed tuning field fail at `tsc`: a key the plugin does not declare is an
-// error written inline and no error at all through a spread, so the `satisfies`
-// on each constant below is the only thing that catches it.
+// Type-only, so nothing reaches a bundle. They are what make a mistyped or
+// renamed tuning field fail at `tsc`: a key a plugin type does not declare is an
+// error written inline and no error at all through a spread, so every constant
+// below has to be checked against one — the agent configs by an explicit
+// `CoreConfigOverrides` annotation, the plugin tuning by `as const satisfies`,
+// which checks the shape while keeping the literal types.
 import type { ClaudeCodeConfig } from "@dynamicagents/plugins/claude-code";
 import type { RecallTuning } from "@dynamicagents/plugins/recall";
 import type { TriageTuning } from "@dynamicagents/plugins/triage";

@@ -44,12 +44,12 @@ import {
  * **DO** consults every installed gate through `runtime.shouldHandleTurn({
  * history })` before this function is ever called. So the fast path — the channel
  * noise the agent is not part of — never reaches the loop at all, and this file
- * does not know that triage exists.
+ * never invokes that gate.
  *
- * The *late* decline below is a separate moment: the agent looks something up,
- * concludes there is nothing worth adding, and calls `no_reply`. The gate judges
- * the message, the tool judges what looking into it turned up, which is why both
- * exist.
+ * The *late* decline below is a separate moment, and is what the triage import
+ * above is for: the agent looks something up, concludes there is nothing worth
+ * adding, and calls `no_reply`. The gate judges the message, the tool judges what
+ * looking into it turned up, which is why both exist.
  */
 
 export const TRANSIENT_REPLY =

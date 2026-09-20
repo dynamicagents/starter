@@ -328,16 +328,17 @@
 
       // claude-coder only, and a credential pool rather than a secret — see
       // `.env.example`, which is where an operator sets them, for how rotation
-      // works and why neither ever enters the container.
+      // works and why none of them ever enters the container.
       //
-      // **Both are listed because this deployment has two.** `secrets.required`
-      // drives type generation and `wrangler dev`'s missing-secret warnings, so
-      // a name left here and unset is typed as a definite string that is
-      // undefined at runtime and warns on every local run. To run on one
-      // credential, drop `_2` here *and* in
-      // `src/agents/claude-coder/claude-code.ts` — one change, two places.
+      // **Every credential this deployment has is listed here.**
+      // `secrets.required` drives type generation and `wrangler dev`'s
+      // missing-secret warnings, so a name left here and unset is typed as a
+      // definite string that is undefined at runtime and warns on every local
+      // run. Adding or dropping one is the same edit in this list *and* in the
+      // pool in `src/agents/claude-coder/claude-code.ts`.
       "CLAUDE_CODE_OAUTH_TOKEN_1",
-      "CLAUDE_CODE_OAUTH_TOKEN_2"
+      "CLAUDE_CODE_OAUTH_TOKEN_2",
+      "CLAUDE_CODE_OAUTH_TOKEN_3"
     ]
   }
 }

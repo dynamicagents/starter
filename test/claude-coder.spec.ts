@@ -26,6 +26,7 @@ import {
   claudeCodeConfig,
   GH_TOKEN_PLACEHOLDER
 } from "@/agents/claude-coder/claude-code";
+import { gitIdentity } from "@/workspace/git-identity";
 
 /**
  * The claude-coder's wiring, pinned.
@@ -741,6 +742,23 @@ describe("claude-coder's credential pool", () => {
       "sk-ant-oat01-one",
       "sk-ant-oat01-three"
     ]);
+  });
+});
+
+/**
+ * Who a session's commits belong to.
+ *
+ * Why the session needs an identity of its own is beside the option, in
+ * `@/agents/claude-coder/claude-code.ts`. What only this side can get wrong is
+ * answering it with a *different* identity from the workspace object's, which
+ * is the disagreement `@/workspace/git-identity` exists to prevent — so this
+ * pins that they are one answer, not any particular name.
+ */
+describe("who a session commits as", () => {
+  it("hands the session the deployment's git identity", () => {
+    const config = claudeCodeConfig(env as never, () => "ws");
+
+    expect(config.author).toEqual(gitIdentity(env as never));
   });
 });
 

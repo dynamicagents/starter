@@ -707,6 +707,44 @@ describe("how hard this deployment asks a session to think", () => {
 });
 
 /**
+ * What this agent hands the pool — not what the pool does with it.
+ *
+ * The rotation itself is specified in `@dynamicagents/plugins` against fakes.
+ * What only this side can get wrong is the array: the order, which is priority
+ * because the egress gateway spends entry 0 first, and the empty entry an unset
+ * secret produces, which would otherwise be sent as a bare `Bearer `.
+ */
+describe("claude-coder's credential pool", () => {
+  it("hands over every configured credential, in declared order", () => {
+    const config = claudeCodeConfig(env as never, () => "ws");
+
+    // A misspelled binding reads as `undefined` and is filtered out, so a
+    // missing entry fails here rather than at the first 429.
+    expect(config.credentials()).toEqual([
+      env.CLAUDE_CODE_OAUTH_TOKEN_1,
+      env.CLAUDE_CODE_OAUTH_TOKEN_2,
+      env.CLAUDE_CODE_OAUTH_TOKEN_3
+    ]);
+  });
+
+  it("drops an unset entry instead of offering an empty credential", () => {
+    const config = claudeCodeConfig(
+      {
+        CLAUDE_CODE_OAUTH_TOKEN_1: "sk-ant-oat01-one",
+        CLAUDE_CODE_OAUTH_TOKEN_2: "",
+        CLAUDE_CODE_OAUTH_TOKEN_3: "sk-ant-oat01-three"
+      } as never,
+      () => "ws"
+    );
+
+    expect(config.credentials()).toEqual([
+      "sk-ant-oat01-one",
+      "sk-ant-oat01-three"
+    ]);
+  });
+});
+
+/**
  * Where `gh`'s placeholder token lives, which is the whole of its safety.
  *
  * It is only harmless behind the sessions' egress gateway, which strips it. In

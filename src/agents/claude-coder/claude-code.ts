@@ -55,9 +55,11 @@ export function claudeCodeConfig(
 ): ClaudeCodeConfig {
   return {
     credentials: () =>
-      [env.CLAUDE_CODE_OAUTH_TOKEN_1, env.CLAUDE_CODE_OAUTH_TOKEN_2].filter(
-        Boolean
-      ),
+      [
+        env.CLAUDE_CODE_OAUTH_TOKEN_1,
+        env.CLAUDE_CODE_OAUTH_TOKEN_2,
+        env.CLAUDE_CODE_OAUTH_TOKEN_3
+      ].filter(Boolean),
     workspaceName,
     ...CLAUDE_CODE_SESSION,
     env: { GH_TOKEN: GH_TOKEN_PLACEHOLDER }

@@ -49,11 +49,13 @@ process.env.GITHUB_NAME ??= "";
 process.env.GITHUB_EMAIL ??= "";
 // claude-coder's credential pool. Never real, and nothing in the suite reaches
 // Anthropic — the egress gateway is tested against a stubbed `fetch` in
-// `@dynamicagents/plugins`, and no spec here starts a session. Two of them because
-// the pool is two entries in `wrangler.jsonc`'s `secrets.required`, and the pool
-// only ever leaves this Worker through the egress gateway.
+// `@dynamicagents/plugins`, and no spec here starts a session. One line per
+// entry in `wrangler.jsonc`'s `secrets.required`, since that list is what the
+// generated `Env` types as a definite string, and the pool only ever leaves
+// this Worker through the egress gateway.
 process.env.CLAUDE_CODE_OAUTH_TOKEN_1 ??= "sk-ant-oat01-test-1";
 process.env.CLAUDE_CODE_OAUTH_TOKEN_2 ??= "sk-ant-oat01-test-2";
+process.env.CLAUDE_CODE_OAUTH_TOKEN_3 ??= "sk-ant-oat01-test-3";
 
 /**
  * The recorder, and the reason the suite cannot reach the network by accident.

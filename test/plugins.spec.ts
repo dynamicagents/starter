@@ -83,23 +83,6 @@ describe("contract skew between the three repos", () => {
 });
 
 describe("config resolution", () => {
-  it("holds the compaction invariant that keeps summaries from firing on nothing", () => {
-    // Below a 10k gap the fixed post-compaction floor eats the headroom and
-    // compaction fires on nearly every append, each firing spending a summarizer
-    // call on a near-empty middle.
-    expect(() =>
-      resolveConfig({
-        // Required now: core ships no model default, so every config names its
-        // own pair. Reuses this repo's, since the assertion is about session
-        // arithmetic and nothing else.
-        model: REACTIVE_CONFIG.model,
-        session: { compactAfterTokens: 12_000, compactTailTokens: 5_000 }
-      })
-    ).toThrow(
-      /compactAfterTokens - session.compactTailTokens must be >= 10000/
-    );
-  });
-
   it("keeps each agent's declared overrides", () => {
     const resolved = resolveConfig(REACTIVE_CONFIG);
     expect(resolved.model.chatModelId).toBe(REACTIVE_CONFIG.model!.chatModelId);

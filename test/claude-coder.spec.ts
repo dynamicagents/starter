@@ -26,6 +26,7 @@ import {
   claudeCodeConfig,
   GH_TOKEN_PLACEHOLDER
 } from "@/agents/claude-coder/claude-code";
+import { gitIdentity } from "@/workspace/git-identity";
 
 /**
  * The claude-coder's wiring, pinned.
@@ -741,6 +742,29 @@ describe("claude-coder's credential pool", () => {
       "sk-ant-oat01-one",
       "sk-ant-oat01-three"
     ]);
+  });
+});
+
+/**
+ * Who a session's commits belong to.
+ *
+ * The session has a shell and a checkout, so it commits — and it amends and
+ * rebases, which take their committer from config rather than from whatever
+ * made the original commit. `repo_commit` cannot speak for any of that, and the
+ * repositories a session works in are not all ones `/repo` configured: a
+ * superproject's submodules have configs of their own, and nothing wrote to
+ * them.
+ *
+ * What only this side can get wrong is answering with a *different* identity
+ * from the workspace object's, which is the disagreement `@/workspace/
+ * git-identity` exists to prevent — so this asserts the two are the same
+ * answer rather than any particular name.
+ */
+describe("who a session commits as", () => {
+  it("hands the session the deployment's git identity", () => {
+    const config = claudeCodeConfig(env as never, () => "ws");
+
+    expect(config.author).toEqual(gitIdentity(env as never));
   });
 });
 

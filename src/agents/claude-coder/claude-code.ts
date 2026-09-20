@@ -1,5 +1,6 @@
 import type { ClaudeCodeConfig } from "@dynamicagents/plugins/claude-code";
 import { CLAUDE_CODE_SESSION } from "@/config";
+import { gitIdentity } from "@/workspace/git-identity";
 
 /** Where the credential pool's `{ index → resetAt }` map lives in DO storage. */
 export const CREDENTIALS_KEY = "claude-credentials";
@@ -62,7 +63,19 @@ export function claudeCodeConfig(
       ].filter(Boolean),
     workspaceName,
     ...CLAUDE_CODE_SESSION,
-    env: { GH_TOKEN: GH_TOKEN_PLACEHOLDER }
+    env: { GH_TOKEN: GH_TOKEN_PLACEHOLDER },
+    /**
+     * The same identity the workspace and the repo plugin answer with — see
+     * `@/workspace/git-identity`.
+     *
+     * The session commits in repositories neither of those configured: the
+     * submodules of a superproject it cloned, anything it initialises for
+     * itself. It also amends and rebases in the checkout that *is* configured,
+     * and those take the committer from config rather than from the tool that
+     * made the original commit. The plugin turns this into the session's git
+     * environment, which every git it starts inherits.
+     */
+    author: gitIdentity(env)
     /**
      * `restrictToHosts` is deliberately **unset**, which means unrestricted.
      *

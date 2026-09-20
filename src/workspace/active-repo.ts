@@ -72,24 +72,26 @@ export interface ActiveRepo {
    * an entry that goes missing only means that workspace falls back to its own
    * alarm.
    *
-   * This used to claim a stale entry was free, on the grounds that it "pokes an
-   * already-empty object and is told there is nothing to do". That was wrong in
-   * both halves: a reclaimed workspace has had its storage deleted, so
-   * `lastUsedAt` reads as `0`, which is maximally idle — it was told it had
-   * reclaimed something, every week, forever, logging a false line and
-   * recreating storage to empty it again. `reclaimIfIdle` now reports nothing to
-   * do when there is nothing there, and {@link forget} keeps this list
-   * proportional to the workspaces that actually exist. Both, because they fix
-   * different halves: one stops the lie, the other stops the growth.
+   * A stale entry is not free, though it looks it. A reclaimed workspace has had
+   * its storage deleted, so `lastUsedAt` reads as `0` — maximally idle — and a
+   * sweep that trusted that would report a reclaim it never made, every week,
+   * forever, recreating storage to empty it again. `reclaimIfIdle` reports
+   * nothing to do when there is nothing there, which stops the false report, and
+   * {@link forget} trims the list — but only for the workspaces a sweep reclaimed
+   * itself, so growth is slowed rather than stopped.
    */
   seen(): string[];
   /**
    * Drop a repository from the candidate list.
    *
-   * Called when its workspace has been reclaimed, so the weekly sweep stops
-   * paying for a workspace that no longer exists. `set()` puts it back on the
-   * next clone, which is the whole reason this is safe to do: forgetting a
-   * candidate loses nothing that the next checkout does not restore.
+   * Called only when the sweep's own `reclaimIfIdle` answered `reclaimed: true`,
+   * so it trims the workspaces that sweep retired and no others. A workspace its
+   * own alarm already removed answers nothing-to-do, so its candidate is never
+   * forgotten and costs an RPC on every future weekly check.
+   *
+   * `set()` puts an entry back on the next clone, which is the whole reason
+   * dropping one is safe: forgetting a candidate loses nothing that the next
+   * checkout does not restore.
    */
   forget(repo: string): void;
 }

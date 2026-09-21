@@ -124,7 +124,30 @@ export function parseGitmodules(out: string): Submodule[] {
 }
 
 /**
- * The submodules a checkout declares — one level, never theirs.
+ * Refuse a submodule path that could leave the checkout or split a line.
+ *
+ * `.gitmodules` is repository content, and its paths become clone targets, the
+ * cwd of git commands, and rows of the tab- and newline-separated lists the
+ * branch script reads. A control character would turn one path into two rows —
+ * `safe\n../outside` runs git outside the checkout — so each is refused here,
+ * before any of those uses, along with every segment that walks out.
+ */
+function assertSubmodulePath(path: string): void {
+  if (
+    // eslint-disable-next-line no-control-regex
+    /[\u0000-\u001f\u007f]/.test(path) ||
+    path.startsWith("/") ||
+    path.split("/").some((part) => part === "" || part === "." || part === "..")
+  ) {
+    throw new Error(
+      `claude-coder: refusing a submodule path that could leave the checkout: ${JSON.stringify(path)}`
+    );
+  }
+}
+
+/**
+ * The submodules a checkout declares — one level, never theirs — each with a
+ * path that stays inside it.
  *
  * Nested submodules are left alone: each level would be another clone in front
  * of the session, and the ones this workspace has met have none.
@@ -144,7 +167,9 @@ export async function readSubmodules(
       `claude-coder: could not read .gitmodules in ${dir}: ${listed.stderr.trim()}`
     );
   }
-  return parseGitmodules(listed.stdout);
+  const submodules = parseGitmodules(listed.stdout);
+  for (const sub of submodules) assertSubmodulePath(sub.path);
+  return submodules;
 }
 
 /**
@@ -172,15 +197,6 @@ export function submoduleCloneUrl(sub: Submodule, parentUrl: string): string {
       `claude-coder: the submodule at ${sub.path} is cloned from ${sub.url}, and ` +
         `a writing subtask clones only over https from ${host}, where the ` +
         "parent's checkout came from"
-    );
-  }
-  // Repository content names this path too, and it becomes a clone target.
-  if (
-    sub.path.startsWith("/") ||
-    sub.path.split("/").some((part) => part === ".." || part === "")
-  ) {
-    throw new Error(
-      `claude-coder: refusing a submodule path that leaves the checkout: ${sub.path}`
     );
   }
   return url;

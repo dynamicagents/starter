@@ -3,6 +3,7 @@ import { workspaceName } from "@dynamicagents/plugins/computer";
 import {
   isSubtaskRepo,
   parseGitmodules,
+  readSubmodules,
   submoduleCloneUrl,
   subtaskBranch,
   subtaskRepo
@@ -472,13 +473,40 @@ describe("where a submodule is cloned from", () => {
       )
     ).toThrow(/only over https/);
   });
+});
 
-  it("refuses a path that leaves the checkout", () => {
-    expect(() =>
-      submoduleCloneUrl(
-        { path: "../elsewhere", url: "https://github.com/acme/core" },
-        parent
-      )
-    ).toThrow(/leaves the checkout/);
+/**
+ * A `.gitmodules` path becomes a clone target, a cwd, and a row of the lists the
+ * branch script reads — so it is refused before any of those, not at each.
+ */
+describe("which submodule paths are accepted", () => {
+  const read = (path: string) =>
+    readSubmodules(
+      async () => ({
+        success: true,
+        stdout: gitmodules({
+          "submodule.x.path": path,
+          "submodule.x.url": "https://github.com/acme/x"
+        }),
+        stderr: ""
+      }),
+      "/workspace/super"
+    );
+
+  it("accepts an ordinary nested path", async () => {
+    await expect(read("libs/core")).resolves.toEqual([
+      { path: "libs/core", url: "https://github.com/acme/x" }
+    ]);
+  });
+
+  it.each([
+    ["one that walks out", "../elsewhere"],
+    ["an absolute one", "/etc"],
+    // One path read as two rows, the second outside the checkout.
+    ["one with a newline", "safe\n../outside"],
+    ["one with a tab", "safe\tpinned"],
+    ["one with an empty segment", "a//b"]
+  ])("refuses %s", async (_label, path) => {
+    await expect(read(path)).rejects.toThrow(/could leave the checkout/);
   });
 });

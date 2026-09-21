@@ -775,24 +775,12 @@ export class ClaudeCoderSubagent extends RecipeSubagentHost<Env> {
   }
 
   /**
-   * Turn a finished drain into a terminal result.
-   *
-   * **The text can never be empty.** `persistResult` converts an empty result
-   * into a failure, so a session that exits 0 having said nothing would be
-   * recorded as a failed subtask — and so would one whose `result` event never
-   * arrived because the process died first. Both are handled below rather than
-   * left to produce a misleading row.
-   *
-   * The footer under both is {@link sessionFooter}, which carries its own
-   * reasoning — including why a denial count belongs beside the cost.
-   */
-  /**
-   * The submodules this subtask's clone carries, for the brief and the push.
+   * The submodules this subtask's clone carries, for the brief.
    *
    * Read from the clone rather than carried from `resolve`, which ran on the
    * parent: the two never share memory, and the checkout is what was cloned.
-   * Unreadable reads as none — the brief loses a paragraph, and the push still
-   * reaches the superproject.
+   * Unreadable reads as none — the brief loses a paragraph. `#publish` reads the
+   * same list strictly, because there a submodule it cannot see is work lost.
    */
   async #submodules(workspace: string, dir: string): Promise<string[]> {
     try {
@@ -831,14 +819,24 @@ export class ClaudeCoderSubagent extends RecipeSubagentHost<Env> {
       if (!root) return { ok: false, why: "the workspace had no checkout" };
 
       const exec = computerExec(container(this.env, () => workspace));
-      const dirs = [
-        root,
-        ...(await this.#submodules(workspace, root)).map(
-          (path) => `${root}/${path}`
-        )
-      ];
-
       const repos: RepoPush[] = [];
+
+      // Read strictly, unlike the brief's copy: a submodule the push cannot see
+      // is committed work reclaimed with the workspace, so an unreadable list is
+      // reported as a failure beside whatever the superproject publishes.
+      let paths: string[] = [];
+      try {
+        paths = (await readSubmodules(exec, root)).map((sub) => sub.path);
+      } catch (err) {
+        repos.push({
+          dir: root,
+          name: "its submodules",
+          ok: false,
+          why: String(err)
+        });
+      }
+      const dirs = [root, ...paths.map((path) => `${root}/${path}`)];
+
       for (const dir of dirs) {
         const origin = await exec("git remote get-url origin", { cwd: dir });
         const url = origin.stdout.trim();
@@ -888,6 +886,18 @@ export class ClaudeCoderSubagent extends RecipeSubagentHost<Env> {
     }
   }
 
+  /**
+   * Turn a finished drain into a terminal result.
+   *
+   * **The text can never be empty.** `persistResult` converts an empty result
+   * into a failure, so a session that exits 0 having said nothing would be
+   * recorded as a failed subtask — and so would one whose `result` event never
+   * arrived because the process died first. Both are handled below rather than
+   * left to produce a misleading row.
+   *
+   * The footer under both is {@link sessionFooter}, which carries its own
+   * reasoning — including why a denial count belongs beside the cost.
+   */
   #report(
     outcome: Extract<DrainOutcome, { done: true }>,
     published?: PushOutcome

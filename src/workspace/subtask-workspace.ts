@@ -78,6 +78,163 @@ function isRepoSelection(selected: string): boolean {
   return selected !== SCRATCH_REPO && !isSubtaskRepo(selected);
 }
 
+/** One submodule a writing subtask's clone carries, as `.gitmodules` declares it. */
+export interface Submodule {
+  path: string;
+  url: string;
+  /** Absent when `.gitmodules` names none: the superproject's pinned commit. */
+  branch?: string;
+}
+
+/** Enough of a shell in one checkout to read what it declares. */
+type Run = (
+  command: string,
+  options: { cwd: string; env?: Record<string, string> }
+) => Promise<{ success: boolean; stdout: string; stderr: string }>;
+
+/**
+ * Parse `git config --null --get-regexp` over `.gitmodules`.
+ *
+ * NUL-separated because a value may hold anything but NUL, and the subsection —
+ * the submodule's name — may hold dots, which is why the key is matched from its
+ * end. An entry without both a path and a url is not one git could check out
+ * either, and is dropped.
+ */
+export function parseGitmodules(out: string): Submodule[] {
+  const byName = new Map<string, Partial<Submodule>>();
+  for (const entry of out.split("\0")) {
+    const newline = entry.indexOf("\n");
+    if (newline < 0) continue;
+    const match = /^submodule\.(.+)\.(path|url|branch)$/.exec(
+      entry.slice(0, newline)
+    );
+    if (!match) continue;
+    const [, name, field] = match as unknown as [
+      string,
+      string,
+      keyof Submodule
+    ];
+    const sub = byName.get(name) ?? {};
+    sub[field] = entry.slice(newline + 1);
+    byName.set(name, sub);
+  }
+  return [...byName.values()].filter((sub): sub is Submodule =>
+    Boolean(sub.path && sub.url)
+  );
+}
+
+/**
+ * The submodules a checkout declares — one level, never theirs.
+ *
+ * Nested submodules are left alone: each level would be another clone in front
+ * of the session, and the ones this workspace has met have none.
+ */
+export async function readSubmodules(
+  run: Run,
+  dir: string
+): Promise<Submodule[]> {
+  const listed = await run(
+    "[ ! -f .gitmodules ] || git config -f .gitmodules --null --get-regexp '^submodule\\..*\\.(path|url|branch)$'",
+    { cwd: dir }
+  );
+  // `--get-regexp` exits 1 on no match, which is a file with nothing in it —
+  // not a failure. Anything that said why is one.
+  if (!listed.success && listed.stderr.trim()) {
+    throw new Error(
+      `claude-coder: could not read .gitmodules in ${dir}: ${listed.stderr.trim()}`
+    );
+  }
+  return parseGitmodules(listed.stdout);
+}
+
+/**
+ * Where to clone one submodule from, or why not.
+ *
+ * A relative url is resolved the way git resolves it, against the superproject's
+ * own. An absolute one must be https on the host the parent's checkout came from:
+ * that host has passed `/repo`'s allowlist, and a `.gitmodules` is repository
+ * content — a url in it has passed nothing.
+ */
+export function submoduleCloneUrl(sub: Submodule, parentUrl: string): string {
+  const url =
+    sub.url.startsWith("./") || sub.url.startsWith("../")
+      ? new URL(sub.url, parentUrl.replace(/\/*$/, "/")).href
+      : sub.url;
+  const host = new URL(parentUrl).hostname;
+  let parsed: URL | undefined;
+  try {
+    parsed = new URL(url);
+  } catch {
+    parsed = undefined;
+  }
+  if (parsed?.protocol !== "https:" || parsed.hostname !== host) {
+    throw new Error(
+      `claude-coder: the submodule at ${sub.path} is cloned from ${sub.url}, and ` +
+        `a writing subtask clones only over https from ${host}, where the ` +
+        "parent's checkout came from"
+    );
+  }
+  // Repository content names this path too, and it becomes a clone target.
+  if (
+    sub.path.startsWith("/") ||
+    sub.path.split("/").some((part) => part === ".." || part === "")
+  ) {
+    throw new Error(
+      `claude-coder: refusing a submodule path that leaves the checkout: ${sub.path}`
+    );
+  }
+  return url;
+}
+
+/**
+ * Put the superproject and each submodule on the subtask's branch.
+ *
+ * Switch to it if a previous attempt got this far, create it otherwise.
+ * `checkout -B` would do both in one word and is wrong: it resets the branch to
+ * HEAD, discarding commits a retried attempt had already made. A submodule with no
+ * declared branch is first put on the commit the superproject pins, which is only
+ * reached when the branch does not exist yet — so a retry never moves it.
+ *
+ * Paths reach the script as one value per line, never as command text.
+ */
+const START_BRANCH = `while IFS="$(printf '\\t')" read -r path pinned; do
+  [ -n "$path" ] || continue
+  if ! git -C "$path" checkout --quiet "$SUBTASK_BRANCH" 2>/dev/null; then
+    if [ -n "$pinned" ]; then
+      git -C "$path" checkout --quiet --detach "$(git rev-parse "HEAD:$path")" || exit 1
+    fi
+    git -C "$path" checkout --quiet -b "$SUBTASK_BRANCH" || exit 1
+  fi
+done <<EOF
+$SUBTASK_REPOS
+EOF`;
+
+/** Which submodules a previous attempt already cloned. */
+async function populated(
+  run: Run,
+  dir: string,
+  submodules: readonly Submodule[]
+): Promise<Set<string>> {
+  if (submodules.length === 0) return new Set();
+  const found = await run(
+    `while IFS= read -r p; do
+  if [ -n "$p" ] && [ -e "$p/.git" ]; then printf '%s\\n' "$p"; fi
+done <<EOF
+$SUBMODULE_PATHS
+EOF`,
+    {
+      cwd: dir,
+      env: { SUBMODULE_PATHS: submodules.map((sub) => sub.path).join("\n") }
+    }
+  );
+  if (!found.success) {
+    throw new Error(
+      `claude-coder: could not read which submodules are cloned: ${found.stderr || found.stdout}`
+    );
+  }
+  return new Set(found.stdout.split("\n").filter(Boolean));
+}
+
 export interface SubtaskWorkspaces {
   /** Route and prepare, answering the workspace name. */
   resolve(ctx: { taskId: string; subtaskId: number }): Promise<string>;
@@ -148,14 +305,18 @@ export function subtaskWorkspaces(config: {
       const already = await stub.checkoutDir();
 
       // What the parent cloned, which is the only honest thing to clone: the url
-      // has already been through `/repo`'s host allowlist. A subtask delegated
-      // before the parent cloned anything has nothing to work in, and saying so
-      // beats cloning a guess.
+      // has already been through `/repo`'s host allowlist. Saying there is none
+      // beats cloning a guess — and the sentence names the refusal that leaves a
+      // checkout on disk unrecorded, because "nothing was cloned" is what an
+      // agent looking at that checkout will not believe.
       const checkout = config.active.checkout();
       if (!checkout) {
         throw new Error(
-          "claude-coder: a writing subtask was delegated before any repository " +
-            "was cloned, so there is nothing for it to work in"
+          "claude-coder: there is no recorded checkout for a writing subtask to " +
+            "clone. `repo_clone` records one only when it leaves a clean tree on " +
+            "a named branch — if its last answer was a refusal (uncommitted " +
+            "changes, another repository at that path), deal with that and run " +
+            "`repo_clone` again before delegating"
         );
       }
 
@@ -179,6 +340,43 @@ export function subtaskWorkspaces(config: {
         }
       }
 
+      /**
+       * Every submodule, cloned the same way and from the same host.
+       *
+       * The clone above is the superproject alone — isomorphic-git leaves an empty
+       * directory at each gitlink — so a session asked to change a submodule would
+       * find nothing there. Each is cloned on its declared branch, which is what
+       * the superproject's own sync would check out; one that declares none is
+       * put on the commit the superproject pins, below.
+       */
+      const submodules = await readSubmodules(
+        (command, options) => config.exec(command, options, name),
+        checkout.dir
+      );
+      const host = new URL(checkout.url).hostname;
+      const present = await populated(
+        (command, options) => config.exec(command, options, name),
+        checkout.dir,
+        submodules
+      );
+      for (const sub of submodules) {
+        const url = submoduleCloneUrl(sub, checkout.url);
+        if (present.has(sub.path)) continue;
+        // `.` means "the superproject's branch", in git's own reading of it.
+        const branch = sub.branch === "." ? checkout.branch : sub.branch;
+        const cloned = await stub.gitClone({
+          url,
+          dir: `${checkout.dir}/${sub.path}`,
+          allowedHosts: [host],
+          ...(branch ? { branch } : {})
+        });
+        if (!cloned.ok) {
+          throw new Error(
+            `claude-coder: could not clone the submodule at ${sub.path}: ${cloned.message}`
+          );
+        }
+      }
+
       const parentRepo = config.active.get();
       // Before the install and never inside it, for the reason `noteCheckout`
       // gives: an install is conditional where a checkout is not, so no install
@@ -197,7 +395,8 @@ export function subtaskWorkspaces(config: {
 
       /**
        * The branch the work will be pushed on, created **here** rather than asked
-       * of the session.
+       * of the session — in the superproject and in every submodule, since a
+       * commit lands in whichever repository the session changed.
        *
        * The parent fetches this name to review it and never learns one from the
        * subtask's report, so a session that named its own branch — or forgot to —
@@ -205,12 +404,20 @@ export function subtaskWorkspaces(config: {
        * starts, so every commit it makes lands on it without being told to.
        */
       const branch = subtaskBranch(ctx);
-      // Switch to it if a previous attempt got this far, create it otherwise.
-      // `checkout -B` would do both in one word and is wrong: it resets the
-      // branch to HEAD, discarding commits a retried attempt had already made.
       const checkedOut = await config.exec(
-        'git checkout "$SUBTASK_BRANCH" 2>/dev/null || git checkout -b "$SUBTASK_BRANCH"',
-        { cwd: checkout.dir, env: { SUBTASK_BRANCH: branch } },
+        START_BRANCH,
+        {
+          cwd: checkout.dir,
+          env: {
+            SUBTASK_BRANCH: branch,
+            SUBTASK_REPOS: [
+              ".\t",
+              ...submodules.map(
+                (sub) => `${sub.path}\t${sub.branch ? "" : "pinned"}`
+              )
+            ].join("\n")
+          }
+        },
         name
       );
       if (!checkedOut.success) {

@@ -78,6 +78,7 @@ describe("the main agent's tools", () => {
       "repo_clone",
       "repo_commit",
       "repo_diff",
+      "repo_fetch",
       // The ones that read and write the forge's own state, answering a review
       // included. They are the parent's for the same reason the rest of git is:
       // the subagent holds the shell and must not also speak for this agent in

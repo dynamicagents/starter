@@ -994,12 +994,20 @@ export class ClaudeCoderSubagent extends RecipeSubagentHost<Env> {
     return computerExec(container(this.env, () => workspace));
   }
 
-  /** Where each repository starts, for {@link #commits} to count from. */
+  /**
+   * Where each repository starts, for {@link #commits} to count from.
+   *
+   * Once per subtask. A retried first chunk can arrive after the session it
+   * started has committed — the retry attaches to that session rather than
+   * starting another — and reading HEAD again then would move the baseline past
+   * the commits it exists to count.
+   */
   async #recordStarts(
     workspace: string,
     dir: string,
     paths: readonly string[]
   ): Promise<void> {
+    if (await this.ctx.storage.get(REPOS_KEY)) return;
     let starts: RepoStart[] = [];
     try {
       const read = await this.#exec(workspace)(READ_HEADS, {
@@ -1057,6 +1065,8 @@ export class ClaudeCoderSubagent extends RecipeSubagentHost<Env> {
   /**
    * Delete everything uncommitted, answering what that was.
    *
+   * Every repository is cleaned, not only the ones with something to report:
+   * ignored build output is not listed, and it is not the branch either.
    * Reported whether or not the delete succeeds — a file named here that is still
    * on disk is a smaller problem than one deleted without a word.
    */
@@ -1066,11 +1076,14 @@ export class ClaudeCoderSubagent extends RecipeSubagentHost<Env> {
     repos: readonly RepoStart[]
   ): Promise<Uncommitted[]> {
     const dirty = await this.#uncommitted(workspace, dir, repos);
-    if (dirty.length === 0) return dirty;
     try {
       const done = await this.#exec(workspace)(DISCARD, {
         cwd: dir,
-        env: { REPO_PATHS: dirty.map((repo) => repo.path).join("\n") }
+        env: {
+          REPO_PATHS: this.#repos(repos)
+            .map((repo) => repo.path)
+            .join("\n")
+        }
       });
       if (!done.success) {
         console.warn(

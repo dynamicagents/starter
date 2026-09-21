@@ -98,6 +98,16 @@ describe("the parent's way into a worktree", () => {
     expect(selected()).toBe("acme/super");
   });
 
+  it("does not switch into a worktree that is still being prepared", async () => {
+    const { worktrees, pool, selected } = setup();
+    const { dir: _dir, ...unprepared } = HELD;
+    pool.put({ ...unprepared, live: { taskId: "task-a", subtaskId: 3 } });
+    expect(await worktrees.use(BRANCH)).toMatch(
+      /still being prepared for subtask 3/
+    );
+    expect(selected()).toBe("acme/super");
+  });
+
   it("frees the slot of a worktree whose storage went, and says what was lost", async () => {
     const { worktrees, pool, selected } = setup({ checkoutDir: undefined });
     const answer = await worktrees.use(BRANCH);

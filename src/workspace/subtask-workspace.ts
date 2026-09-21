@@ -506,6 +506,25 @@ export function subtaskWorkspaces(config: {
       }))
     );
 
+    /**
+     * An adopted branch has to be on the remote somewhere. A repository without
+     * it starts from its base, which is right for one the branch never
+     * changed — but a branch on the remote nowhere was never pushed, and
+     * starting it from the base would report the earlier work as there when it
+     * went with the worktree that held it.
+     */
+    if (
+      mode === "adopt" &&
+      ![root, ...placedSubs].some((placed) => placed?.pushed)
+    ) {
+      throw new Error(
+        `claude-coder: no worktree holds ${worktree.branch}, and it is on the remote ` +
+          "in no repository — it was never pushed, and the worktree that held it " +
+          "was released or deleted. Its commits are gone; delegate without " +
+          "`continue` to do the work again."
+      );
+    }
+
     // Returns as soon as the command is spawned. Awaiting a dependency install
     // here would put minutes in front of the session waiting for it.
     await stub.startInstall({ dir: checkout.dir, repo: worktree.repo });

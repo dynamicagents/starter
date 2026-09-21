@@ -5,6 +5,8 @@ import { workspaceName } from "@dynamicagents/plugins/computer";
 import { SCRATCH_REPO } from "@/workspace/scratch";
 import {
   claim,
+  forgetWorktree,
+  idleWorktrees,
   isFree,
   isSubtaskBranch,
   parseWorktreeRepo,
@@ -68,7 +70,14 @@ describe("addressing a worktree", () => {
       "claude-coder/task-a",
       "claude-coder/../main/1",
       "claude-coder/t/1.lock",
-      "feature/claude-coder/t/1"
+      "feature/claude-coder/t/1",
+      // Characters and components git refuses in a ref.
+      "claude-coder/t:bad/1",
+      "claude-coder/t^bad/1",
+      "claude-coder/t~1/1",
+      "claude-coder/.t/1",
+      "claude-coder/t./1",
+      "claude-coder/t.lock/1"
     ]) {
       expect(isSubtaskBranch(other)).toBe(false);
     }
@@ -231,6 +240,46 @@ describe("claiming a worktree", () => {
       branch: "claude-coder/t/1",
       mode: "adopt"
     });
+  });
+});
+
+describe("a worktree whose workspace was reclaimed", () => {
+  /** Nothing it says is true any more — a stale live marker would hold the slot forever. */
+  it("empties its row, live or not, and keeps the slot", () => {
+    const pool = memoryPoolStore();
+    pool.put({
+      repo: REPO,
+      slot: 3,
+      branch: "claude-coder/t/1",
+      live: { taskId: "t", subtaskId: 1 },
+      repos: [repo({ tip: "c1" })],
+      usedAt: 7
+    });
+
+    forgetWorktree(pool, worktreeRepo(REPO, 3));
+    forgetWorktree(pool, REPO);
+
+    expect(pool.rows()).toEqual([
+      { repo: REPO, slot: 3, repos: [], usedAt: 7 }
+    ]);
+  });
+
+  it("lists the worktrees no session is in, whose containers can go", () => {
+    const pool = memoryPoolStore();
+    pool.put({ repo: REPO, slot: 0, repos: [], usedAt: 1 });
+    pool.put({
+      repo: REPO,
+      slot: 1,
+      live: { taskId: "t", subtaskId: 2 },
+      repos: [],
+      usedAt: 1
+    });
+    pool.put({ repo: "acme/cli", slot: 0, repos: [], usedAt: 1 });
+
+    expect(idleWorktrees(pool)).toEqual([
+      worktreeRepo(REPO, 0),
+      worktreeRepo("acme/cli", 0)
+    ]);
   });
 });
 

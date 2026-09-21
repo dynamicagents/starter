@@ -12,8 +12,9 @@ import { activeRepo } from "@/workspace/active-repo";
 import { discardWorkingTree, sweepIdleWorkspaces } from "@/workspace/lifecycle";
 import { workspaceName } from "@dynamicagents/plugins/computer";
 import {
+  forgetWorktree,
+  idleWorktrees,
   parseWorktreeRepo,
-  slotOf,
   sqlPoolStore
 } from "@/workspace/worktree-pool";
 import { parentPlugins } from "./plugins";
@@ -94,19 +95,7 @@ export class ClaudeCoderAgent extends RoundAgentBase<Env> {
       label: LABEL,
       // A worktree the sweep retired has no checkout left, so its row goes back
       // to empty: the slot is cloned into again rather than trusted.
-      onReclaimed: (repo) => {
-        const worktree = parseWorktreeRepo(repo);
-        if (!worktree) return;
-        const row = slotOf(pool, worktree.repo, worktree.slot);
-        if (row && !row.live) {
-          pool.put({
-            repo: row.repo,
-            slot: row.slot,
-            repos: [],
-            usedAt: row.usedAt
-          });
-        }
-      }
+      onReclaimed: (repo) => forgetWorktree(pool, repo)
     });
   }
 
@@ -156,10 +145,11 @@ export class ClaudeCoderAgent extends RoundAgentBase<Env> {
    * and a full install. `reclaimIfIdle` here would look identical and cost that
    * silently. The workspace host carries the distinction.
    *
-   * **Tools left in a worktree come back to the checkout**, and both containers
-   * are released: the next task starts where a task is expected to, and a
-   * worktree's container has no more reason to run than this one does. The
-   * worktree itself — branch, commits — stays; see `@/workspace/worktrees`.
+   * **Tools left in a worktree come back to the checkout**, and every worktree
+   * no session is in has its container released too: each stays up after its
+   * subtask so the parent can review in it, and at the end of the task nothing
+   * is left to review. The worktrees themselves — branches, commits — stay; see
+   * `@/workspace/worktrees`.
    *
    * Core contains a throw here, but this is best-effort on its own account too: a
    * container that will not stop is the idle deadline's problem, not the answer's.
@@ -171,10 +161,13 @@ export class ClaudeCoderAgent extends RoundAgentBase<Env> {
     if (worktree) active.set(worktree.repo);
     const binding = this.env.CLAUDE_CODER_WORKSPACE;
     const key = this.#identityKeyOrTask(taskId);
-    const names = [
+    const names = new Set([
       workspaceName(key, repo),
-      ...(worktree ? [workspaceName(key, worktree.repo)] : [])
-    ];
+      ...(worktree ? [workspaceName(key, worktree.repo)] : []),
+      ...idleWorktrees(sqlPoolStore(this.pluginHost().storage)).map(
+        (sentinel) => workspaceName(key, sentinel)
+      )
+    ]);
     for (const name of names) {
       try {
         await binding.get(binding.idFromName(name)).releaseContainer();

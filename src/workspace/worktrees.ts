@@ -145,6 +145,11 @@ export function worktreeSwitch(config: {
         );
       }
 
+      // Claimed, and not yet cloned onto: there is nothing to switch into.
+      if (row.dir === undefined) {
+        return `The worktree for \`${branch}\` is still being prepared${row.live ? ` for subtask ${row.live.subtaskId}` : ""}; try again once its session has started.`;
+      }
+
       const sentinel = worktreeRepo(repo, row.slot);
       const stub = config.binding.get(
         config.binding.idFromName(workspaceName(config.callerKey(), sentinel))

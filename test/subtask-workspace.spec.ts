@@ -69,6 +69,8 @@ function harness(opts: {
   tips?: Record<string, string>;
   /** Throw when release reads the tips. */
   tipsThrow?: boolean;
+  /** Repositories whose remote has the branch being placed. */
+  remote?: string[];
 }) {
   const calls: string[] = [];
   let cloneFails = opts.cloneFails;
@@ -142,7 +144,10 @@ function harness(opts: {
           .filter(Boolean)
           .map((line) => {
             const [path, base] = line.split("\t");
-            return `${path}\t${sha(base!)}\t${sha(base!)}\t`;
+            const pushed = opts.remote?.includes(path!)
+              ? sha(`origin/${env.WORKTREE_BRANCH}`)
+              : "";
+            return `${path}\t${sha(base!)}\t${sha(base!)}\t${pushed}`;
           });
         return { success: true, stdout: rows.join("\n"), stderr: "" };
       }
@@ -423,8 +428,13 @@ describe("handing a worktree to the next subtask", () => {
     });
     await held.subtasks.resolve(ctx);
     await held.subtasks.release(ctx);
-    // The same row over a workspace with no checkout — reclaimed after a week.
-    const reclaimed = harness({ selected: "acme/api", checkout: CHECKOUT });
+    // The same row over a workspace with no checkout — reclaimed after a week —
+    // and a remote the branch was pushed to.
+    const reclaimed = harness({
+      selected: "acme/api",
+      checkout: CHECKOUT,
+      remote: ["."]
+    });
     reclaimed.pool.put(held.pool.rows()[0]!);
 
     await reclaimed.subtasks.resolve({
@@ -434,6 +444,22 @@ describe("handing a worktree to the next subtask", () => {
     });
     expect(reclaimed.calls).toContain(`clone ${CHECKOUT.dir}@main`);
     expect(reclaimed.placed[0]?.WORKTREE_MODE).toBe("adopt");
+  });
+
+  /** Starting it from the base would report the lost work as there. */
+  it("refuses to adopt a branch that is on the remote nowhere", async () => {
+    const { subtasks, pool } = harness({
+      selected: "acme/api",
+      checkout: CHECKOUT
+    });
+
+    await expect(
+      subtasks.resolve({ ...ctx, continue: "claude-coder/task-0/4" })
+    ).rejects.toThrow(/on the remote in no repository.*commits are gone/s);
+    // Never ready, so releasing it frees the worktree rather than holding a
+    // branch that has nothing on it.
+    await subtasks.release(ctx);
+    expect(pool.rows()[0]?.branch).toBeUndefined();
   });
 
   it("refuses a `continue` that is not a branch a subtask made", async () => {

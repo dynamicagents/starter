@@ -101,9 +101,16 @@ export function subtaskBranch(ctx: {
  * above all.
  */
 export function isSubtaskBranch(branch: string): boolean {
+  // The task component is the only free one, so it carries git's own rules for
+  // a ref component: no leading or trailing dot, no `..`, no `.lock` ending, and
+  // none of the characters git or `/repo` refuse.
+  const task = /^claude-coder\/([A-Za-z0-9._-]+)\/\d+$/.exec(branch)?.[1];
   return (
-    /^claude-coder\/[^/]+\/\d+$/.test(branch) &&
-    !/[\x00-\x20\x7f]|\.\.|@\{|\.lock$/.test(branch)
+    task !== undefined &&
+    !task.startsWith(".") &&
+    !task.endsWith(".") &&
+    !task.endsWith(".lock") &&
+    !task.includes("..")
   );
 }
 
@@ -179,6 +186,29 @@ export function claim(
   };
   store.put(claimed);
   return claimed;
+}
+
+/**
+ * Empty the row of a worktree whose workspace was reclaimed.
+ *
+ * Its checkout and storage are gone, so nothing the row says is true any more —
+ * a `live` marker included: a session cannot outlast a week without touching
+ * its workspace. The slot stays, to be cloned into again.
+ */
+export function forgetWorktree(store: PoolStore, sentinel: string): void {
+  const worktree = parseWorktreeRepo(sentinel);
+  if (!worktree) return;
+  const row = slotOf(store, worktree.repo, worktree.slot);
+  if (!row) return;
+  store.put({ repo: row.repo, slot: row.slot, repos: [], usedAt: row.usedAt });
+}
+
+/** The sentinel of every worktree no session is working in. */
+export function idleWorktrees(store: PoolStore): string[] {
+  return store
+    .every()
+    .filter((row) => !row.live)
+    .map((row) => worktreeRepo(row.repo, row.slot));
 }
 
 /** The row for a slot. */

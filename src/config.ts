@@ -164,17 +164,15 @@ export const CODER_CONFIG: CoreConfigOverrides = {
  * `@dynamicagents/plugins/claude-code`. See {@link CLAUDE_CODE_SESSION} for the
  * numbers that bound *that*, which are not these.
  *
- * `maxSubtasks: 1` because of the shared checkout: two Claude Code sessions in
- * one container are two autonomous agents editing one working tree, each running
- * the project's test suite over the other's half-finished edits. The coder only
- * *advises* its model against this because its subagents are short and closely
- * briefed; here they are long and unsupervised, so the advice becomes a limit.
- * Raise it only alongside a story for how two sessions avoid each other.
+ * **The fan-out is bounded by containers, not by this file.** A writing subtask
+ * gets a workspace of its own — two Claude Code sessions in one container are two
+ * autonomous agents editing one working tree, each running the project's test
+ * suite over the other's half-finished edits — so the ceiling is
+ * `max_instances` in `wrangler.jsonc`, which the parent's own workspace also
+ * draws from. The coder's `maxSubtasks` is already the number that fits;
+ * inheriting it is what keeps the two from being written down twice.
  */
-export const CLAUDE_CODER_CONFIG: CoreConfigOverrides = {
-  ...CODER_CONFIG,
-  maxSubtasks: 1
-};
+export const CLAUDE_CODER_CONFIG: CoreConfigOverrides = { ...CODER_CONFIG };
 
 /**
  * What bounds one Claude Code session — and **this is the whole list**.
@@ -267,7 +265,16 @@ export const CLAUDE_CODE_SESSION = {
    * cloned repository ships. Containment is the credential swap.
    */
   permissionMode: "bypassPermissions"
-} as const satisfies Omit<ClaudeCodeConfig, "credentials" | "workspaceName">;
+  // The omitted four are the host's to answer, not settings: two are resolved on
+  // the parent from the verified caller, and two route and retire a writing
+  // subtask's own workspace. See `src/agents/claude-coder/claude-code.ts`.
+} as const satisfies Omit<
+  ClaudeCodeConfig,
+  | "credentials"
+  | "workspaceName"
+  | "subtaskWorkspace"
+  | "reclaimSubtaskWorkspace"
+>;
 
 /**
  * The proactive agent: single-turn, no delegation, so most of the delegation

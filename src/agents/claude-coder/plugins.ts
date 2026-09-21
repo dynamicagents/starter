@@ -1,12 +1,13 @@
 import { restrictMainAgentTools, type AgentPlugin } from "@dynamicagents/core";
 import type { PluginHost } from "@dynamicagents/core/host";
-import { claudeCode } from "@dynamicagents/plugins/claude-code";
+import { claudeCode, claudeCodeRead } from "@dynamicagents/plugins/claude-code";
 import { computer, computerExec } from "@dynamicagents/plugins/computer";
 import { repo } from "@dynamicagents/plugins/repo";
 import { browser } from "@dynamicagents/plugins/browser";
 import { recall } from "@dynamicagents/plugins/recall";
 import { RECALL } from "@/config";
 import { activeRepo } from "@/workspace/active-repo";
+import { subtaskWorkspaces } from "@/workspace/subtask-workspace";
 import {
   DEPENDENCY_TREE_NOTE,
   workspaceContainer
@@ -15,7 +16,8 @@ import { workspaceGit } from "@/workspace/git";
 import { workspaceName } from "@dynamicagents/plugins/computer";
 import { gitIdentity } from "@/workspace/git-identity";
 import { hostScratch } from "@/workspace/scratch";
-import { claudeCodeConfig } from "./claude-code";
+import { claudeCodeConfig, noWorkspaceRouting } from "./claude-code";
+import { claudeCoder } from "./definition";
 
 /**
  * The one file you edit to add or remove a capability for this agent.
@@ -80,6 +82,28 @@ export const parentPlugins = (host: PluginHost<Env>): AgentPlugin[] => {
   const active = activeRepo(host);
   const name = () => workspaceName(host.callerKey(), active.get());
   const config = container(host.env, name);
+  /**
+   * Where a *writing* subtask works, which is never here.
+   *
+   * The parent's own workspace above holds the checkout its tools read and its
+   * git acts on. A writing subtask gets one of its own — see
+   * `@/workspace/subtask-workspace` for the whole argument — and these two seams
+   * are how the plugin reaches it.
+   */
+  const subtasks = subtaskWorkspaces({
+    binding: host.env.CLAUDE_CODER_WORKSPACE,
+    callerKey: () => host.callerKey(),
+    // The same settings the parent's own tools run under — `shell: "bash"` above
+    // all — pointed at whichever subtask workspace is being prepared rather than
+    // at this agent's. A partial copy of this config has already cost an outage;
+    // see `@/workspace/container.ts`.
+    exec: (command, options, workspace) =>
+      computerExec(container(host.env, () => workspace))(command, options),
+    active,
+    // The tenant id is where this name lives; `./agent.ts` spells its own log
+    // prefix from the same place.
+    label: claudeCoder.tenant
+  });
   const workspace = () =>
     host.env.CLAUDE_CODER_WORKSPACE.get(
       host.env.CLAUDE_CODER_WORKSPACE.idFromName(name())
@@ -98,7 +122,28 @@ export const parentPlugins = (host: PluginHost<Env>): AgentPlugin[] => {
      * how the facet finds this workspace; without it a delegated session has no
      * way to address the container holding the checkout it was told to work in.
      */
-    claudeCode(claudeCodeConfig(host.env, name)),
+    claudeCode(
+      claudeCodeConfig(host.env, {
+        workspaceName: name,
+        subtaskWorkspace: subtasks.resolve,
+        reclaimSubtaskWorkspace: subtasks.reclaim
+      })
+    ),
+    /**
+     * Reading, in the parent's own container.
+     *
+     * A second plugin rather than a second type on the one above, because core's
+     * contract is one subtask type per plugin. It takes the same config and
+     * answers `workspaceName` — this workspace, with the checkout and the
+     * dependency tree already in it, which is the whole economy of the type.
+     */
+    claudeCodeRead(
+      claudeCodeConfig(host.env, {
+        workspaceName: name,
+        subtaskWorkspace: subtasks.resolve,
+        reclaimSubtaskWorkspace: subtasks.reclaim
+      })
+    ),
     repo({
       // Composed rather than imported: the repo plugin needs a shell, not a
       // container, so it takes one instead of depending on the computer module.
@@ -120,8 +165,12 @@ export const parentPlugins = (host: PluginHost<Env>): AgentPlugin[] => {
 
       beforeCheckout: ({ owner, repo: repoName }) =>
         active.set(`${owner}/${repoName}`),
-      afterCheckout: async ({ dir, repo: repoName }) => {
+      afterCheckout: async ({ dir, repo: repoName, url, branch }) => {
         const ws = workspace();
+        // Recorded so a writing subtask can clone the same thing into a container
+        // of its own. The url has already been through this plugin's host
+        // allowlist, which is why it is the one worth keeping.
+        active.setCheckout({ url, dir, branch });
         // Before the install, and never inside it: an install is conditional
         // where a checkout is not, so no install outcome may decide whether the
         // path is recorded. The reasoning is on `noteCheckout` in the
@@ -198,13 +247,18 @@ export const parentPlugins = (host: PluginHost<Env>): AgentPlugin[] => {
  * deliberately unavailable there — so it is never called on this side. The name
  * arrives on `ctx.runtime`, put there by the parent's copy of this same plugin.
  */
-export const subagentPlugins = (host: PluginHost<Env>): AgentPlugin[] => [
-  claudeCode(
-    claudeCodeConfig(host.env, () => {
-      throw new Error(
-        "claude-coder: a subagent resolves its workspace from ctx.runtime, " +
-          "never from the caller identity — see plugins.ts"
-      );
-    })
-  )
-];
+export const subagentPlugins = (host: PluginHost<Env>): AgentPlugin[] => {
+  const routing = noWorkspaceRouting(
+    "a subagent resolves its workspace from ctx.runtime, never from the " +
+      "caller identity — see plugins.ts"
+  );
+  // **Both**, because this registry is what `RecipeSubagentBase` validates an
+  // inbound `request.type` against. A reading subtask arriving at a facet that
+  // registered only the writing type is refused with `unknown subtask type`
+  // before `executeChunk` runs — the type has to exist on this side even though
+  // neither plugin's hooks are reachable here.
+  return [
+    claudeCode(claudeCodeConfig(host.env, routing)),
+    claudeCodeRead(claudeCodeConfig(host.env, routing))
+  ];
+};

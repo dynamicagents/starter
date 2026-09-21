@@ -14,7 +14,11 @@ import {
 import { CLAUDE_CODE_SESSION } from "@/config";
 import { INSTALL_PLAN } from "@/workspace/install-plan";
 import { gitIdentity } from "@/workspace/git-identity";
-import { claudeCodeConfig, CREDENTIALS_KEY } from "./claude-code";
+import {
+  claudeCodeConfig,
+  noWorkspaceRouting,
+  CREDENTIALS_KEY
+} from "./claude-code";
 
 /**
  * The claude-coder's workspace, bound as `CLAUDE_CODER_WORKSPACE`.
@@ -68,7 +72,13 @@ export class ClaudeCoderWorkspaceDO extends WorkspaceObjectBase {
    * this object already knows which workspace it is by being it.
    */
   readonly #session = claudeCodeSession(
-    claudeCodeConfig(this.env, () => this.ctx.id.toString())
+    claudeCodeConfig(
+      this.env,
+      noWorkspaceRouting(
+        "this object already knows which workspace it is by being it, and " +
+          "resolves nothing for anyone else"
+      )
+    )
   );
 
   protected workspaceConfig(): WorkspaceObjectConfig {
@@ -142,8 +152,10 @@ export class ClaudeCoderWorkspaceDO extends WorkspaceObjectBase {
     if (resetAt === undefined || resetAt <= Date.now()) return;
 
     const pool = credentialPool({
-      credentials: claudeCodeConfig(this.env, () => this.ctx.id.toString())
-        .credentials,
+      credentials: claudeCodeConfig(
+        this.env,
+        noWorkspaceRouting("the credential pool routes nothing")
+      ).credentials,
       store: this.#credentials
     });
     // Whichever credential the gateway is handing out is the one this session's

@@ -10,12 +10,13 @@ import type { AgentManifest } from "@dynamicagents/core/a2a";
  * what a gatekeeper operator reads to decide what to route here, and the engine is
  * an implementation detail that would go stale the first time it changed. What
  * belongs here is the difference an operator can act on: this one takes larger,
- * self-contained changes and works on one at a time.
+ * self-contained changes, and works several strands at once when they are genuinely
+ * independent.
  */
 export const manifest: AgentManifest = {
   name: "Claude Coder Agent",
   description:
-    "A senior software engineer for substantial changes. Give it a repository and a change to make; it clones into a Linux sandbox, delegates the implementation to a single long-running coding session, runs the project's own tests, pushes a work branch and opens a pull request. Replies with the pull request URL. Takes one change at a time, and is at its best on work too large to specify step by step. Never commits to a default branch.",
+    "A senior software engineer for substantial changes. Give it a repository and a change to make; it clones into a Linux sandbox, delegates the implementation to long-running coding sessions that each work in an isolated checkout, reviews the branches they push, runs the project's own tests and opens a pull request. Replies with the pull request URL. At its best on work too large to specify step by step, and can investigate several questions or carry several independent strands in parallel. Never commits to a default branch.",
   version: "0.1.0",
   // `extensions` is a required (repeated) protobuf field in v1.0 — we declare no
   // protocol extensions, so it stays empty.

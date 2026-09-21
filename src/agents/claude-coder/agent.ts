@@ -120,6 +120,42 @@ export class ClaudeCoderAgent extends RoundAgentBase<Env> {
   }
 
   /**
+   * The task is over — stop paying for the container it was working in.
+   *
+   * The idle deadline would eventually do this, but it cannot be tuned down to
+   * meet the cost: it has to exceed the longest command the agent allows, which
+   * here is a session that runs for its whole forty minutes. So a container
+   * outlives its task by that much unless something says the work is finished,
+   * and this is that. The deadline stays as the backstop for a task that dies
+   * without unwinding.
+   *
+   * **Released, not reclaimed**, and the difference is the point: the checkout and
+   * the dependency tree stay, so the next task on this repository skips a clone
+   * and a full install. `reclaimIfIdle` here would look identical and cost that
+   * silently. The workspace host carries the distinction.
+   *
+   * A writing subtask's own workspace is not this one and is retired separately —
+   * see `@/workspace/subtask-workspace`, reached through the plugin's settle hook
+   * so that it fires per execution rather than once per task.
+   *
+   * Core contains a throw here, but this is best-effort on its own account too: a
+   * container that will not stop is the idle deadline's problem, not the answer's.
+   */
+  protected override async onTaskSettled(taskId: string): Promise<void> {
+    const repo = activeRepo(this.pluginHost()).get();
+    const binding = this.env.CLAUDE_CODER_WORKSPACE;
+    const name = workspaceName(this.#identityKeyOrTask(taskId), repo);
+    try {
+      await binding.get(binding.idFromName(name)).releaseContainer();
+    } catch (err) {
+      console.warn(`[${LABEL}] could not release the workspace container`, {
+        name,
+        err: String(err)
+      });
+    }
+  }
+
+  /**
    * The caller key, resilient to being called before a caller is known.
    *
    * Cancellation can arrive on an instance that has not served a turn, where

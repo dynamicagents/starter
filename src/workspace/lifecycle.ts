@@ -8,6 +8,7 @@ import {
   type WorkspaceObjectBase
 } from "@dynamicagents/plugins/computer";
 import { SCRATCH_DIR, SCRATCH_REPO } from "./scratch";
+import { isSubtaskRepo } from "./subtask-workspace";
 
 /**
  * The two things an agent with a workspace owes it, beyond the object itself.
@@ -50,6 +51,32 @@ export type WorkspaceNamespace = DurableObjectNamespace<WorkspaceObjectBase>;
  * Best-effort and deliberately not fatal: `git clean` on a checkout that does
  * not exist yet is a no-op, and a cancellation must complete either way.
  */
+/**
+ * Where a checkout is when the workspace cannot say.
+ *
+ * Only for a workspace that predates the checkout record, in which case the
+ * convention below is what it was built on anyway.
+ *
+ * **Every sentinel needs an arm, and the cost of forgetting one is silence.** A
+ * sentinel is not an `owner/repo`, so the split yields a directory that does not
+ * exist — `git clean` then succeeds having cleaned nothing, and a cancelled
+ * session's files survive into the next task. A fallback that is wrong only when
+ * it is unused is a trap, so each is stated.
+ *
+ * `undefined` means **this workspace is not discarded at all**, which is not the
+ * same as not knowing where it is.
+ */
+function fallbackDir(repo: string | undefined): string | undefined {
+  if (repo === SCRATCH_REPO) return SCRATCH_DIR;
+  // A writing subtask's workspace is *reclaimed* — storage and all — when its
+  // execution settles, so there is no tree to tidy and nothing that outlives it.
+  // Refusing beats guessing: the only directory derivable here is `/workspace`
+  // itself, and `git clean -fdx` at the root of the tree is the one outcome this
+  // whole function exists to avoid.
+  if (repo !== undefined && isSubtaskRepo(repo)) return undefined;
+  return `${WORKSPACE_DIR}/${repo?.split("/")[1] ?? "repo"}`;
+}
+
 export async function discardWorkingTree(config: {
   binding: WorkspaceNamespace;
   name: string;
@@ -76,10 +103,8 @@ export async function discardWorkingTree(config: {
     const dir =
       (await config.binding
         .get(config.binding.idFromName(config.name))
-        .checkoutDir()) ??
-      (config.repo === SCRATCH_REPO
-        ? SCRATCH_DIR
-        : `${WORKSPACE_DIR}/${config.repo?.split("/")[1] ?? "repo"}`);
+        .checkoutDir()) ?? fallbackDir(config.repo);
+    if (dir === undefined) return;
     /**
      * Sequenced, not chained — `;` rather than `&&`, and that is the whole
      * comment.

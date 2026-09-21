@@ -50,9 +50,41 @@ export const GH_TOKEN_PLACEHOLDER = "not-a-credential-the-gateway-strips-this";
  * rather than sent as a bare `Bearer `. A pool of one is a perfectly ordinary
  * deployment; it simply gives up when its bucket empties instead of rotating.
  */
+/**
+ * The seams only the **parent** can answer, because all three need the verified
+ * caller and `callerKey()` throws on a facet.
+ *
+ * Grouped rather than passed one by one so that a side which resolves none of them
+ * says so once — see {@link noWorkspaceRouting}.
+ */
+export type ClaudeCodeRouting = Pick<
+  ClaudeCodeConfig,
+  "workspaceName" | "subtaskWorkspace" | "reclaimSubtaskWorkspace"
+>;
+
+/**
+ * The routing seams for a side that has none: the workspace Durable Object, which
+ * builds this config only for its `egress()`, and the subagent facet, whose
+ * workspace name arrives on `ctx.runtime` from the parent.
+ *
+ * Throwing rather than returning something harmless, because every one of these
+ * being called here is a wiring fault rather than a runtime condition, and a
+ * plausible-looking name would route a session into somebody else's container.
+ */
+export function noWorkspaceRouting(why: string): ClaudeCodeRouting {
+  const refuse = (): never => {
+    throw new Error(`claude-coder: ${why}`);
+  };
+  return {
+    workspaceName: refuse,
+    subtaskWorkspace: async () => refuse(),
+    reclaimSubtaskWorkspace: async () => refuse()
+  };
+}
+
 export function claudeCodeConfig(
   env: Env,
-  workspaceName: () => string
+  routing: ClaudeCodeRouting
 ): ClaudeCodeConfig {
   return {
     credentials: () =>
@@ -61,7 +93,7 @@ export function claudeCodeConfig(
         env.CLAUDE_CODE_OAUTH_TOKEN_2,
         env.CLAUDE_CODE_OAUTH_TOKEN_3
       ].filter(Boolean),
-    workspaceName,
+    ...routing,
     ...CLAUDE_CODE_SESSION,
     env: { GH_TOKEN: GH_TOKEN_PLACEHOLDER },
     /**

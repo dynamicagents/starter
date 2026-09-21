@@ -8,6 +8,7 @@ import { makeDoHelpers } from "@dynamicagents/core/testing";
 import type { ClaudeCoderWorkspaceDO } from "@/index";
 import { openWorkspace } from "@dynamicagents/plugins/computer";
 import {
+  CLAUDE_CODE_READ_TYPE,
   CLAUDE_CODE_TYPE,
   WORKSPACE_RUNTIME_KEY
 } from "@dynamicagents/plugins/claude-code";
@@ -24,6 +25,7 @@ import {
 import { CLAUDE_CODER_CONFIG, CLAUDE_CODE_SESSION } from "@/config";
 import {
   claudeCodeConfig,
+  noWorkspaceRouting,
   GH_TOKEN_PLACEHOLDER
 } from "@/agents/claude-coder/claude-code";
 import { gitIdentity } from "@/workspace/git-identity";
@@ -124,8 +126,17 @@ describe("the parent's surface", () => {
     expect(families).toContain(REPO_FAMILY);
   });
 
-  it("offers exactly one subtask type, and it is the Claude Code one", () => {
-    expect(parent().types.keys).toEqual([CLAUDE_CODE_TYPE]);
+  /**
+   * Both Claude Code types and nothing else, **in this order**: the delegating
+   * model is shown them in the order the plugin list declares, and writing is the
+   * one this agent is for. A third entry here would mean a plugin arrived with a
+   * subtask type nobody meant to offer.
+   */
+  it("offers the two Claude Code subtask types, writing first", () => {
+    expect(parent().types.keys).toEqual([
+      CLAUDE_CODE_TYPE,
+      CLAUDE_CODE_READ_TYPE
+    ]);
   });
 });
 
@@ -152,13 +163,22 @@ describe("what the main agent asks a person before doing", () => {
  * empty registry throws `unknown subtask type` before `executeChunk` runs.
  */
 describe("the subagent's surface", () => {
-  it("registers the type and contributes no tool families", () => {
+  /**
+   * **Both types, and that is not symmetry for its own sake.** This registry is
+   * what `RecipeSubagentBase` validates an inbound `request.type` against, so a
+   * reading subtask reaching a facet that knows only the writing type is refused
+   * with `unknown subtask type` before `executeChunk` runs.
+   */
+  it("registers both types and contributes no tool families", () => {
     const runtime = createAgentRuntime({
       config: CLAUDE_CODER_CONFIG,
       plugins: subagentPlugins(host())
     });
 
-    expect(runtime.types.keys).toEqual([CLAUDE_CODE_TYPE]);
+    expect(runtime.types.keys).toEqual([
+      CLAUDE_CODE_TYPE,
+      CLAUDE_CODE_READ_TYPE
+    ]);
     expect(runtime.toolFamilies.size).toBe(0);
   });
 
@@ -717,7 +737,10 @@ describe("how hard this deployment asks a session to think", () => {
  */
 describe("claude-coder's credential pool", () => {
   it("hands over every configured credential, in declared order", () => {
-    const config = claudeCodeConfig(env as never, () => "ws");
+    const config = claudeCodeConfig(
+      env as never,
+      noWorkspaceRouting("a credential spec routes nothing")
+    );
 
     // A misspelled binding reads as `undefined` and is filtered out, so a
     // missing entry fails here rather than at the first 429.
@@ -735,7 +758,7 @@ describe("claude-coder's credential pool", () => {
         CLAUDE_CODE_OAUTH_TOKEN_2: "",
         CLAUDE_CODE_OAUTH_TOKEN_3: "sk-ant-oat01-three"
       } as never,
-      () => "ws"
+      noWorkspaceRouting("a credential spec routes nothing")
     );
 
     expect(config.credentials()).toEqual([
@@ -756,7 +779,10 @@ describe("claude-coder's credential pool", () => {
  */
 describe("who a session commits as", () => {
   it("hands the session the deployment's git identity", () => {
-    const config = claudeCodeConfig(env as never, () => "ws");
+    const config = claudeCodeConfig(
+      env as never,
+      noWorkspaceRouting("a credential spec routes nothing")
+    );
 
     expect(config.author).toEqual(gitIdentity(env as never));
   });
@@ -771,7 +797,10 @@ describe("who a session commits as", () => {
  */
 describe("gh's placeholder token", () => {
   it("rides in the session env, which only the gateway-fronted sessions get", () => {
-    const config = claudeCodeConfig(env as never, () => "ws");
+    const config = claudeCodeConfig(
+      env as never,
+      noWorkspaceRouting("a credential spec routes nothing")
+    );
 
     expect(config.env?.GH_TOKEN).toBe(GH_TOKEN_PLACEHOLDER);
   });

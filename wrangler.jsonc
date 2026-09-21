@@ -98,20 +98,32 @@
   // full `tsc` runs; it is recorded at 28 s in `src/workspace/install-plan.ts`
   // and was observed taking 3-5 minutes here.
   //
-  // standard-2 is 1 vCPU, 6 GiB, 12 GB disk — double the CPU. It is headroom
-  // rather than a cure: the same run also lost ten minutes to a step timeout and
-  // ran every model call on a rate-limited primary, and both of those are fixed
-  // elsewhere (see `platform.ts` and `config.ts`). If the install gate is still
-  // measured above ~3 minutes, standard-3 (2 vCPU, 8 GiB) is the next step, and
-  // that measurement is what should justify it.
+  // standard-3 is 2 vCPU, 8 GiB, 16 GB disk. Two things want the second core:
+  //
+  // 1. **A reading subtask shares the parent's container.** Several run at once
+  //    against one checkout — that is the point of not giving them one each — and
+  //    on a single core they contend rather than parallelise.
+  // 2. The build itself is what the measurement above is about, and the work is
+  //    inside the container where the Worker cannot help.
+  //
+  // It is not the more expensive choice it looks like. Cloudflare bills memory and
+  // disk on *provisioned* resources for as long as an instance runs, but CPU on
+  // *active usage* — so on CPU-bound work a second core costs the same vCPU-
+  // seconds over less wall-clock, and the memory-seconds fall with the duration.
+  // Verify that against `npm run cf -- containers` rather than trusting it.
   //
   // **Two entries, one Dockerfile.** Cloudflare builds once per entry, so naming
   // the same file twice produces two images — and `image_vars` is a Docker build
   // arg, which is how only one of them gets the Claude Code CLI.
   //
   // `max_instances` is per entry, so the ceiling is the sum across both entries,
-  // not the number on either line. A container bills by the second and each agent
-  // keys one per caller per repository.
+  // not the number on either line. A container bills by the second.
+  //
+  // **For claude-coder it is also what sets the fan-out.** A writing subtask gets
+  // a workspace of its own and the parent keeps one, so a round of N writers wants
+  // N+1 instances of `ClaudeCoderWorkspaceDO` — which is why `maxSubtasks` is one
+  // below this number, and why raising one means raising the other. See
+  // `CLAUDE_CODER_CONFIG` in `src/config.ts`.
   //
   // **`rollout_step_percentage` is 100 because the image and the Worker are one
   // release.** The library in the Worker and the `computerd` in the image
@@ -129,7 +141,7 @@
     {
       "class_name": "CoderWorkspaceDO",
       "image": "./Dockerfile",
-      "instance_type": "standard-2",
+      "instance_type": "standard-3",
       "max_instances": 5,
       "rollout_step_percentage": 100
     },
@@ -148,7 +160,7 @@
         "GH_VERSION": "2.101.0",
         "GH_SHA256": "9bca2d1c16825f109907a23307628a2f0698fbf99662b73a5cf0b020293072b8"
       },
-      "instance_type": "standard-2",
+      "instance_type": "standard-3",
       "max_instances": 5,
       "rollout_step_percentage": 100
     }

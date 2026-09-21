@@ -116,15 +116,23 @@
   // the same file twice produces two images — and `image_vars` is a Docker build
   // arg, which is how only one of them gets the Claude Code CLI.
   //
-  // `max_instances` is per entry, so the ceiling is the sum across both entries,
-  // not the number on either line. A container bills by the second.
+  // `max_instances` is per entry and caps *concurrent* instances, not slots that
+  // are rented: an entry bills only for what is running, so raising it costs
+  // nothing until there is work to fill it.
   //
-  // **For claude-coder it is also what bounds the fan-out.** A writing subtask gets
-  // a workspace of its own and the parent keeps one, so a round of N writers wants
-  // N+1 instances of `ClaudeCoderWorkspaceDO`. This cap is across the deployment
-  // rather than per task, though, so concurrent callers contend for it — see
-  // `CLAUDE_CODER_CONFIG` in `src/config.ts`, which carries what that means and
-  // why nothing rations it yet.
+  // **For claude-coder it is what bounds the fan-out.** A writing subtask gets a
+  // workspace of its own while the parent keeps one, so a round of N writers wants
+  // N+1 instances of `ClaudeCoderWorkspaceDO` — `CLAUDE_CODER_CONFIG` in
+  // `src/config.ts` carries why. A reading subtask wants none: it runs in the
+  // parent's container, against the checkout already in it. The cap is per
+  // deployment rather than per task, so the number is that peak multiplied by the
+  // tasks expected to run at once — a full round plus its parent, three times over.
+  //
+  // That width is not near a platform limit; it is around 2% of the concurrent
+  // memory and vCPU Cloudflare documents per account. What the number guards is
+  // the bill, because memory and disk are billed on provisioned resources for as
+  // long as an instance runs — the same reason a settled task stops its container
+  // rather than waiting out the idle deadline.
   //
   // **`rollout_step_percentage` is 100 because the image and the Worker are one
   // release.** The library in the Worker and the `computerd` in the image
@@ -162,7 +170,7 @@
         "GH_SHA256": "9bca2d1c16825f109907a23307628a2f0698fbf99662b73a5cf0b020293072b8"
       },
       "instance_type": "standard-3",
-      "max_instances": 5,
+      "max_instances": 15,
       "rollout_step_percentage": 100
     }
   ],

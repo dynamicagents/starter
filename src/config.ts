@@ -172,11 +172,10 @@ export const CODER_CONFIG: CoreConfigOverrides = {
  *
  * **That is not the same as fitting inside `max_instances`, and it is worth being
  * exact about.** This number is per *task*; the wrangler ceiling is per container
- * entry across the whole deployment. Two callers running four writers each want
- * ten instances against a cap of five, and the losers queue or fail to start.
- * Nothing here admits or rations that, deliberately: the ceiling is a cost guard
- * and the traffic that would reach it has not been observed. `npm run cf --
- * containers` is what shows it when it is.
+ * entry across the whole deployment, sized as this peak times the tasks expected
+ * to run at once. Past that concurrency the extra workspaces queue or fail to
+ * start, and nothing here rations it: a task that cannot get a container is the
+ * signal, and `npm run cf -- containers` is what shows it.
  *
  * Inheriting the coder's number rather than restating it is what keeps a value
  * this consequential from being written down twice.

@@ -18,11 +18,12 @@
     "keygen": "da-keys",
     "format": "prettier --write .",
     "lint": "eslint .",
-    "check": "wrangler types --check && prettier --check . && eslint . && tsc && tsc -p test/tsconfig.json && node scripts/verify-references.mjs",
+    "check": "wrangler types --check && prettier --check . && eslint . && tsc && tsc -p test/tsconfig.json && node scripts/verify-references.mjs && node scripts/verify-container-env.mjs",
     "test": "vitest run",
     "test:watch": "vitest",
     "test:record": "RECORD=1 vitest run recorded.spec.ts",
     "verify:isolation": "node scripts/verify-isolation.mjs",
+    "verify:container-env": "node scripts/verify-container-env.mjs",
     "verify:references": "node scripts/verify-references.mjs",
     "link:local": "node scripts/link-local.mjs",
     "cf": "node scripts/cf.mjs",
@@ -32,29 +33,29 @@
   },
   "dependencies": {
     "@a2a-js/sdk": "^1.1.0",
-    "@cloudflare/computer": "^0.2.1",
+    "@cloudflare/computer": "^0.3.1",
     "@cloudflare/shell": "0.4.3",
-    "@dynamicagents/core": "^0.11.0",
-    "@dynamicagents/plugins": "^0.11.1",
+    "@dynamicagents/core": "^0.12.0",
+    "@dynamicagents/plugins": "^0.12.0",
     "@platformatic/vfs": "^0.4.0",
-    "agents": "^0.22.0",
-    "ai": "^7.0.93",
+    "agents": "^0.24.0",
+    "ai": "^7.0.101",
     "drizzle-orm": "^0.45.2",
     "jose": "^6.2.12",
     "workers-ai-provider": "^4.0.0",
-    "zod": "^4.5.4"
+    "zod": "^4.6.5"
   },
   "devDependencies": {
-    "@cloudflare/vitest-plugin": "^1.1.5",
-    "@types/node": "^26.5.0",
-    "esbuild": "^0.28.1",
+    "@cloudflare/vitest-plugin": "^1.1.9",
+    "@types/node": "^26.5.1",
+    "esbuild": "^0.28.2",
     "eslint": "^10.10.0",
     "husky": "^9.1.7",
     "prettier": "^3.9.6",
     "typescript": "^6.0.3",
     "typescript-eslint": "^8.70.0",
     "vitest": "^4.1.11",
-    "wrangler": "^4.129.1"
+    "wrangler": "^4.131.2"
   },
   "engines": {
     "node": ">=24"

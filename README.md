@@ -66,6 +66,14 @@ Register each agent with your gatekeeper using the **same endpoint** and its own
 `/a2a` is core's default, not a requirement — see [Where the endpoints
 live](#where-the-endpoints-live). Register whatever path this deployment actually serves.
 
+> **The default models need a paid Workers plan**, or prepaid AI Gateway credits. Every
+> Workers AI agent takes its models from `MODEL` in [`src/config.ts`](src/config.ts),
+> and those are not served on Workers Free. On the free tier, point `MODEL`'s
+> `chatModelId` and `fallbackChatModelId` at models that are, and that support function
+> calling. Then check `PROACTIVE_CONFIG` in the same file: it sets its own
+> `fallbackChatModelId` over `MODEL`'s, and core refuses a fallback identical to the
+> primary.
+
 > **Browser Rendering needs a paid Workers plan.** On the free tier, remove `browser()`
 > from the agents' `plugins.ts` and the `browser` binding from `wrangler.jsonc`.
 
@@ -187,7 +195,7 @@ request body, and a token minted for one agent would work against any sibling.
 
 ---
 
-## The five agents
+## The agents
 
 | Agent                                       | What it is                                                              | Why it's here                                                                                    |
 | ------------------------------------------- | ----------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------ |
@@ -220,8 +228,9 @@ subtask _is_. A `coder` subtask is a Dynamic Agents subagent running core's tool
 inside the container. A `claude-coder` subtask is one `claude -p` session — its
 own loop, its own tools, its own context management — which is why that agent
 overrides `executeChunk` instead of configuring a recipe. Their workspace Durable
-Objects are two thin subclasses of one shared `src/workspace/object.ts`,
-differing only in a `WorkspaceObjectConfig`.
+Objects are two thin subclasses of `WorkspaceObjectBase` from
+`@dynamicagents/plugins/computer`, differing only in a
+`WorkspaceObjectConfig`.
 
 That egress policy is the whole reason `claude-coder` exists. An Anthropic
 **subscription** credential is refused for raw Messages API calls on every
@@ -254,6 +263,28 @@ pushes the image, so that is your laptop or your CI runner, never Cloudflare:
 With no daemon reachable, `npx wrangler deploy --containers-rollout=none` deploys
 the Worker and leaves the container alone.
 
+> **The image and the Worker are one release.** The library in the Worker speaks
+> to `computerd` in the image, and it authenticates: a host refuses a container
+> that does not enforce the shared secret it was launched with, and a container
+> already running when a Worker with different launch settings arrives is
+> relaunched rather than adopted. So a Worker deployed without its image has
+> workspaces that cannot open, and the first deploy after an image change takes
+> any session running in an old container with it. Roll them together, and expect
+> in-flight sessions to end — `--containers-rollout=none` is for a Worker-only
+> change, not for skipping a container build you also made.
+
+A staged image rollout is the same hazard with a timer on it, which is why every
+container entry in [`wrangler.jsonc`](wrangler.jsonc) pins
+`rollout_step_percentage` — the comment there is the explanation.
+
+> **Deleting a container application does not rebuild it.** In the dashboard it
+> reads like turning something off and on again, and it is not: the application
+> is created by `wrangler deploy`, and the Durable Object can only start
+> instances of one that already exists. Delete it and every workspace fails —
+> `There is no container application assigned to this Durable Object namespace`
+> — until the next deploy, which turns a bounded problem into an open-ended one.
+> To replace every container, deploy. To replace one workspace's, let it go idle.
+
 #### The checkout outlives the container, and the container outlives the task
 
 The **workspace** is a Durable Object, one per caller per repository, and the
@@ -261,14 +292,13 @@ checkout lives in its SQLite. `@cloudflare/computer` mounts that filesystem into
 the container over FUSE at `/workspace`, so commands run against the same tree the
 Worker reads over RPC — and the tree survives the container being replaced.
 
-What does _not_ survive is `node_modules`. It is deliberately never synced into
-SQLite (a `pull()` after `npm ci` would drag tens of thousands of files in), so it
-lives in the container and dies with it. The workspace notices a cold container
-and arms a reinstall before anything asks for one; see
-`src/workspace/install-plan.ts`.
+`node_modules` does not. It is a bind mount of the container's own disk, so an
+install runs at disk speed and never crosses the wire, and a new container
+reinstalls. The workspace arms that install as soon as a container comes up or a
+command is about to start one; see `src/workspace/install-plan.ts`. Container
+directory snapshots are the intended fix for the reinstall.
 
-**There is deliberately no R2 bucket, and adding one buys nothing** — the checkout
-is already durable and `node_modules` is reproducible from the lockfile.
+**There is deliberately no R2 bucket** — the checkout is already durable.
 [`wrangler.jsonc`](wrangler.jsonc) records why the snapshot approach it replaces
 could not work.
 
@@ -280,9 +310,9 @@ Two consequences worth knowing before you debug something surprising:
   task's work and nobody could recover them once discarded.
 - **A cancelled task resets the working tree rather than destroying the
   container.** That is the opposite of what it used to do, and the reversal is the
-  point: the container _was_ the state, and now it holds only the expensive,
-  reproducible half. Destroying it would throw away `node_modules` and leave the
-  abandoned edits exactly where they were.
+  point: the container _was_ the state, and now it holds none of it but
+  dependencies. Destroying one costs a container start and a reinstall, and
+  leaves the abandoned edits exactly where they were.
 
 Delegated subtasks reach the parent's workspace through a `resolveRuntime` hook —
 `code()`'s for the coder, the `claude-code` plugin's for claude-coder. It runs on
@@ -350,18 +380,18 @@ npm run agent:new watcher --kind single  # a single-turn agent, its own loop
 npm run agent:remove arc-player
 ```
 
-Each edits the four places an agent exists — its directory, [`src/index.ts`](src/index.ts),
+Each edits every place an agent exists — its directory, [`src/index.ts`](src/index.ts),
 [`wrangler.jsonc`](wrangler.jsonc) (DO binding, sqlite migration, workflow binding), and
 [`scripts/verify-isolation.mjs`](scripts/verify-isolation.mjs) — then runs prettier over
-what it touched. `agent:new` then tells you the two things it cannot decide for you: the
-config entry and the agent's soul.
+what it touched. `agent:new` then tells you what it cannot decide for you: the config
+entry and the agent's soul.
 
 Do it by hand and a missed edit fails at a different time each: a forgotten DO binding at
 deploy, a forgotten `new_sqlite_classes` entry at the first request, a forgotten
 isolation entry _never_ — it just quietly stops checking that agent.
 
-Add-then-remove returns all four files byte-for-byte to where they started, which is
-the test that keeps this honest.
+Add-then-remove returns every file it touched byte-for-byte to where it started, which
+is the test that keeps this honest.
 
 > The signing key and `GATEKEEPER_ORIGINS` are **not** removed: they belong to the
 > deployment, not to any one agent. A secret only one agent's plugins needed —
@@ -469,10 +499,10 @@ src/
   workspace/            ← the container-backed workspace both coders share
   agents/
     reactive/           ← definition, plugins, soul, manifest, the `general` plugin
-    proactive/          ← its own loop + workflow, plus the same five files
+    proactive/          ← its own loop + workflow, plus the same set
     arc-player/         ← definition, plugins, soul, manifest, thin subclasses
-    coder/              ← the same five files, plus the `code` subtask type
-    claude-coder/       ← the same five files, plus a subagent that drives the CLI
+    coder/              ← the same set, plus the `code` subtask type
+    claude-coder/       ← the same set, plus a subagent that drives the CLI
 test/
 scripts/
 ```

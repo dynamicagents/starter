@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
   ASK_USER_TOOL_NAME,
+  CHECK_BACK_TOOL_NAME,
   FINAL_REPLY_TOOL_NAME
 } from "@dynamicagents/core/agent";
 import { DELEGATE_TOOL_NAME } from "@dynamicagents/core/subtasks";
@@ -11,7 +12,8 @@ import {
   finalRoundNote,
   roundContract,
   roundPolicy,
-  UNANSWERED_COPY
+  UNANSWERED_COPY,
+  waitGuidance
 } from "@/round-policy";
 
 /**
@@ -21,8 +23,8 @@ import {
  */
 
 describe("roundContract", () => {
-  const contract = (typeKeys: string[], maxSubtasks = 8) =>
-    roundContract({ typeKeys, maxSubtasks });
+  const contract = (typeKeys: string[], maxSubtasks = 8, deferrable = false) =>
+    roundContract({ typeKeys, maxSubtasks, deferrable });
 
   it("names every installed subtask type, and only those", () => {
     const text = contract(["general"]);
@@ -61,7 +63,11 @@ describe("finalRoundNote", () => {
     // module asserts that; it lives in the runtime's control-tool wiring. What
     // this text owns is telling the model so in plain words, rather than
     // leaving it to notice the tool is simply gone from its schema.
-    for (const reason of ["budget", "no-progress"] as const) {
+    for (const reason of [
+      "budget",
+      "no-progress",
+      "unresponsive-tools"
+    ] as const) {
       expect(finalRoundNote(limits, reason)).toContain("cannot delegate");
     }
   });
@@ -85,6 +91,16 @@ describe("finalRoundNote", () => {
     expect(note).not.toContain("20 turns");
     // What it says instead is the thing that is actually true.
     expect(note).toContain("failed the same way");
+    expect(note).toContain(FINAL_REPLY_TOOL_NAME);
+  });
+
+  it("tells a round whose tools stopped answering that, and not the budget", () => {
+    const note = finalRoundNote(limits, "unresponsive-tools");
+    expect(note).toContain("stopped answering");
+    expect(note).not.toContain("budget");
+    // A write abandoned rather than refused may have landed — a pull request
+    // opened by a call whose answer never came back.
+    expect(note).toContain("may have gone through");
     expect(note).toContain(FINAL_REPLY_TOOL_NAME);
   });
 
@@ -116,7 +132,11 @@ describe("where the person comes in", () => {
   it("does not tell the model its two endings are the only ones", () => {
     // `ask_user` ends a round too wherever it is offered, and every agent here
     // offers it, so a contract counting two calls would be false.
-    const contract = roundContract({ typeKeys: ["general"], maxSubtasks: 8 });
+    const contract = roundContract({
+      typeKeys: ["general"],
+      maxSubtasks: 8,
+      deferrable: false
+    });
     expect(contract).not.toContain("two ways to end this round");
     expect(contract).not.toContain("one of those two calls");
     expect(askGuidance).toContain(ASK_USER_TOOL_NAME);
@@ -126,7 +146,11 @@ describe("where the person comes in", () => {
     // Returned work is exactly where a choice only the person can make shows up,
     // and a section naming only answering and delegating steers the model away
     // from asking there.
-    const contract = roundContract({ typeKeys: ["general"], maxSubtasks: 8 });
+    const contract = roundContract({
+      typeKeys: ["general"],
+      maxSubtasks: 8,
+      deferrable: false
+    });
     const afterResults = contract.slice(
       contract.indexOf("## Using results that have come back"),
       contract.indexOf("**Announcing is not doing.**")
@@ -134,10 +158,10 @@ describe("where the person comes in", () => {
     expect(afterResults).toContain(ASK_USER_TOOL_NAME);
   });
 
-  it("tells the model not to make a declined call again", () => {
-    expect(askGuidance).toContain("do not make that call again");
-  });
-
+  // Nothing this Worker installs is gated any more, so `askGuidance` no longer
+  // describes approvals — prompt copy for a non-event is read every round and
+  // acted on never. The copy itself stays: core requires it, and it is what a
+  // plugin that gates a call in future would use, so it is still pinned.
   it("frames held calls as one decision, in each gating plugin's words", () => {
     const prompt = approvalPrompt([
       {
@@ -163,8 +187,100 @@ describe("where the person comes in", () => {
   it("gives the round agents the person's part of the round", () => {
     // Asking is not an agent setting: the contract carries when to ask, and the
     // copy carries what the person reads for an approval.
-    const contract = roundContract({ typeKeys: ["general"], maxSubtasks: 8 });
+    const contract = roundContract({
+      typeKeys: ["general"],
+      maxSubtasks: 8,
+      deferrable: false
+    });
     expect(contract.endsWith(askGuidance)).toBe(true);
+    expect(roundPolicy.copy.approvalPrompt).toBe(approvalPrompt);
+  });
+});
+
+/**
+ * The fourth ending.
+ *
+ * Every assertion here is about a round being told the truth about what it may
+ * do — the failure mode of prompt copy for an optional call is describing one the
+ * model will not be given, and it is invisible until a round tries it.
+ */
+describe("a round that may wait", () => {
+  const contract = (deferrable: boolean) =>
+    roundContract({ typeKeys: ["general"], maxSubtasks: 8, deferrable });
+
+  it("describes the wait only to a round that has one", () => {
+    expect(contract(true)).toContain(CHECK_BACK_TOOL_NAME);
+    // The agents without an allowance — reactive, proactive, arc-player — and
+    // any coding round that has spent one. A contract naming a call the round is
+    // not handed is a contract inviting a rejected call.
+    expect(contract(false)).not.toContain(CHECK_BACK_TOOL_NAME);
+  });
+
+  it("adds waiting to the ways of actually doing something, not of describing it", () => {
+    // The paragraph exists because a model that announces its next step ends the
+    // request instead of taking it. Waiting is a third way to take it, and it has
+    // to live there or it reads as permission to say "I'll check back later".
+    const announcing = contract(true).slice(
+      contract(true).indexOf("**Announcing is not doing.**")
+    );
+    expect(announcing).toContain(CHECK_BACK_TOOL_NAME);
+    expect(announcing).toContain("sentence saying you will check later");
+  });
+
+  it("says the checks cost turns, because they do", () => {
+    // Core charges every round its turns, deferred ones included — only the time
+    // spent waiting is forgiven. Told a poll was free, a model polls at the floor
+    // and spends the working budget on checks that come back identical.
+    expect(waitGuidance).toContain("Checking is not free");
+    expect(waitGuidance).not.toMatch(/no turn/i);
+  });
+
+  it("sends a wait on a person to the question instead", () => {
+    // The two are easy to confuse and cost completely different things: a wait is
+    // free and ends by itself, a question interrupts someone and may never be
+    // answered.
+    expect(waitGuidance).toContain(ASK_USER_TOOL_NAME);
+  });
+
+  it("tells the round that wakes to look before deciding", () => {
+    // Without this the round reads the marker, concludes what it concluded
+    // before, and waits again — which is how an allowance is spent on one
+    // decision.
+    expect(waitGuidance).toContain("[check_back]");
+    expect(waitGuidance).toContain("before deciding anything else");
+  });
+
+  it("ends a spent allowance without withdrawing anything else", () => {
+    const note = roundPolicy.deferralsSpentNote?.() ?? "";
+    expect(note).toContain(CHECK_BACK_TOOL_NAME);
+    // Still an open round: every other ending survives, which is what makes this
+    // not a `finalRoundNote`.
+    expect(note).toContain("Everything else still is");
+    expect(note).not.toContain("no tools left");
+    // And the promise it exists to prevent, for the reason `noProgressNote` does.
+    expect(note).toContain("do not offer to keep checking");
+  });
+
+  it("supplies the note core refuses to invent", () => {
+    // `buildTurnInstructions` throws when an agent enables deferrals without it,
+    // and the coder does enable them — so a policy missing this fails at DO start
+    // rather than at the round that runs out.
+    expect(roundPolicy.deferralsSpentNote).toBeDefined();
+  });
+});
+
+describe("what is no longer said", () => {
+  it("stops describing approvals nothing can trigger", () => {
+    // `repo_open_pr` was the only gated call in this Worker and no longer is, so
+    // the paragraph describing approvals described a non-event — read every
+    // round, acted on never.
+    expect(askGuidance).not.toContain("approval");
+    expect(askGuidance).not.toContain("declined");
+  });
+
+  it("keeps the words a gated call would use", () => {
+    // Core requires `approvalPrompt` and the machinery is untouched, so a plugin
+    // that gates a call in future needs nothing here to change.
     expect(roundPolicy.copy.approvalPrompt).toBe(approvalPrompt);
   });
 });

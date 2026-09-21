@@ -44,6 +44,7 @@ export const plugins = (host: PluginHost<Env>): AgentPlugin[] => [
     // chat calls. Spread the rest: enumerating each field silently drops any
     // option the plugin adds later.
     aiGatewayId: host.aiGatewayId,
+    agentName: host.agentName,
     ...RECALL
   })
 ];

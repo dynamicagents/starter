@@ -1,6 +1,5 @@
 import type { PrepareStepFunction, StopCondition, ToolSet } from "ai";
 import { generateText, isStepCount } from "ai";
-import type { SessionMessage } from "agents/experimental/memory/session";
 import {
   buildIntermediateContentHandler,
   isTransientAiError,
@@ -9,7 +8,8 @@ import {
   withFallback,
   type ModelPair,
   type OnContent,
-  type SessionLike
+  type SessionLike,
+  type SessionMessage
 } from "@dynamicagents/core/agent";
 import {
   isNoReplyTurn,
@@ -40,17 +40,16 @@ import {
  *
  * ## Where triage went
  *
- * The predecessor called `shouldReply(...)` right here, inline, after appending
- * the user message. It is now `@dynamicagents/plugins/triage` declaring
- * `shouldHandleTurn`, and the **DO** consults every installed gate through
- * `runtime.shouldHandleTurn({ history })` before this function is ever called. So
- * the fast path — the channel noise the agent is not part of — never reaches the
- * loop at all, and this file no longer knows that triage exists.
+ * Triage is `@dynamicagents/plugins/triage` declaring `shouldHandleTurn`, and the
+ * **DO** consults every installed gate through `runtime.shouldHandleTurn({
+ * history })` before this function is ever called. So the fast path — the channel
+ * noise the agent is not part of — never reaches the loop at all, and this file
+ * never invokes that gate.
  *
- * What stayed is the *late* decline below: the agent looks something up, concludes
- * there is nothing worth adding, and calls `no_reply`. The two cover different
- * moments — the gate judges the message, the tool judges what looking into it
- * turned up — which is why both survive.
+ * The *late* decline below is a separate moment, and is what the triage import
+ * above is for: the agent looks something up, concludes there is nothing worth
+ * adding, and calls `no_reply`. The gate judges the message, the tool judges what
+ * looking into it turned up, which is why both exist.
  */
 
 export const TRANSIENT_REPLY =

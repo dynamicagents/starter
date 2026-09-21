@@ -104,13 +104,13 @@ export type NotifyVerdict =
 
 /**
  * What distinguishes one use of this controller from another — the same shape
- * `HandleTaskDeps` gives the round agents, for the same two reasons: a spec can
- * drive the orchestration against a fake stub, and a second agent could reuse the
+ * `HandleTaskDeps` gives the round agents, for the same reasons: a spec can
+ * drive the orchestration against a fake stub, and another agent could reuse the
  * body with a different resolver.
  *
- * Routing used to be a hardcoded `getAgent(p.identity)` here, which made the two
- * cancellation checks below untestable — a spec could not put the DO into the
- * states they exist to catch.
+ * Routing is injected rather than resolved here: a hardcoded
+ * `getAgent(p.identity)` leaves the cancellation checks below untestable, since
+ * a spec cannot put the DO into the states they exist to catch.
  */
 export interface NotifyTaskDeps {
   /** Route to the agent DO for the verified caller. */

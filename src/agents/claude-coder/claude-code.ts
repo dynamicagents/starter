@@ -1,8 +1,29 @@
 import type { ClaudeCodeConfig } from "@dynamicagents/plugins/claude-code";
 import { CLAUDE_CODE_SESSION } from "@/config";
+import { gitIdentity } from "@/workspace/git-identity";
 
 /** Where the credential pool's `{ index → resetAt }` map lives in DO storage. */
 export const CREDENTIALS_KEY = "claude-credentials";
+
+/**
+ * What `gh` is given so that it will start at all — never a credential.
+ *
+ * `gh` refuses to make any request without a token, even against a public
+ * repository. The sessions' egress gateway deletes `authorization` from every
+ * request not bound for Anthropic, so what reaches GitHub is anonymous: REST
+ * reads of public repositories work, and GraphQL — which GitHub gives anonymous
+ * callers a quota of zero on — does not, so `gh pr view` and `gh issue view`
+ * fail where `gh api repos/…` succeeds.
+ *
+ * Set here rather than in the image because it is only harmless **behind that
+ * gateway**. The Dockerfile is shared with the coder, whose workspace egresses
+ * `direct`: there nothing strips the header, and anything reading `GH_TOKEN` —
+ * a repository script, an `npx`'d client — would present this as a credential
+ * and get a 401 where it would otherwise have had anonymous access. A session's
+ * env reaches only `claude` and the commands it runs, which is exactly the
+ * process tree the gateway covers.
+ */
+export const GH_TOKEN_PLACEHOLDER = "not-a-credential-the-gateway-strips-this";
 
 /**
  * One `ClaudeCodeConfig`, built once and shared by everything that needs it.
@@ -35,11 +56,26 @@ export function claudeCodeConfig(
 ): ClaudeCodeConfig {
   return {
     credentials: () =>
-      [env.CLAUDE_CODE_OAUTH_TOKEN_1, env.CLAUDE_CODE_OAUTH_TOKEN_2].filter(
-        Boolean
-      ),
+      [
+        env.CLAUDE_CODE_OAUTH_TOKEN_1,
+        env.CLAUDE_CODE_OAUTH_TOKEN_2,
+        env.CLAUDE_CODE_OAUTH_TOKEN_3
+      ].filter(Boolean),
     workspaceName,
-    ...CLAUDE_CODE_SESSION
+    ...CLAUDE_CODE_SESSION,
+    env: { GH_TOKEN: GH_TOKEN_PLACEHOLDER },
+    /**
+     * The same identity the workspace and the repo plugin answer with — see
+     * `@/workspace/git-identity`.
+     *
+     * The session commits in repositories neither of those configured: the
+     * submodules of a superproject it cloned, anything it initialises for
+     * itself. It also amends and rebases in the checkout that *is* configured,
+     * and those take the committer from config rather than from the tool that
+     * made the original commit. The plugin turns this into the session's git
+     * environment, which every git it starts inherits.
+     */
+    author: gitIdentity(env)
     /**
      * `restrictToHosts` is deliberately **unset**, which means unrestricted.
      *

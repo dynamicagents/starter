@@ -1,6 +1,7 @@
 import type { AgentLimits } from "@dynamicagents/core";
 import {
   ASK_USER_TOOL_NAME,
+  CHECK_BACK_TOOL_NAME,
   FINAL_REPLY_TOOL_NAME
 } from "@dynamicagents/core/agent";
 import { DELEGATE_TOOL_NAME } from "@dynamicagents/core/subtasks";
@@ -34,13 +35,15 @@ import type {
 
 /**
  * The round contract: how a round ends, and what `delegate` takes. True of every
- * request. It ends with {@link askGuidance}.
+ * request. It ends with {@link askGuidance}, and — for a round that may still
+ * wait — {@link waitGuidance}.
  */
 export function roundContract(ctx: {
   typeKeys: readonly string[];
   maxSubtasks: number;
+  deferrable: boolean;
 }): string {
-  const { typeKeys, maxSubtasks } = ctx;
+  const { typeKeys, maxSubtasks, deferrable } = ctx;
   return `
 
 # Answering this request
@@ -122,18 +125,25 @@ something only the person can give you; ask for that instead.
 to do next ends the request instead of doing it: nothing runs after that call, and
 the user has been told otherwise. Nothing you describe in that message happens.
 
-There are two ways to actually do it, and you must pick one before replying:
+To actually do it, pick one of these before replying:
 
 - The step is **yours to run** — a tool you hold. Call it now, in this turn, and
   reply once you have its result. Words like "proceeding", "now", "next I'll" are
   the signal that you have skipped this.
 - The step is **work for someone else**. That is a \`${DELEGATE_TOOL_NAME}\` call whose
-  "reply" carries the very words you would have announced.
+  "reply" carries the very words you would have announced.${
+    deferrable
+      ? `
+- The step is **something you are waiting on** — a review, a build, a deploy, and
+  you are not the one who finishes it. That is a \`${CHECK_BACK_TOOL_NAME}\` call, not a
+  sentence saying you will check later.`
+      : ""
+  }
 
 If some work failed or was skipped, say plainly what you could not do, in one
 short sentence, without diagnostics or blame — then give them everything you did
 manage. Never present a partial answer as complete, and never invent a result for
-work that failed.${askGuidance}`;
+work that failed.${askGuidance}${deferrable ? waitGuidance : ""}`;
 }
 
 /**
@@ -158,6 +168,7 @@ export function finalRoundNote(
   reason: FinalRoundReason
 ): string {
   if (reason === "no-progress") return noProgressNote();
+  if (reason === "unresponsive-tools") return unresponsiveToolsNote();
   return `
 
 # Your budget is spent
@@ -170,6 +181,34 @@ or take any other action.
 Give them everything you did manage. If something is missing or failed, say so
 plainly in one short sentence — do not apologize at length, and do not describe
 budgets, limits, or this constraint.`;
+}
+
+/**
+ * The arm for a round whose own calls kept running past their time limit.
+ *
+ * Imposed mid-round, from the step after the call that tipped it, so the calls
+ * and their abandon messages are right above this. What it has to prevent is
+ * one more look through the same dead workspace — and a reply that says nothing
+ * about a write that was abandoned rather than refused, since one that reached
+ * the forge before its answer was lost has taken effect.
+ */
+function unresponsiveToolsNote(): string {
+  return `
+
+# Your tools have stopped answering
+
+Calls you made this round ran past their time limit and were abandoned: whatever
+they reach — the workspace, its container — is not responding, and another call
+would wait just as long. You have no tools left except one — call
+\`${FINAL_REPLY_TOOL_NAME}\` now. You cannot delegate, look anything up, or take any
+other action.
+
+Tell the user in a sentence or two that the workspace stopped responding and what
+you were doing when it did, then give them everything you finished before that.
+If an abandoned call was meant to change something outside — a push, a pull
+request — say it may have gone through, so they check before asking for it again.
+
+Do not say you will try again or keep working: nothing runs after this message.`;
 }
 
 /**
@@ -205,12 +244,18 @@ not coming.`;
 
 /**
  * What a round is told about where a person comes into it: a question the model
- * asks, and a call a plugin holds for the person to approve.
+ * asks, and nothing else.
  *
- * Every round agent takes both — every gatekeeper can put either in front of a
- * person. Any of them can reach a point only the person can settle, and the coding
- * agents' pull requests are held for approval by the plugin that opens them. The
- * last part of {@link roundContract}, so it opens on a blank line like the other
+ * Every round agent takes it — every gatekeeper can put a question to a person,
+ * and any agent can reach a point only the person can settle.
+ *
+ * It said more once. No tool this Worker installs is held for a person's
+ * approval now, so the paragraph describing approvals described something that
+ * could not happen — and prompt copy for a non-event is read every round and
+ * acted on never. `RoundPolicy.copy.approvalPrompt` below is untouched: core
+ * requires it, and it is what a plugin that gates a call in future would use.
+ *
+ * Part of {@link roundContract}, so it opens on a blank line like the other
  * prompt strings in this file.
  */
 export const askGuidance = `
@@ -228,11 +273,47 @@ can look up, work out, or reasonably assume — say what you assumed instead. Do
 ask them to confirm a plan they already gave you. Ask one question with everything
 you need in it, and offer options when the possible answers are few.
 
-## Calls the person approves
+`;
 
-Some tools wait for the person's approval before they run. One that comes back
-declined was decided against: do not make that call again for this request. Say
-what you would have done, and carry on with the rest.`;
+/**
+ * The fourth ending: free to sit in, not free to check.
+ *
+ * Appended to {@link roundContract} for a round that may still wait — which is
+ * every open round of an agent with a deferral allowance, until that allowance
+ * runs out. An agent without one never sees this, and its contract never mentions
+ * a call it will not be given.
+ *
+ * Two things it has to prevent, and they pull in opposite directions. Waiting
+ * *instead of working* is the expensive failure: a model that can pause will
+ * pause rather than finish, and each pause reads as progress. Waiting *instead of
+ * answering* is the one worth having: the alternative is a final reply that says
+ * the work is done pending a review nobody has read, which is how a task ends
+ * with its own conclusion unverified.
+ */
+export const waitGuidance = `
+
+## When you are waiting on something
+
+\`${CHECK_BACK_TOOL_NAME}\` ends this round, waits, and starts the next one where this
+left off. The wait itself costs none of your time and nobody is told anything, so it
+is not an interruption for anyone. **Checking is not free**: the round that waits
+and every round that wakes to look are turns like any other, and they come out of
+the same budget as your work.
+
+Use it when carrying on means waiting for something you cannot hurry and can look
+at again: a review being written, a build running, a deploy landing. Say in "why"
+what you are waiting for and what you will check, because the round that wakes
+reads that and nothing else about why it stopped. Pick the wait from how fast the
+thing actually changes — a check that comes back identical spent turns you would
+have kept by waiting longer.
+
+When you wake you will see a \`[check_back]\` line recording the wait. **Check the
+thing you named before deciding anything else**, and then decide again like any
+other round: wait once more if it has not happened, and get on with it if it has.
+
+Do not use it to pause between steps you could take right now, and never to sit
+out work that is yours. If you are waiting on a person rather than an event, that
+is \`${ASK_USER_TOOL_NAME}\`.`;
 
 /**
  * What the person reads when a round holds calls for their approval. The plugin
@@ -263,10 +344,38 @@ export function failureCopy(kind: TaskFailureKind): string | undefined {
   return kind === "unanswered" ? UNANSWERED_COPY : undefined;
 }
 
+/**
+ * Appended to an open round that has spent its deferral allowance.
+ *
+ * Not a `final` round: it may still delegate, ask and answer, and only the
+ * waiting is over. So this withdraws exactly one thing and says why, in the
+ * register {@link noProgressNote} uses — the fact, not the limit. A model told it
+ * "cannot" wait looks for another way to wait; one told the waiting is over gets
+ * on with what it has.
+ *
+ * What it must prevent is the reply that promises to keep checking. Nothing
+ * checks anything after a `final_reply`, and a task that stopped because it ran
+ * out of waiting is the last place to promise more of it.
+ */
+function deferralsSpentNote(): string {
+  return `
+
+# You have done all the waiting this request gets
+
+You have used this request's waits, so \`${CHECK_BACK_TOOL_NAME}\` is no longer
+available. Everything else still is: you can delegate, look things up, ask the
+person, and answer.
+
+Decide now on what you already know. If you were waiting on something that has
+not happened, say so plainly — what you were waiting for, and what you did manage
+without it — and do not offer to keep checking, because nothing will.`;
+}
+
 /** The round policy this Worker's delegating agents run under. */
 export const roundPolicy: RoundPolicy = {
   roundContract,
   finalRoundNote,
+  deferralsSpentNote,
   copy: {
     /** What the user sees on a failed Task. The diagnostic is logged, not shown. */
     taskFailed: "Sorry — something went wrong handling that request.",

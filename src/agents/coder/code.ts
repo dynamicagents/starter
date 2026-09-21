@@ -34,8 +34,8 @@ import { BROWSER_FAMILY } from "@dynamicagents/plugins/browser";
  */
 export const CODE_SUBAGENT_SOUL = [
   "You are a stateless execution subagent working inside a shared workspace. You are given a single, self-contained engineering task with all necessary context supplied inline.",
-  "The directory you are given already exists — a repository checkout, or a scratchpad for work that needs no repository. Do not clone or create it. Work in the directory your task names. It is durable and may hold work from an earlier task; `node_modules` is not, and is reinstalled whenever the container restarts.",
-  "The file tools cannot read inside `node_modules` — it lives in the container rather than in the durable workspace. Use `sb_exec` (`cat`, `grep`) when you need to read a dependency's source. Nothing is missing when this happens.",
+  "The directory you are given already exists — a repository checkout, or a scratchpad for work that needs no repository. Do not clone or create it. Work in the directory your task names. It is durable and may hold work from an earlier task.",
+  "`node_modules` is not: it lives on the container's disk, so a new container reinstalls it, and the file tools cannot see inside it. Use `sb_exec` to read or search there. It is a mount point, so `rm -rf node_modules` fails; `npm ci` clears it itself.",
 
   // The verification rule, held between two failures that pull opposite ways.
   //
@@ -54,7 +54,7 @@ export const CODE_SUBAGENT_SOUL = [
   // docs-only changes**: almost no real task is only a README, so it would buy a
   // rare case while adding a judgement call to every common one — and a wrong
   // answer there lands straight back on the first failure.
-  "Dependencies are installed for you — the host starts the install when the repository is checked out, picking the command from the lockfile. You do not need to run it. If a command tells you the install is still running, nothing was run: wait a moment and call it again. If a command is prefixed with a warning that the install failed, that command did run and its output is real, but `node_modules` is missing — re-run the install command named in the warning yourself before you trust any result that depends on it.",
+  "Dependencies are installed for you — the host starts the install when the repository is checked out, picking the command from the lockfile. You do not need to run it. If a command tells you the install is still running, nothing was run: wait a moment and call it again. If a command is prefixed with a warning that the install failed, that command did run and its output is real, but `node_modules` is missing or incomplete — re-run the install command named in the warning yourself before you trust any result that depends on it.",
 
   "Before you report done, verify your change at a scope that matches it. Which branch applies is decided by the files you edited, not by how confident you feel:",
   "- **Ordinarily:** run `npm run check` if `package.json` defines it, and run the spec that covers each file you touched — `npx vitest run <path to spec>`. Not the whole suite.",
@@ -121,10 +121,12 @@ export function code(config: CodeConfig): AgentPlugin {
     //
     // `onAbort` fires per *subtask*, not per task, and every subtask of this
     // agent shares one container with the parent round. Tearing that container
-    // down because one delegated subtask was cancelled would delete the checkout
+    // down because one delegated subtask was cancelled would take the container
     // out from under the round that delegated it and every sibling still
     // running. Only a task-level moment can safely act, and `agent.ts` owns the
-    // one that does: `onTaskCanceled`, which destroys the container.
+    // one that does: `onTaskCanceled`, which resets the working tree rather than
+    // destroying anything — see `discardWorkingTree` in
+    // `src/workspace/lifecycle.ts` for why that is the cleanup that survives.
 
     subtaskType: {
       key: "code",
@@ -154,8 +156,8 @@ export function code(config: CodeConfig): AgentPlugin {
         //
         // **`repo` is deliberately absent.** A subagent sharing the parent's
         // checkout must not also share its history, and the previous "read-only
-        // inspection" justification did not survive contact: the family is all
-        // six tools or none, so `repo_commit` and `repo_push` were on the table
+        // inspection" justification did not survive contact: the family arrives
+        // whole or not at all, so `repo_commit` and `repo_push` were on the table
         // with nothing but prose between them and the model. `git status` and
         // `git diff` through `sb_exec` give the same information and carry no
         // credential.

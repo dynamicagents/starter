@@ -28,7 +28,12 @@ export const plugins = (host: PluginHost<Env>): AgentPlugin[] => [
   // the decision somewhere it cannot be skipped, and it fails open: a gate that
   // throws counts as `true`, because a wrong reply is noise the user can see and
   // ignore while a wrong silence is invisible to whoever needed an answer.
-  triage({ ai: host.env.AI, aiGatewayId: host.aiGatewayId, ...TRIAGE }),
+  triage({
+    ai: host.env.AI,
+    aiGatewayId: host.aiGatewayId,
+    agentName: host.agentName,
+    ...TRIAGE
+  }),
 
   // Read web pages. Requires the `BROWSER` binding and a paid Workers plan.
   browser({ binding: host.env.BROWSER }),
@@ -43,6 +48,7 @@ export const plugins = (host: PluginHost<Env>): AgentPlugin[] => [
     // `undefined` the moment that override is dropped in favour of core's
     // default, and these calls quietly stop being correlated.
     aiGatewayId: host.aiGatewayId,
+    agentName: host.agentName,
     ...RECALL
   })
 ];

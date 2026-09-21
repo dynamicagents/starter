@@ -6,10 +6,11 @@ import {
   type SubagentClass
 } from "@dynamicagents/core/round";
 import { CLAUDE_CODER_CONFIG } from "@/config";
+import { claudeCoder } from "./definition";
 import { roundPolicy } from "@/round-policy";
 import { activeRepo } from "@/workspace/active-repo";
 import { discardWorkingTree, sweepIdleWorkspaces } from "@/workspace/lifecycle";
-import { workspaceName } from "@/workspace/object";
+import { workspaceName } from "@dynamicagents/plugins/computer";
 import { parentPlugins } from "./plugins";
 import { soulPrompt } from "./soul";
 import { ClaudeCoderSubagent } from "./subagent";
@@ -36,7 +37,7 @@ const LABEL = "claude-coder";
  */
 export class ClaudeCoderAgent extends RoundAgentBase<Env> {
   protected agentConfig(): CoreConfigOverrides {
-    return CLAUDE_CODER_CONFIG;
+    return { ...CLAUDE_CODER_CONFIG, agentName: claudeCoder.tenant };
   }
 
   /**

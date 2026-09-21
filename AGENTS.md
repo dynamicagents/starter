@@ -13,20 +13,25 @@ what core deliberately refuses to ship — the words, the config values, and whi
 plugins each agent installs.
 
 If you find yourself writing durable-execution logic in this repo, that is the
-signal it belongs in core instead.
+signal it belongs in core instead. If you find yourself writing the Durable
+Object a capability lives in — a container, its alarm, its install — that is the
+signal it belongs in plugins. `src/workspace/` holds only config, addresses and
+adapters for the workspace this Worker deploys; the object itself is
+`@dynamicagents/plugins/computer`.
 
 ---
 
 ## Where a thing goes
 
-| You are changing…                         | It goes in                           |
-| ----------------------------------------- | ------------------------------------ |
-| what the model is told about a domain     | the plugin that owns that domain     |
-| what the agent _is_                       | `src/agents/<tenant>/soul.ts`        |
-| how a round ends, or a user-facing string | `src/round-policy.ts`                |
-| which capabilities an agent has           | `src/agents/<tenant>/plugins.ts`     |
-| model ids, budgets, limits                | `src/config.ts`                      |
-| cancellation, retries, idempotency, DAGs  | **`@dynamicagents/core`** — not here |
+| You are changing…                         | It goes in                              |
+| ----------------------------------------- | --------------------------------------- |
+| what the model is told about a domain     | the plugin that owns that domain        |
+| what the agent _is_                       | `src/agents/<tenant>/soul.ts`           |
+| how a round ends, or a user-facing string | `src/round-policy.ts`                   |
+| which capabilities an agent has           | `src/agents/<tenant>/plugins.ts`        |
+| model ids, budgets, limits                | `src/config.ts`                         |
+| the object a capability runs in           | **`@dynamicagents/plugins`** — not here |
+| cancellation, retries, idempotency, DAGs  | **`@dynamicagents/core`** — not here    |
 
 `src/round-policy.ts` and `src/config.ts` sit at the top level because two agents
 share them. An agent importing a _sibling's_ module is what `npm run
@@ -120,6 +125,16 @@ because `allowScripts` here lets npm run it — drop either and every subpath re
 to a missing file. npm pins the ref to a SHA in the lockfile, so a merge upstream does
 not reach this repo until someone reinstalls; a plain reinstall of the lockfile keeps
 the old commit.
+
+**A git dependency is allowed by its own key, written without a committish.** The
+`@dynamicagents/*` entries in `allowScripts` are registry keys and match nothing while
+these are git refs — npm identifies a git dependency by repo and commit, never by the
+name in a manifest it has not verified. So each ref needs a `github:owner/repo` entry
+of its own, and **no `#sha` on it**: npm treats a committish in the key as a prefix the
+resolved SHA must start with, so a pinned one approves exactly one commit and goes
+unreviewed — the build silently losing `dist/` — the next time core or plugins merges.
+Without a committish it matches the repo at any commit, which is the only form that
+survives a moving ref.
 
 **A release is a PR from `next` into `main`, merged with a merge commit.** Before it,
 once core and plugins are published, a PR into `next` pins the new versions and removes

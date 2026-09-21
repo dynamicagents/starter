@@ -20,14 +20,14 @@
 # **The container's TLS trust is not established here**, and cannot be: under
 # `egress: { mode: "http-gateway" }` the CA is mounted after the container
 # starts, so anything in this image runs too early to find it. The workspace
-# object installs it instead — `#trustInterceptionCa` in
-# `src/workspace/object.ts` carries the ordering constraint and the measurements.
+# object installs it instead — the `ca-trust` module in
+# `@dynamicagents/plugins/computer` carries the ordering constraint and the
+# measurements.
 # `NODE_OPTIONS` below is the other half, and belongs here because it is an
 # image property.
 #
-# The tag on the `computerd` stage MUST track the `@cloudflare/computer` version
-# in package.json. The library running in the Worker speaks capnweb to the
-# daemon baked in here; they are released as a pair.
+# The `computerd` tag is paired with `@cloudflare/computer`;
+# `scripts/verify-container-env.mjs` holds it to the installed version.
 #
 # Add to this file deliberately. Every layer is image size, image size is
 # container cold start, and cold start is already the slow part of a round.
@@ -35,7 +35,7 @@
 # A single layer over `scratch` holding one file: the 126 MB SEA binary at
 # /usr/local/bin/computerd. Nothing else is in this image, so it is a staging
 # stage and never a base.
-FROM ghcr.io/cloudflare/computer-computerd-linux-x64:0.2.1 AS computerd
+FROM ghcr.io/cloudflare/computer-computerd-linux-x64:0.3.1 AS computerd
 
 # `debian:stable-slim`, matching the upstream reference recipe
 # (examples/container/Dockerfile) exactly — and the base is the load-bearing
@@ -164,6 +164,56 @@ RUN if [ -n "$CLAUDE_CODE_VERSION" ]; then \
       echo "no CLAUDE_CODE_VERSION build arg: this image has no Claude Code"; \
     fi
 
+# --- The GitHub CLI, for reading a public repository ------------------------
+#
+# Behind its own build arg for the reason Claude Code is: `image_vars` in
+# wrangler.jsonc decides per `containers[]` entry, so the `coder` image passes
+# nothing and stays smaller.
+#
+# **It is unauthenticated, and that is the whole design.** The container holds no
+# forge credential and must not — the `repo` module in `@dynamicagents/plugins`
+# carries the argument, and it has not changed: git executes whatever `.git/config`
+# and `.git/hooks` name, and the model has a root shell on that filesystem. What
+# changed is that *reading a public repository needs no credential*, and reading
+# is most of what a session reaches for `gh` to do.
+#
+# The catch: `gh` refuses to run at all without a token, even against a public
+# repository — it exits asking for `gh auth login` before it makes a request. So
+# the claude-coder sessions are launched with a placeholder GH_TOKEN, and the
+# egress gateway deletes the header on the way out: the same swap the Anthropic
+# credential rides on, inverted. The placeholder lives in the session env, not in
+# this image, because it is only harmless behind that gateway — the `claude-coder`
+# agent's `claude-code.ts` carries why.
+#
+# What that buys, and what it does not:
+#   - REST reads of public repositories: `gh api repos/<o>/<r>/pulls/<n>`, its
+#     `/comments`, `/files`, `/reviews`. 60 requests an hour for the whole egress
+#     IP, which is shared, so it can be exhausted by someone else.
+#   - **not** `gh pr view`, `gh issue view` or anything else built on GraphQL:
+#     GitHub gives anonymous callers a GraphQL quota of zero.
+#   - no write, and no private repository.
+#   - the forge work — branches, commits, pushes, pull requests, review replies —
+#     belongs to the parent's `repo_*` tools, which hold the credential Worker-side.
+#
+# A pinned release tarball rather than the apt repository: `gh` is a static Go
+# binary that needs no dependency resolution, so this is one layer and no second
+# keyring, and the checksum is verified because the build reaches the network for
+# it. Only `bin/gh` is kept; the tarball also carries manpages and completions
+# that nothing in here reads.
+ARG GH_VERSION=""
+ARG GH_SHA256=""
+RUN if [ -n "$GH_VERSION" ]; then \
+      curl -fsSL -o /tmp/gh.tar.gz \
+        "https://github.com/cli/cli/releases/download/v${GH_VERSION}/gh_${GH_VERSION}_linux_amd64.tar.gz" \
+      && echo "${GH_SHA256}  /tmp/gh.tar.gz" | sha256sum -c - \
+      && tar -xzf /tmp/gh.tar.gz -C /tmp \
+      && install -m 0755 "/tmp/gh_${GH_VERSION}_linux_amd64/bin/gh" /usr/local/bin/gh \
+      && rm -rf /tmp/gh.tar.gz "/tmp/gh_${GH_VERSION}_linux_amd64" \
+      && gh --version; \
+    else \
+      echo "no GH_VERSION build arg: this image has no GitHub CLI"; \
+    fi
+
 # Fail the BUILD, not round three, if the base image stops delivering the
 # toolchain. npm ignores `engines` unless a repo opts in, so nothing downstream
 # would tell you.
@@ -175,11 +225,25 @@ RUN node -e "const m=Number(process.versions.node.split('.')[0]); if (m < 24) { 
 # The workspace object shells out to this to trust the interception CA, so a
 # base image that stopped shipping it must fail here rather than at round three.
   && command -v update-ca-certificates \
+# The workspace object bind-mounts container disk over node_modules with these;
+# `@dynamicagents/plugins/computer` carries why.
+  && command -v mount && command -v mountpoint && command -v sha256sum \
   && test -x /usr/local/bin/computerd
 
 # Everything below exists because tool output lands in a model's context window.
 # `sb_exec` truncates to a byte budget, so every byte spent on an ANSI colour
 # code or an npm progress bar is a byte not spent on the error message.
+#
+# **The COMPUTER_VAR_ prefix is what makes any of it reach a command**, and its
+# absence fails silently. A command spawned by the workspace inherits PATH, HOME,
+# TMPDIR, TZ, LANG, TERM and the LC_* family from `computerd` and nothing else —
+# the allowlist that keeps the daemon's own secret out of a cloned repository's
+# `postinstall`. Anything else arrives only as COMPUTER_VAR_<NAME>, which the
+# daemon strips on the way through, so COMPUTER_VAR_CI=1 is what a command sees
+# as CI=1. An unprefixed ENV here configures `computerd` and stops there.
+#
+# LANG is the exception below, and deliberately unprefixed: it is on the
+# allowlist already, so it passes as itself.
 #
 # CI=1 does double duty: it is also what stops wrangler and friends from
 # blocking on an interactive prompt that nobody is there to answer — a hang,
@@ -195,33 +259,32 @@ RUN node -e "const m=Number(process.versions.node.split('.')[0]); if (m < 24) { 
 #
 # DISABLE_AUTOUPDATER=1 belongs in the image as well as in the exec environment
 # the plugin passes. The plugin's copy covers the sessions it launches; this one
-# covers anything else that ever runs `claude` in here — a debugging shell, a
-# repo script — and an autoupdate is exactly the event the pin above exists to
-# prevent. Harmless in the image without the CLI.
+# covers anything else that ever runs `claude` in here — a repo script, a command
+# the model writes — and an autoupdate is exactly the event the pin above exists
+# to prevent. Harmless in the image without the CLI.
 #
 # IS_SANDBOX=1 is here for the same reason, and it is load-bearing for the same
 # clients. **This container runs as root**, and the CLI refuses to bypass its
 # permission checks under uid 0 without it — `process.exit(1)` before the first
 # JSON line, with the only explanation on stderr. The plugin sets it alongside
 # `--permission-mode bypassPermissions` so the two cannot drift; this copy is
-# what makes a hand-run `claude` in a debugging shell behave the same way as the
-# sessions do, which is the whole point of debugging in here.
+# what makes any other `claude` in here behave the same way the sessions do.
 #
 # It says what it means: a container with no persistent identity, holding no
 # credential, running a cloned repository's `postinstall` by design. If this
 # image is ever changed to exec as a non-root user, delete this line — the guard
 # it clears will no longer be firing.
-ENV CI=1 \
-    HUSKY=0 \
-    DISABLE_AUTOUPDATER=1 \
-    IS_SANDBOX=1 \
-    NO_COLOR=1 \
-    FORCE_COLOR=0 \
-    NPM_CONFIG_FUND=false \
-    NPM_CONFIG_AUDIT=false \
-    NPM_CONFIG_PROGRESS=false \
-    NPM_CONFIG_UPDATE_NOTIFIER=false \
-    WRANGLER_SEND_METRICS=false \
+ENV COMPUTER_VAR_CI=1 \
+    COMPUTER_VAR_HUSKY=0 \
+    COMPUTER_VAR_DISABLE_AUTOUPDATER=1 \
+    COMPUTER_VAR_IS_SANDBOX=1 \
+    COMPUTER_VAR_NO_COLOR=1 \
+    COMPUTER_VAR_FORCE_COLOR=0 \
+    COMPUTER_VAR_NPM_CONFIG_FUND=false \
+    COMPUTER_VAR_NPM_CONFIG_AUDIT=false \
+    COMPUTER_VAR_NPM_CONFIG_PROGRESS=false \
+    COMPUTER_VAR_NPM_CONFIG_UPDATE_NOTIFIER=false \
+    COMPUTER_VAR_WRANGLER_SEND_METRICS=false \
     LANG=C.UTF-8
 
 # Node reads the OS trust store instead of the one it bundles.
@@ -239,10 +302,14 @@ ENV CI=1 \
 # with its own lifetime — and getting it wrong anywhere fails as a TLS error
 # that names no cause.
 #
+# The prefix carries the same weight as the flag: unprefixed, this configures
+# `computerd`, which makes no outbound TLS connection and does not need it, while
+# every client that does keeps failing.
+#
 # Safe because `ca-certificates` is installed above, so the OS store already
 # holds the normal public roots — verified: `npm ping` reaches the registry with
 # this set and no extra CA present.
-ENV NODE_OPTIONS=--use-openssl-ca
+ENV COMPUTER_VAR_NODE_OPTIONS=--use-openssl-ca
 
 # computerd's own configuration. `CloudflareContainerBackend` passes PORT and
 # MOUNT_POINT in the container env when it starts the container, so these two

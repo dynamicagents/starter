@@ -6,10 +6,11 @@ import {
   type SubagentClass
 } from "@dynamicagents/core/round";
 import { CODER_CONFIG } from "@/config";
+import { coder } from "./definition";
 import { roundPolicy } from "@/round-policy";
 import { activeRepo } from "@/workspace/active-repo";
 import { discardWorkingTree, sweepIdleWorkspaces } from "@/workspace/lifecycle";
-import { workspaceName } from "@/workspace/object";
+import { workspaceName } from "@dynamicagents/plugins/computer";
 import { parentPlugins } from "./plugins";
 import { soulPrompt } from "./soul";
 import { CoderSubagent } from "./subagent";
@@ -30,7 +31,7 @@ const LABEL = "coder";
  */
 export class CoderAgent extends RoundAgentBase<Env> {
   protected agentConfig(): CoreConfigOverrides {
-    return CODER_CONFIG;
+    return { ...CODER_CONFIG, agentName: coder.tenant };
   }
 
   /**

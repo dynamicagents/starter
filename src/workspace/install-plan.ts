@@ -11,11 +11,10 @@ import {
  * guess); the commands are here, because they vary per repository in a way a
  * hard-coded `npm ci` would get wrong for most of them.
  *
- * Runs on every checkout and every cold container: `node_modules` lives in the
- * container and dies with it, and the tree looks fine until something imports
- * one. It runs *outside* a round because `npm ci` measured 225 s on
- * slack-gatekeeper, and a chunk step is killed at ten minutes — after which
- * Workflows retries the chunk and installs again.
+ * Runs on every checkout, and again for every new container: the tree lives on
+ * the container's disk, so it goes with the container. It runs *outside* a round
+ * because `npm ci` measured 225 s on slack-gatekeeper, and a chunk step is killed
+ * at ten minutes — after which Workflows retries the chunk and installs again.
  *
  * Overrides are keyed `owner/repo`, exactly as the clone URL spells it, and
  * replace the whole command:

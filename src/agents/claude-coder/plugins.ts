@@ -7,9 +7,13 @@ import { browser } from "@dynamicagents/plugins/browser";
 import { recall } from "@dynamicagents/plugins/recall";
 import { RECALL } from "@/config";
 import { activeRepo } from "@/workspace/active-repo";
-import { workspaceContainer } from "@/workspace/container";
+import {
+  DEPENDENCY_TREE_NOTE,
+  workspaceContainer
+} from "@/workspace/container";
 import { workspaceGit } from "@/workspace/git";
-import { workspaceName } from "@/workspace/object";
+import { workspaceName } from "@dynamicagents/plugins/computer";
+import { gitIdentity } from "@/workspace/git-identity";
 import { hostScratch } from "@/workspace/scratch";
 import { claudeCodeConfig } from "./claude-code";
 
@@ -51,7 +55,7 @@ const PARENT_SANDBOX_CAPABILITY = [
   "You can read the workspace the Claude Code sessions work in, but not change it:",
   "- `sb_read` reads a file, `sb_ls` lists a directory, `sb_exists` checks a path.",
   "Use these to check a session's report against what is actually on disk — read the file it says it changed. You cannot run commands, write, or edit.",
-  "`node_modules` is not in the workspace — it lives in the container only — so these tools cannot see inside it. That is expected and not a sign anything is missing."
+  DEPENDENCY_TREE_NOTE
 ].join("\n");
 
 /**
@@ -80,12 +84,8 @@ export const parentPlugins = (host: PluginHost<Env>): AgentPlugin[] => {
     host.env.CLAUDE_CODER_WORKSPACE.get(
       host.env.CLAUDE_CODER_WORKSPACE.idFromName(name())
     );
-  // Hoisted because two plugins commit under it now. Same identity as `coder`'s,
-  // deliberately — see the comment on `author` in `src/agents/coder/plugins.ts`.
-  const author = {
-    name: host.env.GITHUB_NAME || "da-coder",
-    email: host.env.GITHUB_EMAIL
-  };
+  /** Shared with the workspace object — see `@/workspace/git-identity`. */
+  const author = gitIdentity(host.env);
 
   return [
     /**
@@ -124,8 +124,8 @@ export const parentPlugins = (host: PluginHost<Env>): AgentPlugin[] => {
         const ws = workspace();
         // Before the install, and never inside it: an install is conditional
         // where a checkout is not, so no install outcome may decide whether the
-        // path is recorded. The reasoning is on `noteCheckout` in
-        // `src/workspace/object.ts`.
+        // path is recorded. The reasoning is on `noteCheckout` in the
+        // workspace host, in `@dynamicagents/plugins/computer`.
         await ws.noteCheckout({
           dir,
           kind: "repo",
@@ -171,6 +171,7 @@ export const parentPlugins = (host: PluginHost<Env>): AgentPlugin[] => {
       // chat calls. Spread the rest: enumerating each field silently drops any
       // option the plugin adds later.
       aiGatewayId: host.aiGatewayId,
+      agentName: host.agentName,
       ...RECALL
     }),
     restrictMainAgentTools(computer(config), {

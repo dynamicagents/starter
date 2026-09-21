@@ -5,7 +5,8 @@ import { createAgentRuntime } from "@dynamicagents/core";
 import type { PluginHost } from "@dynamicagents/core/host";
 import type { RecipeExecutionRequest } from "@dynamicagents/core/subtasks";
 import { makeDoHelpers } from "@dynamicagents/core/testing";
-import { getWorkspace } from "@cloudflare/computer";
+import type { ClaudeCoderWorkspaceDO } from "@/index";
+import { openWorkspace } from "@dynamicagents/plugins/computer";
 import {
   CLAUDE_CODE_TYPE,
   WORKSPACE_RUNTIME_KEY
@@ -21,6 +22,11 @@ import {
   type ClaudeCoderSubagent
 } from "@/agents/claude-coder/subagent";
 import { CLAUDE_CODER_CONFIG, CLAUDE_CODE_SESSION } from "@/config";
+import {
+  claudeCodeConfig,
+  GH_TOKEN_PLACEHOLDER
+} from "@/agents/claude-coder/claude-code";
+import { gitIdentity } from "@/workspace/git-identity";
 
 /**
  * The claude-coder's wiring, pinned.
@@ -79,6 +85,19 @@ describe("the parent's surface", () => {
   });
 
   /**
+   * Asserted here as well as in `coder-surface.spec.ts`, because this agent's
+   * `parentPlugins` is its own list: a review tool dropped from it would leave
+   * this agent unable to answer a review while the coder's spec still passed.
+   */
+  it("can find out whether a review has landed, read it, and answer it", async () => {
+    const names = await toolNames();
+
+    expect(names).toContain("repo_pr_review_status");
+    expect(names).toContain("repo_pr_threads");
+    expect(names).toContain("repo_pr_thread_reply");
+  });
+
+  /**
    * The whole point of the agent. A parent that could edit would edit, and the
    * session it exists to delegate to would never run.
    */
@@ -107,6 +126,19 @@ describe("the parent's surface", () => {
 
   it("offers exactly one subtask type, and it is the Claude Code one", () => {
     expect(parent().types.keys).toEqual([CLAUDE_CODE_TYPE]);
+  });
+});
+
+describe("what the main agent asks a person before doing", () => {
+  it("holds nothing at all", async () => {
+    // Over this agent's own `parentPlugins`, which is a separate list from the
+    // coder's — so a rule added on one side is caught whichever side it lands on.
+    // Nothing here is gated; `test/coder-surface.spec.ts` says why.
+    const surface = await parent().mainAgentSurface({
+      session: { getCompactions: async () => [] } as never
+    });
+
+    expect(Object.keys(surface.toolApproval)).toEqual([]);
   });
 });
 
@@ -171,7 +203,9 @@ const { freshStub: freshSubagent } = makeDoHelpers(
     }
   ).CLAUDE_CODER_SUBAGENT
 );
-const { freshStub: freshWorkspace } = makeDoHelpers(env.CLAUDE_CODER_WORKSPACE);
+const { freshStub: freshWorkspace } = makeDoHelpers<ClaudeCoderWorkspaceDO>(
+  env.CLAUDE_CODER_WORKSPACE
+);
 
 const request = (): RecipeExecutionRequest => ({
   taskId: "task-1",
@@ -245,6 +279,124 @@ describe("executeChunk refuses to guess", () => {
 });
 
 /**
+ * The wiring that makes a session audible while it is still working.
+ *
+ * Core does the posting and has its own specs for it; the drain has its own for
+ * the sink. What belongs here is the seam between them — the one line that can
+ * silently undo both.
+ *
+ * `executeChunk` is overridden outright and never reaches `super`, which is
+ * where the base normally arms the channel, so this class has to arm it itself.
+ * Delete that line and nothing fails: the session runs, the work lands, and the
+ * notes go nowhere. `abortRun` is overridden for the same reason and carries the
+ * same obligation. There is no container in this pool, so both are observed
+ * directly rather than through a drain.
+ */
+describe("a session's notes reach the gatekeeper while it works", () => {
+  /** Drive one facet with its callback channel captured instead of posted. */
+  const withCapturedChannel = async (
+    fn: (
+      instance: ClaudeCoderSubagent,
+      posted: { text: string; key: string }[]
+    ) => Promise<void>
+  ) => {
+    const stub = freshSubagent("live-progress");
+    await runInDurableObject(stub, async (instance: ClaudeCoderSubagent) => {
+      const posted: { text: string; key: string }[] = [];
+      (instance as unknown as { pushChannel: () => unknown }).pushChannel =
+        () => ({
+          working: async (text: string, key: string) => {
+            posted.push({ text, key });
+          }
+        });
+      await fn(instance, posted);
+    });
+  };
+
+  const push = {
+    taskId: "task-1",
+    contextId: "ctx-1",
+    pushUrl: "https://gatekeeper.example/a2a/notifications",
+    pushToken: "token",
+    jku: "https://agent.example/.well-known/jwks.json"
+  };
+
+  it("arms the channel on a chunk that never reaches the base class", async () => {
+    await withCapturedChannel(async (instance, posted) => {
+      // Fails on the wiring guard, which is fine: arming happens before every
+      // early return, because a chunk that refuses still must not leave a
+      // previous turn's channel behind it.
+      await instance.executeChunk(request(), 0, {}, undefined, {
+        push,
+        ordinal: 3
+      });
+
+      await (
+        instance as unknown as {
+          postProgress: (e: { key: string; text: string }) => Promise<void>;
+        }
+      ).postProgress({ key: "claude:0", text: "reading the tree" });
+
+      // The label is what tells a reader in a busy thread which branch is
+      // talking — the ordinal comes from the parent's row, not from here.
+      expect(posted).toEqual([
+        { text: "[claude-code 3] reading the tree", key: "claude:0" }
+      ]);
+    });
+  });
+
+  it("stops posting when the session is canceled", async () => {
+    await withCapturedChannel(async (instance, posted) => {
+      await instance.executeChunk(request(), 0, {}, undefined, {
+        push,
+        ordinal: 0
+      });
+      await (
+        instance as unknown as {
+          postProgress: (e: { key: string; text: string }) => Promise<void>;
+        }
+      ).postProgress({ key: "claude:0", text: "before" });
+
+      /**
+       * The abort path this class overrides, holding no model call for the base
+       * signal to stand in for.
+       *
+       * `onTaskCanceled` calls this and then waits for the drain to unwind,
+       * which is up to a minute of a session taking its `SIGTERM`, running its
+       * hooks and syncing its filesystem — and every note parsed in that minute
+       * would be posted to a Task the user already canceled.
+       */
+      expect(await instance.abortRun()).toBe(false);
+      await (
+        instance as unknown as {
+          postProgress: (e: { key: string; text: string }) => Promise<void>;
+        }
+      ).postProgress({ key: "claude:1", text: "after the cancel" });
+
+      expect(posted.map((p) => p.key)).toEqual(["claude:0"]);
+    });
+  });
+
+  it("clears it when a later chunk arrives without one", async () => {
+    await withCapturedChannel(async (instance, posted) => {
+      await instance.executeChunk(request(), 0, {}, undefined, {
+        push,
+        ordinal: 3
+      });
+      await instance.executeChunk(request(), 1, {}, undefined, undefined);
+
+      await (
+        instance as unknown as {
+          postProgress: (e: { key: string; text: string }) => Promise<void>;
+        }
+      ).postProgress({ key: "claude:0", text: "leaked" });
+
+      expect(posted).toEqual([]);
+    });
+  });
+});
+
+/**
  * The other side of the refusal above: a checkout the install resolver had
  * nothing to do in is still a checkout, and this gate must not confuse the two.
  *
@@ -275,9 +427,7 @@ describe("a checkout with nothing to install", () => {
 
     // A repository with git in it and no lockfile: cloned, recorded, and skipped
     // by the resolver.
-    using ws = await getWorkspace(
-      workspace as unknown as Parameters<typeof getWorkspace>[0]
-    );
+    using ws = await openWorkspace(workspace);
     await ws.fs.mkdir(`${dir}/.git`, { recursive: true });
     await ws.fs.writeFile(`${dir}/.git/HEAD`, "ref: refs/heads/main\n");
     await workspace.noteCheckout({ dir, kind: "repo", repo: "acme/spike" });
@@ -333,9 +483,9 @@ describe("the credential pool", () => {
  * aborts the turn, kills its Bash process tree, runs its `SessionEnd` hooks,
  * exits 143. Meanwhile the parent's `onTaskCanceled` awaits `abortRun` and then
  * runs `git reset --hard && git clean -fdx` in the same container — and the
- * container-to-workspace sync is driven by the *drain* reaching `done`, so a
- * reset that goes first can be followed by a sync carrying files the session
- * wrote after it. The cleanup that exists to guarantee a clean tree would leave
+ * session's writes reach the workspace on the pull its own drain triggers when
+ * it reaches `done`, so a reset that goes first can be followed by a sync
+ * carrying files the session wrote after it. The cleanup that exists to guarantee a clean tree would leave
  * an arbitrary half-reset one.
  *
  * The ordering itself needs a real container and belongs to the deploy-time
@@ -391,6 +541,49 @@ describe("waiting for an interrupted session to unwind", () => {
 });
 
 /**
+ * A branch that failed at its step, or a cancel that found no drain in hand,
+ * still has to stop the session: core calls `abortExecution` for both, and the
+ * session it started is what is left running.
+ */
+describe("stopping a session nothing is draining", () => {
+  it("does nothing for a facet that never started one", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    warn.mockClear();
+    const stub = freshSubagent("teardown-idle");
+
+    await runInDurableObject(stub, (instance: ClaudeCoderSubagent) =>
+      instance.abortExecution([])
+    );
+
+    expect(warn).not.toHaveBeenCalled();
+  });
+
+  it("reaches for the session it recorded, and never throws for it", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    warn.mockClear();
+    const stub = freshSubagent("teardown-recorded");
+
+    await runInDurableObject(
+      stub,
+      async (instance: ClaudeCoderSubagent, state) => {
+        await state.storage.put("claude-session", {
+          name: "teardown-recorded",
+          subtaskId: 1
+        });
+        // The suite reaches no container, so the stop fails exactly where a
+        // dead one would — and a teardown still has to finish.
+        await instance.abortExecution([]);
+      }
+    );
+
+    expect(warn).toHaveBeenCalledWith(
+      "[claude-coder] could not stop the session on teardown",
+      expect.anything()
+    );
+  });
+});
+
+/**
  * What reaches the session, and in what order.
  *
  * A Claude Code session cannot query the host — it has no tool that reaches it —
@@ -404,8 +597,19 @@ describe("the brief a session starts from", () => {
     over: Partial<RecipeExecutionRequest> = {}
   ): RecipeExecutionRequest => ({ ...request(), ...over });
 
-  it("is the bare prompt when there is nothing to add", () => {
-    expect(sessionBrief(withPrompt())).toBe("add a --json flag");
+  it("carries what the container holds, when there is nothing else to add", () => {
+    const brief = sessionBrief(withPrompt());
+
+    expect(brief.startsWith("add a --json flag")).toBe(true);
+    // Unconditional, because it is true of every session: a model reaches for
+    // `gh` unprompted, this one is authenticated as nobody, and neither "it is
+    // missing" nor "it is signed in" is what it will assume. Discovering the
+    // difference by failing costs a turn each time.
+    expect(brief).toContain("`gh` in this container");
+    expect(brief).toContain("authenticated as nobody");
+    // …and who does hold the credential, or the session tries to route around
+    // the boundary rather than reporting back through it.
+    expect(brief).toContain("belong to the agent");
   });
 
   it("carries the workspace note where the session will read it", () => {
@@ -484,5 +688,103 @@ describe("the footer under a session's report", () => {
 describe("the permission mode this deployment runs sessions under", () => {
   it("bypasses, because every other mode cannot edit the checkout", () => {
     expect(CLAUDE_CODE_SESSION.permissionMode).toBe("bypassPermissions");
+  });
+});
+
+/**
+ * Pinned for the same reason as the mode above, against the same kind of
+ * silence: a wrong value in either of these fails nothing and reports nothing,
+ * so only an assertion catches it. `CLAUDE_CODE_SESSION` in `src/config.ts`
+ * carries why each is what it is.
+ */
+describe("how hard this deployment asks a session to think", () => {
+  it("buys depth, because a half-finished checkout costs more than a turn", () => {
+    expect(CLAUDE_CODE_SESSION.effort).toBe("xhigh");
+  });
+
+  it("sets no turn ceiling, which would be inert rather than a limit", () => {
+    expect(CLAUDE_CODE_SESSION).not.toHaveProperty("maxTurns");
+  });
+});
+
+/**
+ * What this agent hands the pool — not what the pool does with it.
+ *
+ * The rotation itself is specified in `@dynamicagents/plugins` against fakes.
+ * What only this side can get wrong is the array: the order, which is priority
+ * because the egress gateway spends entry 0 first, and the empty entry an unset
+ * secret produces, which would otherwise be sent as a bare `Bearer `.
+ */
+describe("claude-coder's credential pool", () => {
+  it("hands over every configured credential, in declared order", () => {
+    const config = claudeCodeConfig(env as never, () => "ws");
+
+    // A misspelled binding reads as `undefined` and is filtered out, so a
+    // missing entry fails here rather than at the first 429.
+    expect(config.credentials()).toEqual([
+      env.CLAUDE_CODE_OAUTH_TOKEN_1,
+      env.CLAUDE_CODE_OAUTH_TOKEN_2,
+      env.CLAUDE_CODE_OAUTH_TOKEN_3
+    ]);
+  });
+
+  it("drops an unset entry instead of offering an empty credential", () => {
+    const config = claudeCodeConfig(
+      {
+        CLAUDE_CODE_OAUTH_TOKEN_1: "sk-ant-oat01-one",
+        CLAUDE_CODE_OAUTH_TOKEN_2: "",
+        CLAUDE_CODE_OAUTH_TOKEN_3: "sk-ant-oat01-three"
+      } as never,
+      () => "ws"
+    );
+
+    expect(config.credentials()).toEqual([
+      "sk-ant-oat01-one",
+      "sk-ant-oat01-three"
+    ]);
+  });
+});
+
+/**
+ * Who a session's commits belong to.
+ *
+ * Why the session needs an identity of its own is beside the option, in
+ * `@/agents/claude-coder/claude-code.ts`. What only this side can get wrong is
+ * answering it with a *different* identity from the workspace object's, which
+ * is the disagreement `@/workspace/git-identity` exists to prevent — so this
+ * pins that they are one answer, not any particular name.
+ */
+describe("who a session commits as", () => {
+  it("hands the session the deployment's git identity", () => {
+    const config = claudeCodeConfig(env as never, () => "ws");
+
+    expect(config.author).toEqual(gitIdentity(env as never));
+  });
+});
+
+/**
+ * Where `gh`'s placeholder token lives, which is the whole of its safety.
+ *
+ * It is only harmless behind the sessions' egress gateway, which strips it. In
+ * the image it would also reach the coder's container, whose egress is `direct`,
+ * and be presented to GitHub as a credential by anything that reads `GH_TOKEN`.
+ */
+describe("gh's placeholder token", () => {
+  it("rides in the session env, which only the gateway-fronted sessions get", () => {
+    const config = claudeCodeConfig(env as never, () => "ws");
+
+    expect(config.env?.GH_TOKEN).toBe(GH_TOKEN_PLACEHOLDER);
+  });
+
+  it("tells the session which gh commands can work at all", () => {
+    const brief = sessionBrief({
+      prompt: "look at the issue",
+      references: []
+    } as never);
+
+    // GitHub gives anonymous callers a GraphQL quota of zero, so the high-level
+    // commands a model reaches for first are the ones that cannot work.
+    expect(brief).toContain("gh api repos/");
+    expect(brief).toContain("GraphQL");
   });
 });

@@ -4,11 +4,10 @@
  *
  * ## Why this exists
  *
- * The README used to say adding or removing an agent was "three edits, no
- * leftovers". It was five, and they were not adjacent: a directory, two spots in
- * `src/index.ts`, three blocks in `wrangler.jsonc`, an entry in
+ * An agent is not one edit and the edits are not adjacent: a directory, spots in
+ * `src/index.ts`, blocks in `wrangler.jsonc`, an entry in
  * `verify-isolation.mjs`, and any secret the agent's plugins declared. Several of
- * them were stringly-typed, and a missed one fails at a different time each: a
+ * them are stringly-typed, and a missed one fails at a different time each: a
  * forgotten DO binding fails at deploy, a forgotten `new_sqlite_classes` entry
  * fails at the first request, a forgotten isolation entry fails never — it just
  * stops checking the agent.
@@ -178,7 +177,8 @@ ${
     : `import { DynamicAgent } from "@dynamicagents/core/host";`
 }
 import { ${screaming}_CONFIG } from "@/config";
-${isRound ? 'import { roundPolicy } from "@/round-policy";\n' : ""}import { plugins } from "./plugins";
+${isRound ? 'import { roundPolicy } from "@/round-policy";\n' : ""}import { ${camel} } from "./definition";
+import { plugins } from "./plugins";
 import { soulPrompt } from "./soul";
 ${isRound ? `import { ${pascal}Subagent } from "./subagent";\n` : ""}
 /**
@@ -192,7 +192,7 @@ ${isRound ? `import { ${pascal}Subagent } from "./subagent";\n` : ""}
  */
 export class ${pascal}Agent extends ${isRound ? "RoundAgentBase" : "DynamicAgent"}<Env> {
   protected agentConfig(): CoreConfigOverrides {
-    return ${screaming}_CONFIG;
+    return { ...${screaming}_CONFIG, agentName: ${camel}.tenant };
   }
 
   protected agentPlugins(host: PluginHost<Env>): AgentPlugin[] {
@@ -240,6 +240,7 @@ const SUBAGENT_TS = `import type { AgentPlugin, CoreConfigOverrides } from "@dyn
 import type { PluginHost } from "@dynamicagents/core/host";
 import { RecipeSubagentHost } from "@dynamicagents/core/round";
 import { ${screaming}_CONFIG } from "@/config";
+import { ${camel} } from "./definition";
 import { plugins } from "./plugins";
 
 /**
@@ -251,7 +252,7 @@ import { plugins } from "./plugins";
  */
 export class ${pascal}Subagent extends RecipeSubagentHost<Env> {
   protected agentConfig(): CoreConfigOverrides {
-    return ${screaming}_CONFIG;
+    return { ...${screaming}_CONFIG, agentName: ${camel}.tenant };
   }
 
   protected agentPlugins(host: PluginHost<Env>): AgentPlugin[] {

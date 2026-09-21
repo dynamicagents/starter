@@ -4,9 +4,10 @@ import type {
   TurnPushContext
 } from "@dynamicagents/core/a2a";
 import { DynamicAgent, type PluginHost } from "@dynamicagents/core/host";
-import { sessionMessage } from "@dynamicagents/core/agent";
+import { parseTurn, sessionMessage } from "@dynamicagents/core/agent";
 import { noReplyTool, NO_REPLY_TOOL_NAME } from "@dynamicagents/plugins/triage";
 import { MAX_STEPS, PROACTIVE_CONFIG } from "@/config";
+import { proactive } from "./definition";
 import { soulPrompt } from "./soul";
 import { plugins } from "./plugins";
 import { runTurn, type TurnOutcome } from "./loop";
@@ -40,7 +41,7 @@ const UNEXPECTED_REPLY =
  */
 export class ProactiveAgent extends DynamicAgent<Env> {
   protected agentConfig(): CoreConfigOverrides {
-    return PROACTIVE_CONFIG;
+    return { ...PROACTIVE_CONFIG, agentName: proactive.tenant };
   }
 
   protected agentPlugins(host: PluginHost<Env>): AgentPlugin[] {
@@ -56,7 +57,7 @@ export class ProactiveAgent extends DynamicAgent<Env> {
    * a deliberate `no_reply`, or `failed`. The workflow maps those onto the three
    * terminal Task shapes.
    *
-   * ## The two places a turn can decline
+   * ## Where a turn can decline
    *
    * **The gate, here.** Every plugin declaring `shouldHandleTurn` is consulted
    * before anything expensive is built or called, and the answers are AND-ed. The
@@ -106,7 +107,11 @@ export class ProactiveAgent extends DynamicAgent<Env> {
         // tool surface is resolved once, before the turn starts.
         [NO_REPLY_TOOL_NAME]: noReplyTool
       },
-      models: this.modelPair(),
+      models: this.modelPair({
+        phase: "round",
+        taskId: push?.taskId,
+        channel: parseTurn(text)?.channel
+      }),
       maxSteps: MAX_STEPS,
       unexpectedReply: UNEXPECTED_REPLY,
       // This agent runs exactly one turn per task, so the bare step index is a

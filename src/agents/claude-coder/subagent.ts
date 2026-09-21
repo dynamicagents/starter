@@ -2,12 +2,13 @@ import type { AgentPlugin, CoreConfigOverrides } from "@dynamicagents/core";
 import type { PluginHost } from "@dynamicagents/core/host";
 import { RecipeSubagentHost } from "@dynamicagents/core/round";
 import type {
+  ChunkProgressContext,
+  ProgressEvent,
   RecipeChunkResult,
   RecipeExecutionRequest,
   RecipeExecutionResult,
   SubtaskRuntime
 } from "@dynamicagents/core/subtasks";
-import { getWorkspace } from "@cloudflare/computer";
 import {
   claudeCodeSession,
   CLAUDE_CODE_TYPE,
@@ -15,6 +16,7 @@ import {
   type ClaudeCodeSession,
   type DrainCursor,
   type DrainOutcome,
+  type RateLimitInfo,
   type SessionRuntime
 } from "@dynamicagents/plugins/claude-code";
 import {
@@ -22,6 +24,8 @@ import {
   truncateOutput
 } from "@dynamicagents/plugins/computer";
 import { CLAUDE_CODE_SESSION, CLAUDE_CODER_CONFIG } from "@/config";
+import { claudeCoder } from "./definition";
+import { openWorkspace } from "@dynamicagents/plugins/computer";
 import { claudeCodeConfig } from "./claude-code";
 import { subagentPlugins } from "./plugins";
 
@@ -43,6 +47,13 @@ import { subagentPlugins } from "./plugins";
 /** Where this facet keeps its place in the session's event stream. */
 const CURSOR_KEY = "claude-cursor";
 
+/**
+ * Which session this facet started, and in which workspace — what
+ * {@link ClaudeCoderSubagent.abortExecution} needs to stop it with no drain in
+ * hand.
+ */
+const SESSION_KEY = "claude-session";
+
 /** Bound on the report text, so one runaway session cannot fill the row. */
 const REPORT_MAX = 24_000;
 
@@ -51,9 +62,12 @@ const REPORT_MAX = 24_000;
  *
  * Generous, because what it is waiting on is a process exit plus a
  * container-to-workspace filesystem sync whose cost scales with the number of
- * files the session touched — and because the alternative to waiting is a
- * working-tree reset racing that sync. Still bounded: a cancellation must
- * complete whether or not the container is answering.
+ * files the session touched — a session that ran an install is moving a whole
+ * dependency tree — and because the alternative to waiting is a working-tree
+ * reset racing that sync. Still bounded: a cancellation must complete whether or
+ * not the container is answering, and what the bound gives up is only speed. A
+ * pull cut short here resumes from its cursor when the workspace next drives
+ * one.
  */
 const SETTLE_MAX_MS = 60_000;
 
@@ -130,6 +144,33 @@ export function sessionFooter(result: {
 }
 
 /**
+ * What `gh` is, in a container that holds no credential.
+ *
+ * A session reaches for it unprompted — it is the obvious way to read an issue or
+ * a review — and until it was installed that cost a turn per attempt to exit 127.
+ * It is there now and signed in to nothing, which is a *third* state neither the
+ * model nor its training expects — and a narrower one than it sounds: REST reads
+ * of public repositories work, while every GraphQL-backed command (`gh pr view`
+ * among them) and every write fails in a way that reads like a misconfiguration
+ * rather than a boundary.
+ *
+ * So both halves are stated, and the second names who does hold the credential.
+ * The Dockerfile carries why it is unauthenticated.
+ */
+const GH_NOTE = `## \`gh\` in this container
+
+\`gh\` is installed and authenticated as nobody, so only its REST calls work: use
+\`gh api repos/OWNER/REPO/pulls/N\` (and \`/comments\`, \`/files\`, \`/reviews\`), or the
+same under \`issues/N\`, for public repositories. \`gh pr view\`, \`gh issue view\` and
+the other high-level commands go through GitHub's GraphQL API, which refuses anonymous
+callers outright — they will fail however they are phrased. Nothing writes, and no
+private repository can be read. There is no credential here to fix that with.
+
+Branches, commits, pushes, pull requests and replies to a review belong to the agent
+that briefed you, which holds the credential on the other side of this container.
+Report what you changed and let it deliver.`;
+
+/**
  * What the session is asked to do.
  *
  * The subtask's own prompt, plus the verbatim history the delegating model
@@ -140,12 +181,16 @@ export function sessionFooter(result: {
  * inline for the same reason: the session cannot query the host, and a broken
  * install or a workspace that has stopped accepting writes is the difference
  * between a failure worth retrying and one that never will be.
+ *
+ * {@link GH_NOTE} is here for the same reason and earns its tokens the same way:
+ * what a session cannot find out by looking, and would otherwise spend turns
+ * discovering by failing.
  */
 export function sessionBrief(
   request: RecipeExecutionRequest,
   note?: string
 ): string {
-  const parts = [request.prompt];
+  const parts = [request.prompt, "", GH_NOTE];
   if (note) {
     parts.push("", "## The state of this workspace", "", note);
   }
@@ -162,7 +207,7 @@ export function sessionBrief(
 
 export class ClaudeCoderSubagent extends RecipeSubagentHost<Env> {
   protected agentConfig(): CoreConfigOverrides {
-    return CLAUDE_CODER_CONFIG;
+    return { ...CLAUDE_CODER_CONFIG, agentName: claudeCoder.tenant };
   }
 
   protected agentPlugins(host: PluginHost<Env>): AgentPlugin[] {
@@ -211,14 +256,23 @@ export class ClaudeCoderSubagent extends RecipeSubagentHost<Env> {
     request: RecipeExecutionRequest,
     chunk: number,
     runtime?: SubtaskRuntime,
-    selfOrigin?: string
+    selfOrigin?: string,
+    live?: ChunkProgressContext
   ): Promise<RecipeChunkResult> {
     // Defensive rather than expected: this agent declares one type. A different
     // one means somebody added a second, and core's runner is the right thing to
     // hand it to.
     if (request.type !== CLAUDE_CODE_TYPE) {
-      return super.executeChunk(request, chunk, runtime, selfOrigin);
+      return super.executeChunk(request, chunk, runtime, selfOrigin, live);
     }
+
+    /**
+     * Arm the callback channel by hand, because this method never reaches
+     * `super.executeChunk` — which is where the base normally does it — and
+     * a channel left over from a previous chunk on this isolate would post this
+     * session's notes to the previous turn's gatekeeper callback.
+     */
+    this.noteProgressContext(request, live);
 
     /**
      * Which workspace this session runs in, resolved on the **parent**.
@@ -319,10 +373,15 @@ export class ClaudeCoderSubagent extends RecipeSubagentHost<Env> {
     // it hands back is rebuilt on this side of the boundary from the stub's byte
     // stream, so it is a real `ReadableStream` of runtime events — which is what
     // lets the drain live here rather than inside the workspace object.
-    using workspace = await getWorkspace(
-      stub as unknown as Parameters<typeof getWorkspace>[0]
-    );
+    using workspace = await openWorkspace(stub);
     const runner = workspace.runtime as SessionRuntime;
+    // Before `#inflight` is armed, so a write that fails leaves no run behind
+    // for `abortRun` to wait on.
+    if (!cursor)
+      await this.ctx.storage.put(SESSION_KEY, {
+        name,
+        subtaskId: request.subtaskId
+      });
     // Resolved in the `finally` below, so {@link abortRun} can wait for this
     // drain to unwind rather than only for the signal to be delivered.
     let drained: () => void = () => {};
@@ -334,15 +393,34 @@ export class ClaudeCoderSubagent extends RecipeSubagentHost<Env> {
       })
     };
 
+    /**
+     * Where a note goes the moment it is written, and where the drain may
+     * checkpoint.
+     *
+     * A session's chunk is the whole session, so a chunk boundary is the wrong
+     * clock for a note: what it reports is bounded by the drain window, not by
+     * when the session had something to say. `postProgress` labels and posts
+     * each note as the line is parsed, so the thread keeps pace.
+     *
+     * The checkpoint is only safe **because** of that, and the drain enforces
+     * the pairing — see `DrainOptions` in `@dynamicagents/plugins/claude-code`,
+     * which carries the reasoning for both.
+     */
+    const sinks = {
+      onProgress: (event: ProgressEvent) => this.postProgress(event),
+      onCheckpoint: (at: DrainCursor) => this.ctx.storage.put(CURSOR_KEY, at)
+    };
+
     let outcome: DrainOutcome;
     try {
       outcome = cursor
-        ? await this.#session.resume(runner, cursor)
+        ? await this.#session.resume(runner, cursor, sinks)
         : await this.#session.start(
             runner,
             request.subtaskId,
             sessionBrief(request, note),
-            dir as string
+            dir as string,
+            sinks
           );
     } finally {
       this.#inflight = undefined;
@@ -357,16 +435,59 @@ export class ClaudeCoderSubagent extends RecipeSubagentHost<Env> {
      * events the retry never saw. Writing after means a retry re-drains from the
      * last committed sequence, and the duplicated progress notes are harmless
      * because the keys are positional, which is exactly why they are positional.
+     *
+     * Still the authority even with `onCheckpoint` above: a checkpoint bounds
+     * what a crash loses, and this is what records where a window actually
+     * ended.
      */
     await this.ctx.storage.put(CURSOR_KEY, outcome.cursor);
+    // The session has exited, so there is nothing left for a teardown to stop.
+    if (outcome.done) await this.ctx.storage.delete(SESSION_KEY);
 
+    // What the client said about the subscription bucket it is spending, if it
+    // said anything. Best-effort — a session that did the work must not fail for
+    // want of a bookkeeping RPC.
+    if (outcome.rateLimit) await this.#noteRateLimit(stub, outcome.rateLimit);
+
+    /**
+     * **Empty, because `onProgress` already posted them.**
+     *
+     * `RecipeChunkResult.progress` is what core's parent posts at the chunk
+     * boundary, and every note in `outcome.progress` has been through the
+     * channel already. Returning them here as well would post the session twice
+     * — deduped by the gatekeeper on their positional keys, and paid for either
+     * way.
+     */
     return outcome.done
       ? {
           done: true,
-          progress: outcome.progress,
+          progress: [],
           result: this.#report(outcome)
         }
-      : { done: false, progress: outcome.progress };
+      : { done: false, progress: [] };
+  }
+
+  /**
+   * Tell the credential pool what the session's own client reported.
+   *
+   * The pool's state lives on the workspace object, which is also where the
+   * egress gateway reads it, so the reading goes there rather than being acted
+   * on here. Whether it means anything at all is
+   * `readRateLimitEvent`'s to decide, in the plugin — today it means nothing for
+   * every status anyone has seen, and the plugin's comment says why that is a
+   * finding rather than a gap.
+   */
+  async #noteRateLimit(
+    stub: { claudeNoteRateLimit: (info: RateLimitInfo) => Promise<void> },
+    info: RateLimitInfo
+  ): Promise<void> {
+    try {
+      await stub.claudeNoteRateLimit(info);
+    } catch (err) {
+      console.warn("[claude-coder] could not record the bucket reading", {
+        err: String(err)
+      });
+    }
   }
 
   /**
@@ -403,6 +524,17 @@ export class ClaudeCoderSubagent extends RecipeSubagentHost<Env> {
    * drain that will not settle is logged and left.
    */
   override async abortRun(): Promise<boolean> {
+    /**
+     * Stop narrating before anything else, on both paths.
+     *
+     * The base disarms live posting inside its own `abortRun`, which the branch
+     * below never reaches — and its abort *signal* cannot stand in for it here,
+     * because that signal tracks a model call and this class holds none. Left
+     * armed, every note the drain parses while the session takes its `SIGTERM`
+     * and unwinds is posted to a Task the user already canceled.
+     */
+    this.stopProgress();
+
     const inflight = this.#inflight;
     if (!inflight) return await super.abortRun();
 
@@ -410,14 +542,14 @@ export class ClaudeCoderSubagent extends RecipeSubagentHost<Env> {
       const stub = this.env.CLAUDE_CODER_WORKSPACE.get(
         this.env.CLAUDE_CODER_WORKSPACE.idFromName(inflight.name)
       );
-      using workspace = await getWorkspace(
-        stub as unknown as Parameters<typeof getWorkspace>[0]
-      );
+      using workspace = await openWorkspace(stub);
       await this.#session.stop(
         workspace.runtime as SessionRuntime,
         inflight.subtaskId
       );
       await settleDrain(inflight.settled);
+      // Stopped, so the chunk's own teardown after this has nothing to stop.
+      await this.ctx.storage.delete(SESSION_KEY);
       return true;
     } catch (err) {
       // The signal never landed, so the process may still be running and this
@@ -428,6 +560,40 @@ export class ClaudeCoderSubagent extends RecipeSubagentHost<Env> {
         err: String(err)
       });
       return await super.abortRun();
+    }
+  }
+
+  /**
+   * Stop the session a failed or canceled branch leaves behind.
+   *
+   * Core calls this for such a branch once {@link abortRun} has had its turn.
+   * That stops a drain this instance is holding; this reaches the session with
+   * none — a drain that lost its subscriber to a retry, or an isolate that went
+   * away — by the id it was started under. Left running, it goes on editing the
+   * checkout while a later round delegates the same work again. Best-effort,
+   * like every teardown core runs.
+   */
+  override async abortExecution(toolFamilies: string[]): Promise<void> {
+    await super.abortExecution(toolFamilies);
+    const session = await this.ctx.storage.get<{
+      name: string;
+      subtaskId: number;
+    }>(SESSION_KEY);
+    if (!session) return;
+    try {
+      const stub = this.env.CLAUDE_CODER_WORKSPACE.get(
+        this.env.CLAUDE_CODER_WORKSPACE.idFromName(session.name)
+      );
+      using workspace = await openWorkspace(stub);
+      await this.#session.stop(
+        workspace.runtime as SessionRuntime,
+        session.subtaskId
+      );
+    } catch (err) {
+      // A session that has already exited lands here too.
+      console.warn("[claude-coder] could not stop the session on teardown", {
+        err: String(err)
+      });
     }
   }
 

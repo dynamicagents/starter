@@ -34,16 +34,13 @@ import type {
  */
 
 /**
- * The round contract: how a round ends, and what `delegate` takes. True of every
+ * The round contract: how a round ends, and how to fill `delegate` well — what its
+ * fields *are* is in the tool's own schema, which core owns. True of every
  * request. It ends with {@link askGuidance}, and — for a round that may still
  * wait — {@link waitGuidance}.
  */
-export function roundContract(ctx: {
-  typeKeys: readonly string[];
-  maxSubtasks: number;
-  deferrable: boolean;
-}): string {
-  const { typeKeys, maxSubtasks, deferrable } = ctx;
+export function roundContract(ctx: { deferrable: boolean }): string {
+  const { deferrable } = ctx;
   return `
 
 # Answering this request
@@ -71,28 +68,16 @@ that does it in the same turn rather than describing what you are about to do.
 
 ## Delegating
 
-\`${DELEGATE_TOOL_NAME}\` takes:
+What each of \`${DELEGATE_TOOL_NAME}\`'s fields means is in its schema. How to fill
+them well:
 
-- "reply": the acknowledgment the user sees while the work runs, in your own voice.
-  Say what you are doing about their request. Do not promise a delivery time, and
-  do not mention subtasks, subagents, or this process.
-- "subtasks": between 1 and ${maxSubtasks} units of work. Use exactly as many as the
-  request genuinely needs — one is the right answer for a simple request. Prefer
-  fewer, larger subtasks over many trivial ones.
-
-Each subtask has:
-
-- "type": exactly one of ${typeKeys.map((k) => `"${k}"`).join(", ")}. These are
-  the only accepted values — any other word is rejected and the whole call fails.
-  See the tool description for what each type does and which params it needs.
-- "prompt": a complete, self-contained instruction, and never blank. The subagent
-  executing it has no memory, no conversation history, and no access to this
-  session — everything it needs must be in this prompt or in the references you
-  select. Write it as an instruction to a capable stranger.
-- "referenceIndexes": the indexes of conversation turns the subagent must read
-  verbatim, chosen from the turns marked "[ref N]" below. Reference only what that
-  subtask actually needs. Turns without a "[ref N]" marker cannot be referenced;
-  if information from one matters, restate it in the prompt yourself.
+- Write the reply in your own voice, about their request. Do not promise a delivery
+  time, and do not mention subtasks, subagents, or this process.
+- Use as many subtasks as the request genuinely needs — one is the right answer for
+  a simple request. Prefer fewer, larger subtasks over many trivial ones.
+- Write each prompt as an instruction to a capable stranger with no memory of this
+  conversation. Reference only the turns a subtask actually needs, and if something
+  from an unmarked turn matters, restate it in the prompt yourself.
 
 **Every subtask in one call starts at the same time, and none of them can see
 another's output.** So put work in the same call only when the pieces are genuinely

@@ -23,26 +23,10 @@ import {
  */
 
 describe("roundContract", () => {
-  const contract = (typeKeys: string[], maxSubtasks = 8, deferrable = false) =>
-    roundContract({ typeKeys, maxSubtasks, deferrable });
-
-  it("names every installed subtask type, and only those", () => {
-    const text = contract(["general"]);
-    expect(text).toContain('"general"');
-    // The enum is what the model may emit; a type nobody installed must not
-    // appear in the prose either, or the model is invited to name it.
-    expect(text).not.toContain('"arc-game"');
-  });
-
   it("names the delegate and final-reply tools by their real names", () => {
-    const text = contract(["general"]);
+    const text = roundContract({ deferrable: false });
     expect(text).toContain(DELEGATE_TOOL_NAME);
     expect(text).toContain(FINAL_REPLY_TOOL_NAME);
-  });
-
-  it("states the caller's own maxSubtasks ceiling", () => {
-    expect(contract(["general"], 8)).toContain("between 1 and 8");
-    expect(contract(["general"], 3)).toContain("between 1 and 3");
   });
 });
 
@@ -132,11 +116,7 @@ describe("where the person comes in", () => {
   it("does not tell the model its two endings are the only ones", () => {
     // `ask_user` ends a round too wherever it is offered, and every agent here
     // offers it, so a contract counting two calls would be false.
-    const contract = roundContract({
-      typeKeys: ["general"],
-      maxSubtasks: 8,
-      deferrable: false
-    });
+    const contract = roundContract({ deferrable: false });
     expect(contract).not.toContain("two ways to end this round");
     expect(contract).not.toContain("one of those two calls");
     expect(askGuidance).toContain(ASK_USER_TOOL_NAME);
@@ -146,11 +126,7 @@ describe("where the person comes in", () => {
     // Returned work is exactly where a choice only the person can make shows up,
     // and a section naming only answering and delegating steers the model away
     // from asking there.
-    const contract = roundContract({
-      typeKeys: ["general"],
-      maxSubtasks: 8,
-      deferrable: false
-    });
+    const contract = roundContract({ deferrable: false });
     const afterResults = contract.slice(
       contract.indexOf("## Using results that have come back"),
       contract.indexOf("**Announcing is not doing.**")
@@ -187,11 +163,7 @@ describe("where the person comes in", () => {
   it("gives the round agents the person's part of the round", () => {
     // Asking is not an agent setting: the contract carries when to ask, and the
     // copy carries what the person reads for an approval.
-    const contract = roundContract({
-      typeKeys: ["general"],
-      maxSubtasks: 8,
-      deferrable: false
-    });
+    const contract = roundContract({ deferrable: false });
     expect(contract.endsWith(askGuidance)).toBe(true);
     expect(roundPolicy.copy.approvalPrompt).toBe(approvalPrompt);
   });
@@ -205,8 +177,7 @@ describe("where the person comes in", () => {
  * model will not be given, and it is invisible until a round tries it.
  */
 describe("a round that may wait", () => {
-  const contract = (deferrable: boolean) =>
-    roundContract({ typeKeys: ["general"], maxSubtasks: 8, deferrable });
+  const contract = (deferrable: boolean) => roundContract({ deferrable });
 
   it("describes the wait only to a round that has one", () => {
     expect(contract(true)).toContain(CHECK_BACK_TOOL_NAME);

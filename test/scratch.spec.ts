@@ -6,7 +6,7 @@ import { openWorkspace } from "@dynamicagents/plugins/computer";
 import { createAgentRuntime } from "@dynamicagents/core";
 import { SCRATCH_OPEN_TOOL } from "@dynamicagents/plugins/scratch";
 import { CODER_CONFIG } from "@/config";
-import type { ActiveRepo } from "@/workspace/active-repo";
+import type { ActiveCheckout, ActiveRepo } from "@/workspace/active-repo";
 import { workspaceName } from "@dynamicagents/plugins/computer";
 import { hostScratch, SCRATCH_DIR, SCRATCH_REPO } from "@/workspace/scratch";
 
@@ -33,12 +33,21 @@ const { freshStub: freshWorkspace } = makeDoHelpers<CoderWorkspaceDO>(
 function fakeActive(): ActiveRepo {
   let current: string | undefined;
   const seen: string[] = [];
+  let checkout: ActiveCheckout | undefined;
+  const note = (repo: string) => {
+    if (!seen.includes(repo)) seen.push(repo);
+  };
   return {
     get: () => current,
     set: (repo) => {
       current = repo;
-      if (!seen.includes(repo)) seen.push(repo);
+      note(repo);
     },
+    checkout: () => checkout,
+    setCheckout: (next) => {
+      checkout = next;
+    },
+    note,
     seen: () => [...seen],
     forget: (repo) => {
       const at = seen.indexOf(repo);

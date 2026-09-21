@@ -31,7 +31,7 @@ export const hostManifest: AgentManifest = {
     "round loop), `proactive` (decides per message whether to answer), " +
     "`arc-player` (plays ARC-AGI-3 games), `coder` (implements changes in a " +
     "git repository and opens pull requests), `claude-coder` (the same, for " +
-    "larger changes, one at a time).",
+    "larger changes, working several independent strands at once).",
   version: "0.1.0",
   // `extensions` is a required (repeated) protobuf field in v1.0 — we declare no
   // protocol extensions, so it stays empty. `extendedAgentCard` is set by core,

@@ -18,6 +18,7 @@ import { REPO_FAMILY } from "@dynamicagents/plugins/repo";
 import { parentPlugins, subagentPlugins } from "@/agents/claude-coder/plugins";
 import {
   publishedNote,
+  refusedByRemote,
   sessionBrief,
   sessionFooter,
   settleDrain,
@@ -763,6 +764,41 @@ describe("the note on what was published", () => {
 
     expect(note).toContain("Pushed");
     expect(note).toContain("Could not publish to acme/core: rejected");
+  });
+
+  /**
+   * The production refusal, verbatim. A parent told to delegate again re-ran a
+   * whole session to be refused by the same token, twice.
+   */
+  const WORKFLOW_REFUSAL =
+    "git push failed: One or more branches were not updated: \n  - refs/heads/claude-coder/t/89: refusing to allow a Personal Access Token to create or update workflow `.github/workflows/deploy.yml` without `workflow` scope";
+
+  it("tells the parent not to redo work the forge refused", () => {
+    const note = publishedNote({
+      ok: true,
+      branch,
+      repos: [
+        {
+          dir: "/workspace/super/gatekeeper",
+          name: "acme/gatekeeper",
+          ok: false,
+          why: WORKFLOW_REFUSAL,
+          refused: true
+        }
+      ]
+    });
+
+    expect(note).toContain("The forge refused the push to acme/gatekeeper");
+    expect(note).toContain("without `workflow` scope");
+    expect(note).toContain("Do not delegate it again");
+    expect(note).not.toContain("delegate it again rather");
+  });
+
+  it("recognises a refusal by the forge, and nothing that merely failed to arrive", () => {
+    expect(refusedByRemote(WORKFLOW_REFUSAL)).toBe(true);
+    expect(refusedByRemote("remote: Permission denied to acme/x")).toBe(true);
+    expect(refusedByRemote("could not resolve host: github.com")).toBe(false);
+    expect(refusedByRemote("the workspace had no checkout")).toBe(false);
   });
 
   /** An uncounted repository is pushed, so it is reported as pushed. */

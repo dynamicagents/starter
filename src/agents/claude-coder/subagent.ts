@@ -183,7 +183,31 @@ let it deliver.`;
  */
 type RepoPush =
   | { dir: string; name: string; ok: true; commits?: number }
-  | { dir: string; name: string; ok: false; why: string };
+  | {
+      dir: string;
+      name: string;
+      ok: false;
+      why: string;
+      /** The forge answered and said no — see {@link refusedByRemote}. */
+      refused?: true;
+    };
+
+/**
+ * Whether a failed push was the remote refusing it, as against failing to reach
+ * it.
+ *
+ * The difference decides what the parent should do next. A push that never
+ * arrived may land on a second attempt; a push the forge refused — a token
+ * without the scope a workflow file needs, a protected branch — is refused the
+ * same way every time, and a parent told to delegate again spends a whole
+ * session to be refused again. `git-host` reports a per-ref rejection as "One or
+ * more branches were not updated", with the forge's own reason after it.
+ */
+export function refusedByRemote(why: string): boolean {
+  return /branches were not updated|refusing to allow|protected branch|permission denied|\b403\b/i.test(
+    why
+  );
+}
 
 /**
  * What became of a writing subtask's branch, in every repository it could have
@@ -282,11 +306,18 @@ export function publishedNote(published: PushOutcome | undefined): string {
         `\`origin/${published.branch}\` — the work is not in your own checkout.`
       );
     }),
-    ...failed.map(
-      (repo) =>
-        `**Could not publish to ${repo.name}: ${repo.ok ? "" : repo.why}** ` +
-        "That part of the work is not on the remote — delegate it again rather " +
-        "than reporting it as done."
+    ...failed.map((repo) =>
+      !repo.ok && repo.refused
+        ? `**The forge refused the push to ${repo.name}: ${repo.why}** ` +
+          "The session finished and committed its work, but that work is not " +
+          "on the remote, and this workspace is discarded with the subtask. " +
+          "**Do not delegate it again**: every push from this deployment uses " +
+          "the same credential and is refused the same way. Tell the user what " +
+          "the push needs — a workflow file needs a token with the `workflow` " +
+          "scope — and stop."
+        : `**Could not publish to ${repo.name}: ${repo.ok ? "" : repo.why}** ` +
+          "That part of the work is not on the remote — delegate it again " +
+          "rather than reporting it as done."
     )
   ];
   return lines.join("\n\n");
@@ -877,7 +908,15 @@ export class ClaudeCoderSubagent extends RecipeSubagentHost<Env> {
         repos.push(
           pushed.ok
             ? { dir, name, ok: true, ...(commits > 0 ? { commits } : {}) }
-            : { dir, name, ok: false, why: pushed.message }
+            : {
+                dir,
+                name,
+                ok: false,
+                why: pushed.message,
+                ...(refusedByRemote(pushed.message)
+                  ? { refused: true as const }
+                  : {})
+              }
         );
       }
       return { ok: true, branch, repos };

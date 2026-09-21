@@ -505,6 +505,16 @@ export function subtaskWorkspaces(config: {
         // would leave a workspace with no backstop but its own alarm.
         if (result.reclaimed) config.active.forget(repo);
       } catch (err) {
+        /**
+         * "workspace reclaimed" is the workspace saying it has been — its reset
+         * runs from an alarm that can land before this call's answer does, and
+         * the answer is then lost with the instance. In production every
+         * reclaim ended this way, so it is read as the success it reports.
+         */
+        if (String(err).includes("workspace reclaimed")) {
+          config.active.forget(repo);
+          return;
+        }
         // Best-effort, like every other teardown on this path. The execution is
         // already terminal, and a container that cannot be stopped must not be
         // reported as a subtask that failed — the idle deadline is the backstop.

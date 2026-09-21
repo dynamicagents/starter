@@ -127,7 +127,11 @@ const CHECKOUT: ActiveCheckout = {
 };
 
 /** Enough of the workspace RPC surface for `resolve` to run against. */
-function fakeBinding(state: { dir?: string; cloneFails?: string }) {
+function fakeBinding(state: {
+  dir?: string;
+  cloneFails?: string;
+  reclaimThrows?: string;
+}) {
   const calls: string[] = [];
   const stub = {
     checkoutDir: async () => state.dir,
@@ -156,6 +160,7 @@ function fakeBinding(state: { dir?: string; cloneFails?: string }) {
     },
     reclaimIfIdle: async () => {
       calls.push("reclaim");
+      if (state.reclaimThrows) throw new Error(state.reclaimThrows);
       return { reclaimed: true, idleMs: 0, bytes: 0 };
     }
   };
@@ -185,10 +190,13 @@ function harness(opts: {
   populated?: string[];
   /** Fail every clone with this message. */
   cloneFails?: string;
+  /** Throw this from the reclaim. */
+  reclaimThrows?: string;
 }) {
   const state = {
     dir: opts.dir,
-    ...(opts.cloneFails ? { cloneFails: opts.cloneFails } : {})
+    ...(opts.cloneFails ? { cloneFails: opts.cloneFails } : {}),
+    ...(opts.reclaimThrows ? { reclaimThrows: opts.reclaimThrows } : {})
   };
   const { calls, binding } = fakeBinding(state);
   const commands: string[] = [];
@@ -351,6 +359,33 @@ describe("preparing a writing subtask's workspace", () => {
     await expect(subtasks.resolve(ctx)).rejects.toThrow(
       /no recorded checkout.*records one only when it leaves a clean tree/s
     );
+  });
+
+  /**
+   * The workspace's reset can land before the reclaim's answer, which is then
+   * lost with the instance — every reclaim in production ended this way. The
+   * error says what happened, so it is read as a reclaim.
+   */
+  it("reads a workspace that reports itself reclaimed as reclaimed", async () => {
+    const { subtasks, active } = harness({
+      selected: "acme/api",
+      checkout: CHECKOUT,
+      reclaimThrows: "Error: workspace reclaimed"
+    });
+
+    await expect(subtasks.reclaim(ctx)).resolves.toBeUndefined();
+    expect(active.forgotten).toEqual([subtaskRepo(ctx)]);
+  });
+
+  it("keeps a workspace on the sweep list when its reclaim really failed", async () => {
+    const { subtasks, active } = harness({
+      selected: "acme/api",
+      checkout: CHECKOUT,
+      reclaimThrows: "container unreachable"
+    });
+
+    await expect(subtasks.reclaim(ctx)).resolves.toBeUndefined();
+    expect(active.forgotten).toEqual([]);
   });
 
   it("reclaims the workspace and drops it from the sweep list", async () => {

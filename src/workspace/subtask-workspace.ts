@@ -134,7 +134,6 @@ export function parseGitmodules(out: string): Submodule[] {
  */
 function assertSubmodulePath(path: string): void {
   if (
-    // eslint-disable-next-line no-control-regex
     /[\u0000-\u001f\u007f]/.test(path) ||
     path.startsWith("/") ||
     path.split("/").some((part) => part === "" || part === "." || part === "..")

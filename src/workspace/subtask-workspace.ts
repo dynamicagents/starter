@@ -224,7 +224,15 @@ done <<EOF
 $SUBTASK_REPOS
 EOF`;
 
-/** Which submodules a previous attempt already cloned. */
+/**
+ * Which submodules a previous attempt already cloned, clearing any it left
+ * half-done.
+ *
+ * Present means a repository of its own with a commit checked out, asked of its
+ * own `.git` — `git -C` there would walk up to the superproject and answer for
+ * it. A `.git` with no commit behind it is a clone that failed part-way, and is
+ * cleared so the next one is not refused as "already exists".
+ */
 async function populated(
   run: Run,
   dir: string,
@@ -233,7 +241,12 @@ async function populated(
   if (submodules.length === 0) return new Set();
   const found = await run(
     `while IFS= read -r p; do
-  if [ -n "$p" ] && [ -e "$p/.git" ]; then printf '%s\\n' "$p"; fi
+  [ -n "$p" ] || continue
+  if [ -e "$p/.git" ] && git --git-dir="$p/.git" rev-parse --verify --quiet HEAD >/dev/null 2>&1; then
+    printf '%s\\n' "$p"
+  elif [ -e "$p/.git" ]; then
+    rm -rf "$p" || exit 1
+  fi
 done <<EOF
 $SUBMODULE_PATHS
 EOF`,
@@ -336,6 +349,28 @@ export function subtaskWorkspaces(config: {
       }
 
       if (!already) {
+        /**
+         * A clone that failed part-way leaves a repository nobody recorded — the
+         * clone initialises before it fetches — and a second clone into it is
+         * refused with "git repository already exists", on every retry. This
+         * workspace is this subtask's alone and holds nothing worth keeping
+         * until a checkout is recorded, so what is there is cleared first.
+         */
+        if (!/^\/[^/]+\/./.test(checkout.dir)) {
+          throw new Error(
+            `claude-coder: refusing to clear a checkout path that is not under a workspace directory: ${checkout.dir}`
+          );
+        }
+        const cleared = await config.exec(
+          'rm -rf "$CHECKOUT_DIR"',
+          { cwd: "/", env: { CHECKOUT_DIR: checkout.dir } },
+          name
+        );
+        if (!cleared.success) {
+          throw new Error(
+            `claude-coder: could not clear an unfinished clone in a subtask workspace: ${cleared.stderr || cleared.stdout}`
+          );
+        }
         const cloned = await stub.gitClone({
           url: checkout.url,
           dir: checkout.dir,
@@ -348,12 +383,26 @@ export function subtaskWorkspaces(config: {
         if (!cloned.ok) {
           // Thrown rather than returned: `resolveRuntime` answering a name for a
           // workspace with no tree would send the session to a directory that is
-          // not there, and it would report that as the task's answer.
+          // not there, and it would report that as the task's answer. The branch
+          // is named because the likeliest cause is one that exists only in the
+          // parent's checkout — a subtask clones from the remote.
           throw new Error(
-            `claude-coder: could not clone into a subtask workspace: ${cloned.message}`
+            `claude-coder: could not clone ${checkout.url} at ${checkout.branch} into a subtask workspace: ${cloned.message}`
           );
         }
       }
+
+      const parentRepo = config.active.get();
+      // Straight after the clone, so a retry that fails later — at a submodule,
+      // the install or the branch — finds a recorded checkout and does not clone
+      // over it. Before the install and never inside it, for the reason
+      // `noteCheckout` gives: an install is conditional where a checkout is not,
+      // so no install outcome may decide whether the path was recorded.
+      await stub.noteCheckout({
+        dir: checkout.dir,
+        kind: "repo",
+        ...(parentRepo ? { repo: parentRepo } : {})
+      });
 
       /**
        * Every submodule, cloned the same way and from the same host.
@@ -387,20 +436,10 @@ export function subtaskWorkspaces(config: {
         });
         if (!cloned.ok) {
           throw new Error(
-            `claude-coder: could not clone the submodule at ${sub.path}: ${cloned.message}`
+            `claude-coder: could not clone the submodule at ${sub.path}${branch ? ` on ${branch}` : ""}: ${cloned.message}`
           );
         }
       }
-
-      const parentRepo = config.active.get();
-      // Before the install and never inside it, for the reason `noteCheckout`
-      // gives: an install is conditional where a checkout is not, so no install
-      // outcome may decide whether the path was recorded.
-      await stub.noteCheckout({
-        dir: checkout.dir,
-        kind: "repo",
-        ...(parentRepo ? { repo: parentRepo } : {})
-      });
       // Returns as soon as the command is spawned. Awaiting a dependency install
       // here would put minutes in front of the session waiting for it.
       await stub.startInstall({

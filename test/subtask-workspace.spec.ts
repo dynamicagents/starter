@@ -127,11 +127,15 @@ const CHECKOUT: ActiveCheckout = {
 };
 
 /** Enough of the workspace RPC surface for `resolve` to run against. */
-function fakeBinding(state: { dir?: string }) {
+function fakeBinding(state: { dir?: string; cloneFails?: string }) {
   const calls: string[] = [];
   const stub = {
     checkoutDir: async () => state.dir,
     gitClone: async (req: { dir: string; branch?: string }) => {
+      if (state.cloneFails) {
+        calls.push("clone");
+        return { ok: false as const, message: state.cloneFails };
+      }
       // The superproject as a bare "clone", so the ordinary case reads plainly;
       // a submodule with where it went and on which branch.
       if (req.dir === CHECKOUT.dir) {
@@ -179,8 +183,13 @@ function harness(opts: {
   submodules?: string;
   /** Submodule paths a previous attempt already cloned. */
   populated?: string[];
+  /** Fail every clone with this message. */
+  cloneFails?: string;
 }) {
-  const state = { dir: opts.dir };
+  const state = {
+    dir: opts.dir,
+    ...(opts.cloneFails ? { cloneFails: opts.cloneFails } : {})
+  };
   const { calls, binding } = fakeBinding(state);
   const commands: string[] = [];
   const envs: Record<string, string>[] = [];
@@ -191,6 +200,11 @@ function harness(opts: {
     exec: async (command, options) => {
       commands.push(command);
       envs.push(options.env ?? {});
+      // In the same list as the clones, because its place relative to them is
+      // the point: cleared before a clone, never after one.
+      if (command.includes('rm -rf "$CHECKOUT_DIR"')) {
+        calls.push(`clear ${options.env?.CHECKOUT_DIR}`);
+      }
       if (command.includes(".gitmodules")) {
         // No match exits 1 with nothing said, which is how git reports a
         // checkout without submodules.
@@ -232,7 +246,12 @@ describe("preparing a writing subtask's workspace", () => {
     const name = await subtasks.resolve(ctx);
 
     expect(name).toBe(`caller|${subtaskRepo(ctx)}`);
-    expect(calls).toEqual(["clone", "noteCheckout", "startInstall"]);
+    expect(calls).toEqual([
+      `clear ${CHECKOUT.dir}`,
+      "clone",
+      "noteCheckout",
+      "startInstall"
+    ]);
     expect(branching().command).toContain("checkout");
     // The superproject alone, when there are no submodules.
     expect(branching().env).toEqual({
@@ -253,6 +272,23 @@ describe("preparing a writing subtask's workspace", () => {
    * after the clone, so the branch the parent fetches would never be created and
    * the session would run on the source branch with nowhere to publish.
    */
+  /**
+   * The likeliest reason a clone fails is a branch that exists only in the
+   * parent's checkout: a subtask clones from the remote. The clone initialises
+   * before it fetches, which is why the retry clears first — see the case above.
+   */
+  it("names the branch it could not clone", async () => {
+    const { subtasks } = harness({
+      selected: "acme/api",
+      checkout: { ...CHECKOUT, branch: "pins/local-only" },
+      cloneFails: "git fetch failed: Could not find pins/local-only."
+    });
+
+    await expect(subtasks.resolve(ctx)).rejects.toThrow(
+      /could not clone https:\/\/github\.com\/acme\/api\.git at pins\/local-only into a subtask workspace: git fetch failed/
+    );
+  });
+
   it("finishes a setup that a previous attempt left half-done", async () => {
     const { subtasks, calls, branching } = harness({
       selected: "acme/api",
@@ -369,12 +405,15 @@ describe("a writing subtask in a superproject", () => {
     await subtasks.resolve(ctx);
 
     expect(calls).toEqual([
+      `clear ${CHECKOUT.dir}`,
       "clone",
+      // Recorded before the submodules, so a retry that fails at one finds the
+      // superproject and does not clone over it.
+      "noteCheckout",
       `clone ${CHECKOUT.dir}/core@main`,
       `clone ${CHECKOUT.dir}/starter@next`,
       // No declared branch: the default one, then the pinned commit below.
       `clone ${CHECKOUT.dir}/vendor/pinned@`,
-      "noteCheckout",
       "startInstall"
     ]);
   });
@@ -406,8 +445,8 @@ describe("a writing subtask in a superproject", () => {
     await subtasks.resolve(ctx);
 
     expect(calls).toEqual([
-      `clone ${CHECKOUT.dir}/vendor/pinned@`,
       "noteCheckout",
+      `clone ${CHECKOUT.dir}/vendor/pinned@`,
       "startInstall"
     ]);
   });
@@ -424,7 +463,23 @@ describe("a writing subtask in a superproject", () => {
     await expect(subtasks.resolve(ctx)).rejects.toThrow(
       /only over https from github\.com/
     );
-    expect(calls).toEqual(["clone"]);
+    expect(calls).toEqual([`clear ${CHECKOUT.dir}`, "clone", "noteCheckout"]);
+  });
+
+  /**
+   * A submodule clone that failed part-way has a `.git` and no commit. Counted
+   * as present it would stay empty; cloned into, it is refused.
+   */
+  it("asks each submodule's own repository whether it has a commit", async () => {
+    const { subtasks, commands } = superHarness({ dir: CHECKOUT.dir });
+
+    await subtasks.resolve(ctx);
+
+    const survey = commands.find((c) => c.includes("SUBMODULE_PATHS")) ?? "";
+    // Its own `.git`: `git -C` there would walk up and answer for the
+    // superproject.
+    expect(survey).toContain('git --git-dir="$p/.git" rev-parse --verify');
+    expect(survey).toContain('rm -rf "$p"');
   });
 });
 

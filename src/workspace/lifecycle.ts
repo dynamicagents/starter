@@ -8,7 +8,7 @@ import {
   type WorkspaceObjectBase
 } from "@dynamicagents/plugins/computer";
 import { SCRATCH_DIR, SCRATCH_REPO } from "./scratch";
-import { isSubtaskRepo } from "./subtask-workspace";
+import { parseWorktreeRepo } from "./worktree-pool";
 
 /**
  * The two things an agent with a workspace owes it, beyond the object itself.
@@ -68,12 +68,11 @@ export type WorkspaceNamespace = DurableObjectNamespace<WorkspaceObjectBase>;
  */
 function fallbackDir(repo: string | undefined): string | undefined {
   if (repo === SCRATCH_REPO) return SCRATCH_DIR;
-  // A writing subtask's workspace is *reclaimed* — storage and all — when its
-  // execution settles, so there is no tree to tidy and nothing that outlives it.
-  // Refusing beats guessing: the only directory derivable here is `/workspace`
-  // itself, and `git clean -fdx` at the root of the tree is the one outcome this
-  // whole function exists to avoid.
-  if (repo !== undefined && isSubtaskRepo(repo)) return undefined;
+  // A worktree always records its checkout, so one that answers nothing has
+  // none. Refusing beats guessing: the only directory derivable here is
+  // `/workspace` itself, and `git clean -fdx` at the root of the tree is the one
+  // outcome this whole function exists to avoid.
+  if (repo !== undefined && parseWorktreeRepo(repo)) return undefined;
   return `${WORKSPACE_DIR}/${repo?.split("/")[1] ?? "repo"}`;
 }
 
@@ -159,6 +158,8 @@ export async function sweepIdleWorkspaces(config: {
   host: PluginHost<Env>;
   binding: WorkspaceNamespace;
   label: string;
+  /** Told each name this sweep retired, for a host keeping state about it. */
+  onReclaimed?: (repo: string) => void;
 }): Promise<void> {
   let callerKey: string;
   try {
@@ -183,6 +184,7 @@ export async function sweepIdleWorkspaces(config: {
         // caller has *ever* touched rather than the number they still have —
         // and `set()` puts it back the moment they clone that repository again.
         repos.forget(repo);
+        config.onReclaimed?.(repo);
       }
     } catch (err) {
       // Best-effort per workspace: one unreachable object must not stop the

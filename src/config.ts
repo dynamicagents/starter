@@ -165,7 +165,7 @@ export const CODER_CONFIG: CoreConfigOverrides = {
  * numbers that bound *that*, which are not these.
  *
  * **The fan-out is bounded by containers, not by this file.** A writing subtask
- * gets a workspace of its own — two Claude Code sessions in one container are two
+ * works in a worktree of its own — two Claude Code sessions in one container are two
  * autonomous agents editing one working tree, each running the project's test
  * suite over the other's half-finished edits. So what a round of N writers costs
  * is N+1 container instances, counting the parent's own workspace.
@@ -273,15 +273,16 @@ export const CLAUDE_CODE_SESSION = {
    * cloned repository ships. Containment is the credential swap.
    */
   permissionMode: "bypassPermissions"
-  // The omitted four are the host's to answer, not settings: two are resolved on
-  // the parent from the verified caller, and two route and retire a writing
-  // subtask's own workspace. See `src/agents/claude-coder/claude-code.ts`.
+  // The omitted ones are the host's to answer, not settings: the credentials,
+  // and the seams that route a subtask to its workspace and release it. See
+  // `src/agents/claude-coder/claude-code.ts`.
 } as const satisfies Omit<
   ClaudeCodeConfig,
   | "credentials"
   | "workspaceName"
   | "subtaskWorkspace"
-  | "reclaimSubtaskWorkspace"
+  | "releaseSubtaskWorkspace"
+  | "abortSubtaskWorkspace"
 >;
 
 /**

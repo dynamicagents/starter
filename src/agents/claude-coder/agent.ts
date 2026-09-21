@@ -11,6 +11,11 @@ import { roundPolicy } from "@/round-policy";
 import { activeRepo } from "@/workspace/active-repo";
 import { discardWorkingTree, sweepIdleWorkspaces } from "@/workspace/lifecycle";
 import { workspaceName } from "@dynamicagents/plugins/computer";
+import {
+  parseWorktreeRepo,
+  slotOf,
+  sqlPoolStore
+} from "@/workspace/worktree-pool";
 import { parentPlugins } from "./plugins";
 import { soulPrompt } from "./soul";
 import { ClaudeCoderSubagent } from "./subagent";
@@ -81,10 +86,27 @@ export class ClaudeCoderAgent extends RoundAgentBase<Env> {
 
   /** Cron handler, delegating to the shared sweep. */
   async reclaimIdleWorkspaces(): Promise<void> {
+    const host = this.pluginHost();
+    const pool = sqlPoolStore(host.storage);
     await sweepIdleWorkspaces({
-      host: this.pluginHost(),
+      host,
       binding: this.env.CLAUDE_CODER_WORKSPACE,
-      label: LABEL
+      label: LABEL,
+      // A worktree the sweep retired has no checkout left, so its row goes back
+      // to empty: the slot is cloned into again rather than trusted.
+      onReclaimed: (repo) => {
+        const worktree = parseWorktreeRepo(repo);
+        if (!worktree) return;
+        const row = slotOf(pool, worktree.repo, worktree.slot);
+        if (row && !row.live) {
+          pool.put({
+            repo: row.repo,
+            slot: row.slot,
+            repos: [],
+            usedAt: row.usedAt
+          });
+        }
+      }
     });
   }
 
@@ -134,24 +156,34 @@ export class ClaudeCoderAgent extends RoundAgentBase<Env> {
    * and a full install. `reclaimIfIdle` here would look identical and cost that
    * silently. The workspace host carries the distinction.
    *
-   * A writing subtask's own workspace is not this one and is retired separately —
-   * see `@/workspace/subtask-workspace`, reached through the plugin's settle hook
-   * so that it fires per execution rather than once per task.
+   * **Tools left in a worktree come back to the checkout**, and both containers
+   * are released: the next task starts where a task is expected to, and a
+   * worktree's container has no more reason to run than this one does. The
+   * worktree itself — branch, commits — stays; see `@/workspace/worktrees`.
    *
    * Core contains a throw here, but this is best-effort on its own account too: a
    * container that will not stop is the idle deadline's problem, not the answer's.
    */
   protected override async onTaskSettled(taskId: string): Promise<void> {
-    const repo = activeRepo(this.pluginHost()).get();
+    const active = activeRepo(this.pluginHost());
+    const repo = active.get();
+    const worktree = repo === undefined ? undefined : parseWorktreeRepo(repo);
+    if (worktree) active.set(worktree.repo);
     const binding = this.env.CLAUDE_CODER_WORKSPACE;
-    const name = workspaceName(this.#identityKeyOrTask(taskId), repo);
-    try {
-      await binding.get(binding.idFromName(name)).releaseContainer();
-    } catch (err) {
-      console.warn(`[${LABEL}] could not release the workspace container`, {
-        name,
-        err: String(err)
-      });
+    const key = this.#identityKeyOrTask(taskId);
+    const names = [
+      workspaceName(key, repo),
+      ...(worktree ? [workspaceName(key, worktree.repo)] : [])
+    ];
+    for (const name of names) {
+      try {
+        await binding.get(binding.idFromName(name)).releaseContainer();
+      } catch (err) {
+        console.warn(`[${LABEL}] could not release the workspace container`, {
+          name,
+          err: String(err)
+        });
+      }
     }
   }
 

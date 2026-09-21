@@ -3,6 +3,7 @@ import {
   type WorkspaceObjectBase
 } from "@dynamicagents/plugins/computer";
 import type { ActiveRepo } from "./active-repo";
+import { SCRATCH_REPO } from "./scratch";
 
 /**
  * Where a writing subtask works, and what becomes of it afterwards.
@@ -65,6 +66,18 @@ export function subtaskBranch(ctx: {
   return `claude-coder/${ctx.taskId}/${ctx.subtaskId}`;
 }
 
+/**
+ * Whether the parent's current selection is a repository, as against a sentinel.
+ *
+ * Only a repository can be cloned into a workspace of its own, so this is what
+ * decides whether a writing subtask is isolated at all. Stated as "not a sentinel"
+ * rather than as a pattern for `owner/repo`, so a sentinel added later is refused
+ * here by default instead of being mistaken for a repository name.
+ */
+function isRepoSelection(selected: string): boolean {
+  return selected !== SCRATCH_REPO && !isSubtaskRepo(selected);
+}
+
 export interface SubtaskWorkspaces {
   /** Route and prepare, answering the workspace name. */
   resolve(ctx: { taskId: string; subtaskId: number }): Promise<string>;
@@ -102,12 +115,37 @@ export function subtaskWorkspaces(config: {
       const name = workspaceName(config.callerKey(), repo);
       const stub = stubFor(repo);
 
-      // Idempotent, and it has to be: this runs once per chunk, so every chunk
-      // after the first finds the tree its own first chunk cloned. Asked of the
-      // workspace rather than remembered here, because the workspace probes for
-      // `.git` rather than trusting a record — and a reclaim can have emptied it
-      // between two chunks.
-      if (await stub.checkoutDir()) return name;
+      /**
+       * A scratchpad is the parent's, and shared.
+       *
+       * There is nothing to clone — a scratchpad has no remote — so the isolation
+       * this whole module provides has no mechanism here, and the honest answer is
+       * the workspace the parent already opened. Checked against the *selection*
+       * rather than against {@link ActiveRepo.checkout}, which still holds
+       * whatever repository was cloned before `scratch_open` ran and would
+       * otherwise clone a stale one into a container of its own.
+       *
+       * The consequence is stated because it is a real limit: writing subtasks in
+       * a scratchpad share one tree, exactly as they did before any of this, so
+       * fan-out there is the model's judgement rather than the platform's
+       * guarantee.
+       */
+      const selected = config.active.get();
+      if (selected === undefined || !isRepoSelection(selected)) {
+        return workspaceName(config.callerKey(), selected);
+      }
+
+      /**
+       * **Every step below runs on every chunk**, and each is idempotent.
+       *
+       * The tempting shape is to return early once the tree is there. It is
+       * wrong: if a first attempt clones and then fails at the install or the
+       * branch, the retry sees a checkout, skips the rest, and runs the session
+       * on the source branch — so the branch the parent fetches never exists and
+       * the work cannot be published. A partial setup has to be completable, not
+       * mistaken for a finished one.
+       */
+      const already = await stub.checkoutDir();
 
       // What the parent cloned, which is the only honest thing to clone: the url
       // has already been through `/repo`'s host allowlist. A subtask delegated
@@ -121,22 +159,24 @@ export function subtaskWorkspaces(config: {
         );
       }
 
-      const cloned = await stub.gitClone({
-        url: checkout.url,
-        dir: checkout.dir,
-        branch: checkout.branch,
-        // The host this checkout already came from, rather than the plugin's
-        // whole allowlist: it passed that allowlist once, and narrowing to the
-        // one host cannot refuse anything the parent was allowed.
-        allowedHosts: [new URL(checkout.url).hostname]
-      });
-      if (!cloned.ok) {
-        // Thrown rather than returned: `resolveRuntime` answering a name for a
-        // workspace with no tree would send the session to a directory that is
-        // not there, and it would report that as the task's answer.
-        throw new Error(
-          `claude-coder: could not clone into a subtask workspace: ${cloned.message}`
-        );
+      if (!already) {
+        const cloned = await stub.gitClone({
+          url: checkout.url,
+          dir: checkout.dir,
+          branch: checkout.branch,
+          // The host this checkout already came from, rather than the plugin's
+          // whole allowlist: it passed that allowlist once, and narrowing to the
+          // one host cannot refuse anything the parent was allowed.
+          allowedHosts: [new URL(checkout.url).hostname]
+        });
+        if (!cloned.ok) {
+          // Thrown rather than returned: `resolveRuntime` answering a name for a
+          // workspace with no tree would send the session to a directory that is
+          // not there, and it would report that as the task's answer.
+          throw new Error(
+            `claude-coder: could not clone into a subtask workspace: ${cloned.message}`
+          );
+        }
       }
 
       const parentRepo = config.active.get();
@@ -165,8 +205,11 @@ export function subtaskWorkspaces(config: {
        * starts, so every commit it makes lands on it without being told to.
        */
       const branch = subtaskBranch(ctx);
+      // Switch to it if a previous attempt got this far, create it otherwise.
+      // `checkout -B` would do both in one word and is wrong: it resets the
+      // branch to HEAD, discarding commits a retried attempt had already made.
       const checkedOut = await config.exec(
-        'git checkout -b "$SUBTASK_BRANCH"',
+        'git checkout "$SUBTASK_BRANCH" 2>/dev/null || git checkout -b "$SUBTASK_BRANCH"',
         { cwd: checkout.dir, env: { SUBTASK_BRANCH: branch } },
         name
       );

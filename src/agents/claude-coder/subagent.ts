@@ -29,7 +29,6 @@ import { computerExec, openWorkspace } from "@dynamicagents/plugins/computer";
 import { subtaskBranch } from "@/workspace/subtask-workspace";
 import { container } from "./plugins";
 import { claudeCodeConfig, noWorkspaceRouting } from "./claude-code";
-import { permissionModeForType } from "@dynamicagents/plugins/claude-code";
 import { subagentPlugins } from "./plugins";
 
 /**
@@ -478,10 +477,12 @@ export class ClaudeCoderSubagent extends RecipeSubagentHost<Env> {
       onCheckpoint: (at: DrainCursor) => this.ctx.storage.put(CURSOR_KEY, at)
     };
 
-    // Writing or reading, asked once. The plugin that declares both types owns the
-    // pairing of a type to a permission mode, so this reads that answer rather
-    // than naming a type itself.
-    const writes = permissionModeForType(request.type) === undefined;
+    // Writing or reading, asked once. What that *means* for the session — the
+    // permission mode it launches under — is not decided here and is not
+    // reachable from here: the plugin derives it from the type inside `start`,
+    // precisely so a host cannot hand a reading session the ability to edit.
+    // What this decides is the host's own half: a branch, and a push.
+    const writes = request.type === CLAUDE_CODE_TYPE;
 
     let outcome: DrainOutcome;
     try {
@@ -490,19 +491,15 @@ export class ClaudeCoderSubagent extends RecipeSubagentHost<Env> {
         : await this.#session.start(
             runner,
             request.subtaskId,
+            // Required, and the session derives its permission mode from it.
+            request.type,
             sessionBrief(
               request,
               note,
               writes ? subtaskBranch(request) : undefined
             ),
             dir as string,
-            sinks,
-            // Read off the request's type, never chosen here: the pairing of a
-            // subtask type to a permission mode is what makes the reading type
-            // different from the writing one, and the plugin that declares both
-            // is where it must be answered. `undefined` leaves the launch
-            // builder's own default, which is the writing mode.
-            permissionModeForType(request.type)
+            sinks
           );
     } finally {
       this.#inflight = undefined;
@@ -543,10 +540,14 @@ export class ClaudeCoderSubagent extends RecipeSubagentHost<Env> {
      * sync has unwound; pushing before that publishes a branch missing the commits
      * it exists to carry. `outcome.done` is what says the drain reached the end.
      *
-     * Only when the session finished and said it succeeded. A session that failed
-     * may still have committed, and that work is not lost — the workspace is
-     * reclaimed when the execution settles, but the report says what happened and
-     * the round can delegate again.
+     * Only when the session finished and said it succeeded.
+     *
+     * **A failed session's commits are discarded, and nothing recovers them.** Its
+     * workspace is reclaimed — storage and all — as soon as the execution settles,
+     * so there is no branch and no tree to come back to. That is the deliberate
+     * trade: publishing a branch from a session that reported failure would put
+     * work of unknown state on the remote under a name the parent is told to
+     * review. What survives is the report, which is what the round acts on.
      */
     let published: PushOutcome | undefined;
     if (outcome.done && writes && outcome.result && !outcome.result.isError) {

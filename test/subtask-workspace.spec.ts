@@ -6,6 +6,8 @@ import {
   subtaskRepo
 } from "@/workspace/subtask-workspace";
 import { SCRATCH_REPO } from "@/workspace/scratch";
+import { subtaskWorkspaces } from "@/workspace/subtask-workspace";
+import type { ActiveCheckout, ActiveRepo } from "@/workspace/active-repo";
 
 /**
  * How a writing subtask is addressed.
@@ -88,5 +90,190 @@ describe("addressing a writing subtask", () => {
     expect(branch).not.toMatch(/^[+-]/);
     expect(branch).not.toMatch(/[:^~?*[\\]/);
     expect(branch).not.toMatch(/\.\.|@\{|\.lock$|\/$/);
+  });
+});
+
+/** `ActiveRepo` over three variables — the same contract, without the SQLite. */
+function fakeActive(
+  selected?: string,
+  checkout?: ActiveCheckout
+): ActiveRepo & { noted: string[]; forgotten: string[] } {
+  const noted: string[] = [];
+  const forgotten: string[] = [];
+  return {
+    noted,
+    forgotten,
+    get: () => selected,
+    set: (repo) => {
+      selected = repo;
+    },
+    checkout: () => checkout,
+    setCheckout: (next) => {
+      checkout = next;
+    },
+    note: (repo) => noted.push(repo),
+    seen: () => [...noted],
+    forget: (repo) => forgotten.push(repo)
+  };
+}
+
+const CHECKOUT: ActiveCheckout = {
+  url: "https://github.com/acme/api.git",
+  dir: "/workspace/api",
+  branch: "main"
+};
+
+/** Enough of the workspace RPC surface for `resolve` to run against. */
+function fakeBinding(state: { dir?: string }) {
+  const calls: string[] = [];
+  const stub = {
+    checkoutDir: async () => state.dir,
+    gitClone: async () => {
+      calls.push("clone");
+      state.dir = CHECKOUT.dir;
+      return { ok: true as const, detail: "cloned" };
+    },
+    noteCheckout: async () => {
+      calls.push("noteCheckout");
+      return { present: true };
+    },
+    startInstall: async () => {
+      calls.push("startInstall");
+      return {};
+    },
+    reclaimIfIdle: async () => {
+      calls.push("reclaim");
+      return { reclaimed: true, idleMs: 0, bytes: 0 };
+    }
+  };
+  return {
+    calls,
+    binding: {
+      idFromName: (name: string) => name,
+      get: () => stub
+    } as unknown as Parameters<typeof subtaskWorkspaces>[0]["binding"]
+  };
+}
+
+function harness(opts: {
+  selected?: string;
+  checkout?: ActiveCheckout;
+  dir?: string;
+  execFails?: boolean;
+}) {
+  const state = { dir: opts.dir };
+  const { calls, binding } = fakeBinding(state);
+  const commands: string[] = [];
+  const envs: Record<string, string>[] = [];
+  const active = fakeActive(opts.selected, opts.checkout);
+  const subtasks = subtaskWorkspaces({
+    binding,
+    callerKey: () => "caller",
+    exec: async (command, options) => {
+      commands.push(command);
+      envs.push(options.env ?? {});
+      return opts.execFails
+        ? { success: false, stdout: "", stderr: "no such ref" }
+        : { success: true, stdout: "", stderr: "" };
+    },
+    active,
+    label: "test"
+  });
+  return { subtasks, calls, commands, envs, active };
+}
+
+describe("preparing a writing subtask's workspace", () => {
+  const ctx = { taskId: "task-a", subtaskId: 1 };
+
+  it("clones, records, installs and starts the branch", async () => {
+    const { subtasks, calls, commands, envs, active } = harness({
+      selected: "acme/api",
+      checkout: CHECKOUT
+    });
+
+    const name = await subtasks.resolve(ctx);
+
+    expect(name).toBe(`caller|${subtaskRepo(ctx)}`);
+    expect(calls).toEqual(["clone", "noteCheckout", "startInstall"]);
+    expect(commands[0]).toContain("checkout");
+    expect(envs[0]).toEqual({ SUBTASK_BRANCH: subtaskBranch(ctx) });
+    // Enrolled for the weekly sweep without routing the parent's tools to it: a
+    // workspace the sweep cannot see has no backstop but its own alarm.
+    expect(active.noted).toEqual([subtaskRepo(ctx)]);
+    expect(active.get()).toBe("acme/api");
+  });
+
+  /**
+   * The retry case, and the reason the early return had to go.
+   *
+   * A first attempt that clones and then fails — at the install, or at the branch
+   * — leaves a tree behind. Returning as soon as one exists would skip everything
+   * after the clone, so the branch the parent fetches would never be created and
+   * the session would run on the source branch with nowhere to publish.
+   */
+  it("finishes a setup that a previous attempt left half-done", async () => {
+    const { subtasks, calls, envs } = harness({
+      selected: "acme/api",
+      checkout: CHECKOUT,
+      dir: CHECKOUT.dir
+    });
+
+    await subtasks.resolve(ctx);
+
+    // Not cloned again — the tree is there.
+    expect(calls).not.toContain("clone");
+    // But everything after it still ran.
+    expect(calls).toEqual(["noteCheckout", "startInstall"]);
+    // The branch reaches git as a value, never as command text, so this is where
+    // it has to be asserted.
+    expect(envs[0]).toEqual({ SUBTASK_BRANCH: subtaskBranch(ctx) });
+  });
+
+  /** `checkout -B` would reset the branch and discard a retry's own commits. */
+  it("switches to the branch if it exists rather than resetting it", async () => {
+    const { subtasks, commands } = harness({
+      selected: "acme/api",
+      checkout: CHECKOUT
+    });
+
+    await subtasks.resolve(ctx);
+
+    expect(commands[0]).not.toContain("checkout -B");
+    expect(commands[0]).toContain("|| git checkout -b");
+  });
+
+  /**
+   * A scratchpad has no remote, so there is nothing to clone and no isolation to
+   * provide. What must not happen is cloning the repository that was selected
+   * *before* `scratch_open` ran, which `checkout()` still remembers.
+   */
+  it("hands a scratchpad subtask the parent's own workspace", async () => {
+    const { subtasks, calls } = harness({
+      selected: SCRATCH_REPO,
+      checkout: CHECKOUT
+    });
+
+    expect(await subtasks.resolve(ctx)).toBe(`caller|${SCRATCH_REPO}`);
+    expect(calls).toEqual([]);
+  });
+
+  it("refuses when nothing has been cloned at all", async () => {
+    const { subtasks } = harness({ selected: "acme/api" });
+
+    // Better than cloning a guess: the parent's soul is told to open a directory
+    // before delegating, and this is the sentence that says it did not.
+    await expect(subtasks.resolve(ctx)).rejects.toThrow(/nothing for it/);
+  });
+
+  it("reclaims the workspace and drops it from the sweep list", async () => {
+    const { subtasks, calls, active } = harness({
+      selected: "acme/api",
+      checkout: CHECKOUT
+    });
+
+    await subtasks.reclaim(ctx);
+
+    expect(calls).toEqual(["reclaim"]);
+    expect(active.forgotten).toEqual([subtaskRepo(ctx)]);
   });
 });

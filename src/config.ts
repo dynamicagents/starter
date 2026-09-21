@@ -167,10 +167,19 @@ export const CODER_CONFIG: CoreConfigOverrides = {
  * **The fan-out is bounded by containers, not by this file.** A writing subtask
  * gets a workspace of its own — two Claude Code sessions in one container are two
  * autonomous agents editing one working tree, each running the project's test
- * suite over the other's half-finished edits — so the ceiling is
- * `max_instances` in `wrangler.jsonc`, which the parent's own workspace also
- * draws from. The coder's `maxSubtasks` is already the number that fits;
- * inheriting it is what keeps the two from being written down twice.
+ * suite over the other's half-finished edits. So what a round of N writers costs
+ * is N+1 container instances, counting the parent's own workspace.
+ *
+ * **That is not the same as fitting inside `max_instances`, and it is worth being
+ * exact about.** This number is per *task*; the wrangler ceiling is per container
+ * entry across the whole deployment. Two callers running four writers each want
+ * ten instances against a cap of five, and the losers queue or fail to start.
+ * Nothing here admits or rations that, deliberately: the ceiling is a cost guard
+ * and the traffic that would reach it has not been observed. `npm run cf --
+ * containers` is what shows it when it is.
+ *
+ * Inheriting the coder's number rather than restating it is what keeps a value
+ * this consequential from being written down twice.
  */
 export const CLAUDE_CODER_CONFIG: CoreConfigOverrides = { ...CODER_CONFIG };
 

@@ -1,15 +1,58 @@
 name: Deploy
 
-# agents.loopingai.org, from the commit Test has just passed. The `deploy` job in
-# test.yml calls this and decides when; nothing here decides it again.
+# Every green push to `next` deploys agents.loopingai.org. Triggered by the push
+# rather than by Test finishing: `workflow_run` fires only for the copy of a
+# workflow on the default branch, `main`, so it would run main's deploy against
+# next's code. The `tested` job waits for Test instead.
 on:
-  workflow_call:
+  push:
+    branches: [next]
 
 # Nothing by default; each job takes only what it needs.
 permissions: {}
 
 jobs:
+  # A deploy never ships a commit whose suite was red, and the push alone does
+  # not show a green one: next's ruleset requires `test` on the PR but not an
+  # up-to-date branch, so a squash can land on a base the PR never ran against.
+  # So this waits for Test's own run on this commit.
+  #
+  # agents.loopingai.org is this repository's deployment. A repository made
+  # from the template inherits this file but not the credentials or the domain,
+  # so both jobs skip there rather than failing every push; a copy opts in by
+  # naming itself here and changing the URLs below.
+  tested:
+    if: github.repository == 'dynamicagents/starter'
+    # Test's own timeout, plus room to queue.
+    timeout-minutes: 20
+    runs-on: ubuntu-24.04
+    permissions:
+      actions: read
+    steps:
+      - env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          # Test's run for this push starts alongside this one, not necessarily
+          # first.
+          id=""
+          for attempt in $(seq 1 12); do
+            id="$(gh run list --workflow test.yml --event push --commit "$SHA" \
+              --json databaseId --jq '.[0].databaseId // empty')"
+            if [ -n "$id" ]; then break; fi
+            echo "Attempt $attempt: no Test run for $SHA yet; retrying in 5s."
+            sleep 5
+          done
+          if [ -z "$id" ]; then
+            echo "Test never started for $SHA." >&2
+            exit 1
+          fi
+          gh run watch "$id" --exit-status --interval 10
+
   deploy:
+    needs: tested
     # A second green push waits for an in-flight deploy rather than killing it
     # mid-rollout. A newer arrival does replace one still *pending*: every
     # deploy ships all of next, so the one it replaces has nothing left to ship.

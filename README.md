@@ -445,7 +445,7 @@ cannot tell the new version from the old. A commit that is no longer `main`'s ti
 time its run gets there stands aside rather than roll production back. `next` never
 deploys.
 
-It needs a GitHub environment named `deployment` holding two secrets:
+It needs a GitHub environment named `deployment` holding these secrets:
 
 - `CLOUDFLARE_ACCOUNT_ID`.
 - `CLOUDFLARE_API_TOKEN`, with Account › Workers Scripts › Edit, Account › Containers ›

@@ -63,22 +63,3 @@ jobs:
 
       # The whole Worker builds and every binding resolves.
       - run: npx wrangler deploy --dry-run --outdir dist
-
-  # Every green push to `next` deploys agents.loopingai.org. A job here rather
-  # than a `workflow_run` trigger in deploy.yml, which fires only for a workflow
-  # on the default branch — `main` — and would run main's copy of the deploy
-  # against next's code.
-  #
-  # agents.loopingai.org is this repository's deployment. A repository made
-  # from the template inherits this file but not the credentials or the domain,
-  # so the job skips there rather than failing every push; a copy opts in by
-  # naming itself here and changing the URLs in deploy.yml.
-  deploy:
-    needs: test
-    if: >-
-      github.repository == 'dynamicagents/starter' &&
-      github.event_name == 'push' &&
-      github.ref == 'refs/heads/next'
-    permissions:
-      contents: read
-    uses: ./.github/workflows/deploy.yml

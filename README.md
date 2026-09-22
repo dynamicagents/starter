@@ -434,6 +434,38 @@ shared base class still lived in `agents/reactive/` and arc-player extending it 
 
 ---
 
+## Continuous deployment
+
+This repository's own deployment, `agents.loopingai.org`, follows `next`. When Test passes
+on a push to `next`, its `deploy` job calls [`deploy.yml`](.github/workflows/deploy.yml),
+which runs `npx wrangler deploy` for that commit — building and pushing the container
+images with the Worker — then polls `/.well-known/agent-card.json` until it answers 200.
+That shows the domain still serves; it cannot tell the new version from the old. A commit
+that is no longer `next`'s tip by the time its run gets there stands aside rather than roll
+production back.
+
+What `next` installs is what runs, a git ref onto core's or plugins' `main` included. `main`
+does not deploy; it is what a fork builds.
+
+It needs a GitHub environment named `deployment` holding these secrets:
+
+- `CLOUDFLARE_ACCOUNT_ID`.
+- `CLOUDFLARE_API_TOKEN`, with Account › Workers Scripts › Edit, Account › Containers ›
+  Edit for the images, and Zone › Workers Routes › Edit on the custom domain's zone, which
+  every deploy re-asserts. Bound resources such as Workers AI, Vectorize and Browser
+  Rendering need no scope of their own to deploy against.
+
+The Worker's runtime secrets are not in GitHub. Set them once with `wrangler secret put`;
+they persist across deploys, and a deploy fails naming any in `secrets.required` that was
+never set.
+
+A repository made from this template skips the job, since it has neither the environment
+nor the domain. To deploy yours the same way, create the environment, then name your
+repository in the `deploy` job's `if:` in [`test.yml`](.github/workflows/test.yml) and your
+origin in `deploy.yml`'s URLs.
+
+---
+
 ## Looking at a running deployment
 
 ```bash

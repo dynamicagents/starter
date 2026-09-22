@@ -115,7 +115,8 @@ several frames away.
 This repo is not versioned and publishes nothing, but it still has a released line:
 **`main` is what a fork builds.** It pins published versions of core and plugins, and
 nothing on it may depend on a commit that is not released. Development lands on
-`next`, by squash-merged PR.
+`next`, by squash-merged PR, and each green push to `next` deploys agents.loopingai.org —
+see "Continuous deployment" in the README.
 
 **`next` pins published versions too, by default.** A change that needs core or
 plugins work not yet published may point `next` at their `main` by git ref for as long

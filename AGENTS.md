@@ -115,7 +115,8 @@ several frames away.
 This repo is not versioned and publishes nothing, but it still has a released line:
 **`main` is what a fork builds.** It pins published versions of core and plugins, and
 nothing on it may depend on a commit that is not released. Development lands on
-`next`, by squash-merged PR.
+`next`, by squash-merged PR, and each green push to `next` deploys agents.loopingai.org —
+see "Continuous deployment" in the README.
 
 **`next` pins published versions too, by default.** A change that needs core or
 plugins work not yet published may point `next` at their `main` by git ref for as long
@@ -140,8 +141,7 @@ survives a moving ref.
 once core and plugins are published, a PR into `next` pins the new versions and removes
 any git ref; Test fails a PR into `main` that still names one. Nothing reaches `main`
 any other way, a fix included, so `main` only ever gains merges of `next` and a release
-never needs merging back. A release's green Test run on `main` also deploys it — see
-"Continuous deployment" in the README.
+never needs merging back.
 
 Use `npm run link:local` for work that is not committed anywhere yet; a git ref only
 reaches what is on a branch.

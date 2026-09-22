@@ -1,37 +1,18 @@
 name: Deploy
 
-# Only once Test has gone green on a push to main: a deploy never ships a commit
-# whose suite was red, and `next` never deploys, because `main` is the released
-# line. `needs:` cannot reach across workflow files, so this keys off Test
-# finishing instead.
+# agents.loopingai.org, from the commit Test has just passed. The `deploy` job in
+# test.yml calls this and decides when; nothing here decides it again.
 on:
-  workflow_run:
-    workflows: [Test]
-    types: [completed]
-    branches: [main]
+  workflow_call:
 
 # Nothing by default; each job takes only what it needs.
 permissions: {}
 
 jobs:
   deploy:
-    # agents.loopingai.org is this repository's deployment. A repository made
-    # from the template inherits this file but not the credentials or the
-    # domain, so the job skips there rather than failing every push; a copy
-    # opts in by naming itself here and changing the URLs below.
-    #
-    # `branches: [main]` above filters `head_branch`, which for a pull_request
-    # run is the *source* branch, so a fork PR from a branch named `main` would
-    # match. The rest closes that: only a push, to this repository, on its main.
-    if: >-
-      github.repository == 'dynamicagents/starter' &&
-      github.event.workflow_run.conclusion == 'success' &&
-      github.event.workflow_run.event == 'push' &&
-      github.event.workflow_run.head_repository.full_name == github.repository &&
-      github.event.workflow_run.head_branch == 'main'
-    # A second green merge waits for an in-flight deploy rather than killing it
+    # A second green push waits for an in-flight deploy rather than killing it
     # mid-rollout. A newer arrival does replace one still *pending*: every
-    # deploy ships all of main, so the one it replaces has nothing left to ship.
+    # deploy ships all of next, so the one it replaces has nothing left to ship.
     concurrency:
       group: deploy
       cancel-in-progress: false
@@ -47,9 +28,6 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
-          # `workflow_run` hands us the repository, not the commit Test passed
-          # on; pin the checkout to that exact sha.
-          ref: ${{ github.event.workflow_run.head_sha }}
           fetch-depth: 1
           persist-credentials: false
 
@@ -57,32 +35,32 @@ jobs:
         with:
           node-version: 24
 
-      # No Cloudflare credentials on this step: install scripts run here, and
-      # they have no business seeing the token.
+      # No Cloudflare credentials on this step: install scripts run here — a git
+      # ref's `prepare` among them — and they have no business seeing the token.
       - run: npm ci
 
-      # `workflow_run` fires in the order Test runs finish, not the order commits
-      # landed, so a slow run for an older commit can finish after a fast one for
-      # a newer commit, and deploying it would roll production back. Only the
-      # commit still at main's tip deploys. An older one stands aside: the newer
+      # Test runs finish in their own order, not the order commits landed, so a
+      # slow run for an older commit can reach here after a fast one for a newer
+      # commit, and deploying it would roll production back. Only the commit
+      # still at next's tip deploys. An older one stands aside: the newer
       # commit's run ships it, or, if that suite is red, nothing ships.
       #
       # Asked here, inside the concurrency slot and just before the first step
-      # that changes anything, because a run can wait in the queue while main
+      # that changes anything, because a run can wait in the queue while next
       # moves, and a re-run of a failed deploy must ask again rather than trust
       # an answer from before.
       - id: tip
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
-          SHA: ${{ github.event.workflow_run.head_sha }}
+          SHA: ${{ github.sha }}
         run: |
           set -euo pipefail
-          tip="$(gh api "repos/$GH_REPO/commits/main" --jq .sha)"
+          tip="$(gh api "repos/$GH_REPO/commits/next" --jq .sha)"
           if [ "$tip" = "$SHA" ]; then
             echo "current=true" >>"$GITHUB_OUTPUT"
           else
-            echo "main has moved on to $tip; not deploying $SHA over it."
+            echo "next has moved on to $tip; not deploying $SHA over it."
             echo "current=false" >>"$GITHUB_OUTPUT"
           fi
 
@@ -98,7 +76,7 @@ jobs:
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          SHA: ${{ github.event.workflow_run.head_sha }}
+          SHA: ${{ github.sha }}
 
       # The stub card is built from the manifest and signed with
       # A2A_SIGNING_KEY, touching no Durable Object, so a 200 shows the Worker is

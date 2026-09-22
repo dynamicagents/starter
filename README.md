@@ -436,14 +436,16 @@ shared base class still lived in `agents/reactive/` and arc-player extending it 
 
 ## Continuous deployment
 
-This repository's own deployment, `agents.loopingai.org`, follows `main`. When Test goes
-green on a push to `main` — a release merged from `next` —
-[`deploy.yml`](.github/workflows/deploy.yml) runs `npx wrangler deploy` for that commit,
-which builds and pushes the container images with the Worker, then polls
-`/.well-known/agent-card.json` until it answers 200. That shows the domain still serves; it
-cannot tell the new version from the old. A commit that is no longer `main`'s tip by the
-time its run gets there stands aside rather than roll production back. `next` never
-deploys.
+This repository's own deployment, `agents.loopingai.org`, follows `next`. When Test passes
+on a push to `next`, its `deploy` job calls [`deploy.yml`](.github/workflows/deploy.yml),
+which runs `npx wrangler deploy` for that commit — building and pushing the container
+images with the Worker — then polls `/.well-known/agent-card.json` until it answers 200.
+That shows the domain still serves; it cannot tell the new version from the old. A commit
+that is no longer `next`'s tip by the time its run gets there stands aside rather than roll
+production back.
+
+What `next` installs is what runs, a git ref onto core's or plugins' `main` included. `main`
+does not deploy; it is what a fork builds.
 
 It needs a GitHub environment named `deployment` holding these secrets:
 
@@ -459,7 +461,8 @@ never set.
 
 A repository made from this template skips the job, since it has neither the environment
 nor the domain. To deploy yours the same way, create the environment, then name your
-repository in the job's `if:` and your origin in its URLs.
+repository in the `deploy` job's `if:` in [`test.yml`](.github/workflows/test.yml) and your
+origin in `deploy.yml`'s URLs.
 
 ---
 

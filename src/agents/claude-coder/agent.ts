@@ -11,6 +11,13 @@ import { roundPolicy } from "@/round-policy";
 import { activeRepo } from "@/workspace/active-repo";
 import { discardWorkingTree, sweepIdleWorkspaces } from "@/workspace/lifecycle";
 import { workspaceName } from "@dynamicagents/plugins/computer";
+import {
+  forgetWorktree,
+  idleWorktrees,
+  parseWorktreeRepo,
+  reconcileWorktrees,
+  sqlPoolStore
+} from "@/workspace/worktree-pool";
 import { parentPlugins } from "./plugins";
 import { soulPrompt } from "./soul";
 import { ClaudeCoderSubagent } from "./subagent";
@@ -79,12 +86,50 @@ export class ClaudeCoderAgent extends RoundAgentBase<Env> {
     }
   }
 
-  /** Cron handler, delegating to the shared sweep. */
+  /**
+   * Cron handler, delegating to the shared sweep — and then reconciling the
+   * pool against what is actually still there.
+   *
+   * The second half is not a tidy-up of the first. `onReclaimed` fires only for
+   * a workspace *this sweep* retired, and a worktree's own idle alarm beats the
+   * weekly sweep to almost all of them; `reconcileWorktrees` carries what that
+   * leaves behind and why it matters.
+   */
   async reclaimIdleWorkspaces(): Promise<void> {
+    const host = this.pluginHost();
+    const pool = sqlPoolStore(host.storage);
+    const binding = this.env.CLAUDE_CODER_WORKSPACE;
     await sweepIdleWorkspaces({
-      host: this.pluginHost(),
-      binding: this.env.CLAUDE_CODER_WORKSPACE,
-      label: LABEL
+      host,
+      binding,
+      label: LABEL,
+      // A worktree the sweep retired has no checkout left, so its row goes back
+      // to empty: the slot is cloned into again rather than trusted.
+      onReclaimed: (repo) => forgetWorktree(pool, repo)
+    });
+    let key: string;
+    try {
+      key = host.callerKey();
+    } catch {
+      // Nothing was ever handed out on this instance, so there is no pool to
+      // reconcile — the same case `sweepIdleWorkspaces` returns early on.
+      return;
+    }
+    await reconcileWorktrees(pool, async (sentinel) => {
+      const name = workspaceName(key, sentinel);
+      try {
+        return Boolean(
+          await binding.get(binding.idFromName(name)).checkoutDir()
+        );
+      } catch (err) {
+        // Unreadable is not gone: a row is emptied on an answer, never on a
+        // failure to get one, so an unreachable object keeps its slot.
+        console.warn(`[${LABEL}] could not read a worktree's checkout`, {
+          name,
+          err: String(err)
+        });
+        return true;
+      }
     });
   }
 
@@ -134,24 +179,38 @@ export class ClaudeCoderAgent extends RoundAgentBase<Env> {
    * and a full install. `reclaimIfIdle` here would look identical and cost that
    * silently. The workspace host carries the distinction.
    *
-   * A writing subtask's own workspace is not this one and is retired separately —
-   * see `@/workspace/subtask-workspace`, reached through the plugin's settle hook
-   * so that it fires per execution rather than once per task.
+   * **Tools left in a worktree come back to the checkout**, and every worktree
+   * no session is in has its container released too: each stays up after its
+   * subtask so the parent can review in it, and at the end of the task nothing
+   * is left to review. The worktrees themselves — branches, commits — stay; see
+   * `@/workspace/worktrees`.
    *
    * Core contains a throw here, but this is best-effort on its own account too: a
    * container that will not stop is the idle deadline's problem, not the answer's.
    */
   protected override async onTaskSettled(taskId: string): Promise<void> {
-    const repo = activeRepo(this.pluginHost()).get();
+    const active = activeRepo(this.pluginHost());
+    const repo = active.get();
+    const worktree = repo === undefined ? undefined : parseWorktreeRepo(repo);
+    if (worktree) active.set(worktree.repo);
     const binding = this.env.CLAUDE_CODER_WORKSPACE;
-    const name = workspaceName(this.#identityKeyOrTask(taskId), repo);
-    try {
-      await binding.get(binding.idFromName(name)).releaseContainer();
-    } catch (err) {
-      console.warn(`[${LABEL}] could not release the workspace container`, {
-        name,
-        err: String(err)
-      });
+    const key = this.#identityKeyOrTask(taskId);
+    const names = new Set([
+      workspaceName(key, repo),
+      ...(worktree ? [workspaceName(key, worktree.repo)] : []),
+      ...idleWorktrees(sqlPoolStore(this.pluginHost().storage)).map(
+        (sentinel) => workspaceName(key, sentinel)
+      )
+    ]);
+    for (const name of names) {
+      try {
+        await binding.get(binding.idFromName(name)).releaseContainer();
+      } catch (err) {
+        console.warn(`[${LABEL}] could not release the workspace container`, {
+          name,
+          err: String(err)
+        });
+      }
     }
   }
 

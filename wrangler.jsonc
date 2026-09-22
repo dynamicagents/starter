@@ -120,8 +120,8 @@
   // are rented: an entry bills only for what is running, so raising it costs
   // nothing until there is work to fill it.
   //
-  // **For claude-coder it is what bounds the fan-out.** A writing subtask gets a
-  // workspace of its own while the parent keeps one, so a round of N writers wants
+  // **For claude-coder it is what bounds the fan-out.** A writing subtask works in
+  // a worktree of its own while the parent keeps one, so a round of N writers wants
   // N+1 instances of `ClaudeCoderWorkspaceDO` — `CLAUDE_CODER_CONFIG` in
   // `src/config.ts` carries why. A reading subtask wants none: it runs in the
   // parent's container, against the checkout already in it. The cap is per

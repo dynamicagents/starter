@@ -17,11 +17,11 @@ import { BROWSER_FAMILY } from "@dynamicagents/plugins/browser";
 import { REPO_FAMILY } from "@dynamicagents/plugins/repo";
 import { parentPlugins, subagentPlugins } from "@/agents/claude-coder/plugins";
 import {
-  publishedNote,
-  refusedByRemote,
   sessionBrief,
   sessionFooter,
   settleDrain,
+  warningPrompt,
+  writingNote,
   type ClaudeCoderSubagent
 } from "@/agents/claude-coder/subagent";
 import { CLAUDE_CODER_CONFIG, CLAUDE_CODE_SESSION } from "@/config";
@@ -678,25 +678,43 @@ describe("the branch a writing session is told about", () => {
   it("names the submodules, and says to commit inside each one", () => {
     const brief = sessionBrief(request(), undefined, {
       branch: "claude-coder/task-1/1",
-      submodules: ["core", "starter"]
+      submodules: ["core", "starter"],
+      continues: false
     });
 
     expect(brief).toContain("You are on `claude-coder/task-1/1`");
     expect(brief).toContain("- `core`\n- `starter`");
-    expect(brief).toMatch(/Commit inside each one you change/);
+    expect(brief).toMatch(/Commit inside each one you\nchange/);
     // The install is the root's alone, and a session that does not know that
     // runs a submodule's suite against no dependencies.
     expect(brief).toMatch(/Run `npm ci` in a\nsubmodule/);
   });
 
-  it("says nothing about submodules in a repository without any", () => {
+  /** Only commits leave a session, and it has to hear that before it starts. */
+  it("says uncommitted work is deleted, and that the parent pushes", () => {
     const brief = sessionBrief(request(), undefined, {
       branch: "claude-coder/task-1/1",
-      submodules: []
+      submodules: [],
+      continues: false
     });
 
     expect(brief).toContain("## Your branch");
+    expect(brief).toMatch(
+      /anything left\nuncommitted is deleted when you finish/
+    );
+    expect(brief).toMatch(/Do not push/);
     expect(brief).not.toContain("Submodules");
+    expect(brief).not.toContain("earlier work");
+  });
+
+  it("tells a continuing session the branch already holds work", () => {
+    const brief = sessionBrief(request(), undefined, {
+      branch: "claude-coder/task-1/1",
+      submodules: [],
+      continues: true
+    });
+
+    expect(brief).toMatch(/already holds earlier work on this task/);
   });
 
   /** A reading session's copy is deleted, so asking it to commit wastes it. */
@@ -707,109 +725,108 @@ describe("the branch a writing session is told about", () => {
   });
 });
 
+/** The one turn a session gets when it left work uncommitted. */
+describe("the warning round", () => {
+  it("lists what would be deleted, per repository, and asks once", () => {
+    const prompt = warningPrompt([
+      { path: ".", files: ["notes.md"] },
+      { path: "core", files: ["lib/a.js", "lib/b.js"] }
+    ]);
+
+    expect(prompt).toContain("they will be deleted when this session ends");
+    expect(prompt).toContain("- the superproject: `notes.md`");
+    expect(prompt).toContain("- `core`: `lib/a.js`, `lib/b.js`");
+    expect(prompt).toMatch(/Commit what should be kept/);
+  });
+
+  it("calls a lone checkout the repository, and bounds a long list", () => {
+    const files = Array.from({ length: 15 }, (_, i) => `f${i}`);
+    const prompt = warningPrompt([{ path: ".", files }]);
+
+    expect(prompt).toContain("- the repository: `f0`");
+    expect(prompt).toContain("and 3 more");
+  });
+});
+
 /**
- * What the parent is told about where the work went, which it cannot see for
- * itself — the push happens after the session exits, in a container the parent
- * has no view of.
+ * What the parent is told about the branch, which it cannot see for itself —
+ * the discard runs after the session exits.
  */
-describe("the note on what was published", () => {
+describe("the note on what a writing session kept", () => {
   const branch = "claude-coder/task-1/1";
 
-  it("names each repository pushed to, and where to fetch it", () => {
-    const note = publishedNote({
-      ok: true,
+  it("names each repository with commits, and how to reach the worktree", () => {
+    const note = writingNote({
       branch,
-      repos: [
-        { dir: "/workspace/super", name: "acme/super", ok: true, commits: 0 },
-        {
-          dir: "/workspace/super/starter",
-          name: "acme/starter",
-          ok: true,
-          commits: 2
-        }
-      ]
+      commits: [
+        { path: ".", count: 0 },
+        { path: "starter", count: 2 },
+        { path: "core", count: 1 }
+      ],
+      discarded: []
     });
 
-    expect(note).toContain(`Pushed \`${branch}\` to acme/starter (2 commits)`);
-    expect(note).toContain("`repo_fetch` in `/workspace/super/starter`");
-    expect(note).toContain(`\`origin/${branch}\``);
+    expect(note).toContain(
+      `**Committed on \`${branch}\`** in \`starter\` (2 commits), \`core\` (1 commit).`
+    );
+    expect(note).toContain("Nothing is pushed.");
+    expect(note).toContain("`repo_worktree`");
+    expect(note).toContain("`continue`");
     // Nothing is said about a repository the session did not change.
-    expect(note).not.toContain("acme/super");
+    expect(note).not.toContain("superproject");
   });
 
-  it("says nothing was pushed when no repository has commits", () => {
-    const note = publishedNote({
-      ok: true,
+  it("says there is nothing to review when nothing was committed", () => {
+    const note = writingNote({
       branch,
-      repos: [{ dir: "/workspace/r", name: "acme/r", ok: true, commits: 0 }]
+      commits: [{ path: ".", count: 0 }],
+      discarded: []
     });
 
-    expect(note).toMatch(/No commits were made/);
+    expect(note).toMatch(/No commits were made on `claude-coder\/task-1\/1`/);
   });
 
-  it("names a repository that could not be published, beside one that was", () => {
-    const note = publishedNote({
-      ok: true,
+  it("names what was deleted uncommitted", () => {
+    const note = writingNote({
       branch,
-      repos: [
-        { dir: "/workspace/super", name: "acme/super", ok: true, commits: 1 },
-        {
-          dir: "/workspace/super/core",
-          name: "acme/core",
-          ok: false,
-          why: "rejected"
-        }
-      ]
+      commits: [{ path: ".", count: 1 }],
+      discarded: [{ path: ".", files: ["scratch.txt"] }]
     });
 
-    expect(note).toContain("Pushed");
-    expect(note).toContain("Could not publish to acme/core: rejected");
+    expect(note).toContain("the repository (1 commit)");
+    expect(note).toContain(
+      "**Deleted, uncommitted:** the repository: `scratch.txt`."
+    );
   });
 
   /**
-   * The production refusal, verbatim. A parent told to delegate again re-ran a
-   * whole session to be refused by the same token, twice.
+   * The loop that deletes it reports a failure — a masked one would leave these
+   * files on disk under a line saying they are gone.
    */
-  const WORKFLOW_REFUSAL =
-    "git push failed: One or more branches were not updated: \n  - refs/heads/claude-coder/t/89: refusing to allow a Personal Access Token to create or update workflow `.github/workflows/deploy.yml` without `workflow` scope";
-
-  it("tells the parent not to redo work the forge refused", () => {
-    const note = publishedNote({
-      ok: true,
+  it("says so when the delete failed, rather than claiming it worked", () => {
+    const note = writingNote({
       branch,
-      repos: [
-        {
-          dir: "/workspace/super/gatekeeper",
-          name: "acme/gatekeeper",
-          ok: false,
-          why: WORKFLOW_REFUSAL,
-          refused: true
-        }
-      ]
+      commits: [{ path: ".", count: 1 }],
+      discarded: [{ path: ".", files: ["scratch.txt"] }],
+      discardFailed: true
     });
 
-    expect(note).toContain("The forge refused the push to acme/gatekeeper");
-    expect(note).toContain("without `workflow` scope");
-    expect(note).toContain("Do not delegate it again");
-    expect(note).not.toContain("delegate it again rather");
+    expect(note).toContain(
+      "**Still uncommitted — deleting it failed**, so these are in the " +
+        "worktree: the repository: `scratch.txt`."
+    );
+    expect(note).not.toContain("**Deleted, uncommitted:**");
   });
 
-  it("recognises a refusal by the forge, and nothing that merely failed to arrive", () => {
-    expect(refusedByRemote(WORKFLOW_REFUSAL)).toBe(true);
-    expect(refusedByRemote("remote: Permission denied to acme/x")).toBe(true);
-    expect(refusedByRemote("could not resolve host: github.com")).toBe(false);
-    expect(refusedByRemote("the workspace had no checkout")).toBe(false);
-  });
-
-  /** An uncounted repository is pushed, so it is reported as pushed. */
-  it("reports a push whose commits could not be counted", () => {
-    const note = publishedNote({
-      ok: true,
+  /** Uncounted is not the same as none, so it is not reported as none. */
+  it("reports a repository whose commits could not be counted", () => {
+    const note = writingNote({
       branch,
-      repos: [{ dir: "/workspace/r", name: "acme/r", ok: true }]
+      commits: [{ path: "." }],
+      discarded: []
     });
 
-    expect(note).toContain(`Pushed \`${branch}\` to acme/r.`);
+    expect(note).toContain("the repository (uncounted)");
   });
 });
 

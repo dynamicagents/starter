@@ -56,9 +56,12 @@ const CHECKOUT_TABLE = "coder_active_checkout";
 
 /** Reads and writes for one caller's current repository. */
 export interface ActiveRepo {
-  /** `owner/repo`, or undefined before the first clone of this session. */
+  /**
+   * `owner/repo`, a sentinel — a scratchpad, a worktree the parent switched into —
+   * or undefined before the first clone of this session.
+   */
   get(): string | undefined;
-  /** Record the repository a clone is about to target. */
+  /** Route the parent's tools: a repository a clone is about to target, or a sentinel. */
   set(repo: string): void;
   /**
    * What the parent cloned, in the terms a second clone of the same thing needs.
@@ -80,9 +83,10 @@ export interface ActiveRepo {
    * Add a name to the sweep's candidate list **without** routing anything to it.
    *
    * {@link set} does both, which is right for a clone: the parent is about to work
-   * in what it selected. A per-subtask workspace is the other case — it must be
-   * swept, and it must not become what the parent's own tools address, because
-   * this table holds one row and the later write would win.
+   * in what it selected. A worktree a subtask is prepared in is the other case —
+   * it must be swept, and it must not become what the parent's own tools address
+   * until the parent switches into it, because this table holds one row and the
+   * later write would win.
    */
   note(repo: string): void;
   /**

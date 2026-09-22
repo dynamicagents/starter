@@ -1,13 +1,24 @@
 import { restrictMainAgentTools, type AgentPlugin } from "@dynamicagents/core";
 import type { PluginHost } from "@dynamicagents/core/host";
-import { claudeCode, claudeCodeRead } from "@dynamicagents/plugins/claude-code";
-import { computer, computerExec } from "@dynamicagents/plugins/computer";
+import {
+  claudeCode,
+  claudeCodeRead,
+  claudeCodeSession,
+  type SessionRuntime
+} from "@dynamicagents/plugins/claude-code";
+import {
+  computer,
+  computerExec,
+  openWorkspace
+} from "@dynamicagents/plugins/computer";
 import { repo } from "@dynamicagents/plugins/repo";
 import { browser } from "@dynamicagents/plugins/browser";
 import { recall } from "@dynamicagents/plugins/recall";
 import { RECALL } from "@/config";
 import { activeRepo } from "@/workspace/active-repo";
 import { subtaskWorkspaces } from "@/workspace/subtask-workspace";
+import { sqlPoolStore } from "@/workspace/worktree-pool";
+import { worktreeSwitch } from "@/workspace/worktrees";
 import {
   DEPENDENCY_TREE_NOTE,
   workspaceContainer
@@ -82,32 +93,58 @@ export const parentPlugins = (host: PluginHost<Env>): AgentPlugin[] => {
   const active = activeRepo(host);
   const name = () => workspaceName(host.callerKey(), active.get());
   const config = container(host.env, name);
+  const binding = host.env.CLAUDE_CODER_WORKSPACE;
   /**
    * Where a *writing* subtask works, which is never here.
    *
    * The parent's own workspace above holds the checkout its tools read and its
-   * git acts on. A writing subtask gets one of its own — see
-   * `@/workspace/subtask-workspace` for the whole argument — and these two seams
-   * are how the plugin reaches it.
+   * git acts on. A writing subtask works in a worktree from a pool this agent
+   * keeps — see `@/workspace/worktree-pool` — and the plugin reaches it through
+   * the seams below.
    */
+  const pool = sqlPoolStore(host.storage);
   const subtasks = subtaskWorkspaces({
-    binding: host.env.CLAUDE_CODER_WORKSPACE,
+    binding,
     callerKey: () => host.callerKey(),
     // The same settings the parent's own tools run under — `shell: "bash"` above
-    // all — pointed at whichever subtask workspace is being prepared rather than
-    // at this agent's. A partial copy of this config has already cost an outage;
-    // see `@/workspace/container.ts`.
+    // all — pointed at whichever worktree is being prepared rather than at this
+    // agent's. A partial copy of this config has already cost an outage; see
+    // `@/workspace/container.ts`.
     exec: (command, options, workspace) =>
       computerExec(container(host.env, () => workspace))(command, options),
+    // The driver the facet starts sessions with, so the stop reaches the same
+    // exec ids — a follow-up turn's included.
+    stopSession: async (workspace, subtaskId) => {
+      using opened = await openWorkspace(
+        binding.get(binding.idFromName(workspace))
+      );
+      await claudeCodeSession(
+        claudeCodeConfig(
+          host.env,
+          noWorkspaceRouting("stopping a session routes nothing")
+        )
+      ).stop(opened.runtime as SessionRuntime, subtaskId);
+    },
     active,
+    pool,
     // The tenant id is where this name lives; `./agent.ts` spells its own log
     // prefix from the same place.
     label: claudeCoder.tenant
   });
-  const workspace = () =>
-    host.env.CLAUDE_CODER_WORKSPACE.get(
-      host.env.CLAUDE_CODER_WORKSPACE.idFromName(name())
-    );
+  /** How the parent's tools move into those worktrees and back — see `@/workspace/worktrees`. */
+  const worktrees = worktreeSwitch({
+    active,
+    pool,
+    binding,
+    callerKey: () => host.callerKey()
+  });
+  const routing = {
+    workspaceName: name,
+    subtaskWorkspace: subtasks.resolve,
+    releaseSubtaskWorkspace: subtasks.release,
+    abortSubtaskWorkspace: subtasks.abort
+  };
+  const workspace = () => binding.get(binding.idFromName(name()));
   /** Shared with the workspace object — see `@/workspace/git-identity`. */
   const author = gitIdentity(host.env);
 
@@ -122,13 +159,7 @@ export const parentPlugins = (host: PluginHost<Env>): AgentPlugin[] => {
      * how the facet finds this workspace; without it a delegated session has no
      * way to address the container holding the checkout it was told to work in.
      */
-    claudeCode(
-      claudeCodeConfig(host.env, {
-        workspaceName: name,
-        subtaskWorkspace: subtasks.resolve,
-        reclaimSubtaskWorkspace: subtasks.reclaim
-      })
-    ),
+    claudeCode(claudeCodeConfig(host.env, routing)),
     /**
      * Reading, in the parent's own container.
      *
@@ -137,13 +168,7 @@ export const parentPlugins = (host: PluginHost<Env>): AgentPlugin[] => {
      * answers `workspaceName` — this workspace, with the checkout and the
      * dependency tree already in it, which is the whole economy of the type.
      */
-    claudeCodeRead(
-      claudeCodeConfig(host.env, {
-        workspaceName: name,
-        subtaskWorkspace: subtasks.resolve,
-        reclaimSubtaskWorkspace: subtasks.reclaim
-      })
-    ),
+    claudeCodeRead(claudeCodeConfig(host.env, routing)),
     repo({
       // Composed rather than imported: the repo plugin needs a shell, not a
       // container, so it takes one instead of depending on the computer module.
@@ -155,7 +180,7 @@ export const parentPlugins = (host: PluginHost<Env>): AgentPlugin[] => {
       // They go to the workspace object, which reads `GITHUB_TOKEN` from its own
       // environment — so the container never holds the credential at all.
       git: workspaceGit({
-        binding: host.env.CLAUDE_CODER_WORKSPACE,
+        binding,
         workspaceName: config.workspaceName
       }),
       // Still needed, and now only for `repo_open_pr` — the one credentialed
@@ -187,7 +212,13 @@ export const parentPlugins = (host: PluginHost<Env>): AgentPlugin[] => {
           dir,
           ...(repoName ? { repo: repoName } : {})
         });
-      }
+      },
+      // The worktrees writing subtasks commit in, and the switch into them. The
+      // hooks are what a worktree adds to this plugin's own guards: a session may
+      // still be in it, and a session had a shell over its `.git/config`.
+      worktrees,
+      beforeWrite: worktrees.beforeWrite,
+      afterPush: worktrees.afterPush
     }),
     /**
      * A place to work when the work is not a repository.

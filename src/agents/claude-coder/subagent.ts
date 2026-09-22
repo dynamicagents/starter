@@ -13,7 +13,9 @@ import {
   claudeCodeSession,
   CLAUDE_CODE_READ_TYPE,
   CLAUDE_CODE_TYPE,
+  followUpExecIdFor,
   WORKSPACE_RUNTIME_KEY,
+  type ClaudeCodeResult,
   type ClaudeCodeSession,
   type DrainCursor,
   type DrainOutcome,
@@ -27,7 +29,8 @@ import {
 import { CLAUDE_CODE_SESSION, CLAUDE_CODER_CONFIG } from "@/config";
 import { claudeCoder } from "./definition";
 import { computerExec, openWorkspace } from "@dynamicagents/plugins/computer";
-import { readSubmodules, subtaskBranch } from "@/workspace/subtask-workspace";
+import { readSubmodules } from "@/workspace/subtask-workspace";
+import { subtaskBranch } from "@/workspace/worktree-pool";
 import { container } from "./plugins";
 import { claudeCodeConfig, noWorkspaceRouting } from "./claude-code";
 import { subagentPlugins } from "./plugins";
@@ -56,6 +59,18 @@ const CURSOR_KEY = "claude-cursor";
  * hand.
  */
 const SESSION_KEY = "claude-session";
+
+/**
+ * Each repository a writing session could commit in, and the commit it started
+ * at — recorded before it starts, so what it committed can be counted after.
+ */
+const REPOS_KEY = "claude-repos";
+
+/**
+ * The session's own result while its warning round runs. The report is about
+ * the session; the round only decides what of it was kept.
+ */
+const WARNING_KEY = "claude-warning";
 
 /** Bound on the report text, so one runaway session cannot fill the row. */
 const REPORT_MAX = 24_000;
@@ -173,75 +188,58 @@ Pull requests and replies to a review belong to the agent that briefed you, whic
 holds the credential on the other side of this container. Report what you changed and
 let it deliver.`;
 
-/**
- * What became of one repository's copy of a writing subtask's branch.
- *
- * `dir` is where that repository sits in the parent's own checkout too — the
- * subtask's clone reuses the parent's path — so it is the directory the parent
- * fetches in. `commits` is absent when they could not be counted, which is
- * pushed anyway rather than read as nothing to push.
- */
-type RepoPush =
-  | { dir: string; name: string; ok: true; commits?: number }
-  | {
-      dir: string;
-      name: string;
-      ok: false;
-      why: string;
-      /** The forge answered and said no — see {@link refusedByRemote}. */
-      refused?: true;
-    };
-
-/**
- * Whether a failed push was the remote refusing it, as against failing to reach
- * it.
- *
- * The difference decides what the parent should do next. A push that never
- * arrived may land on a second attempt; a push the forge refused — a token
- * without the scope a workflow file needs, a protected branch — is refused the
- * same way every time, and a parent told to delegate again spends a whole
- * session to be refused again. `git-host` reports a per-ref rejection as "One or
- * more branches were not updated", with the forge's own reason after it.
- */
-export function refusedByRemote(why: string): boolean {
-  return /branches were not updated|refusing to allow|protected branch|permission denied|\b403\b/i.test(
-    why
-  );
+/** One repository a writing session could commit in, and where it started. */
+interface RepoStart {
+  path: string;
+  start: string;
 }
 
-/**
- * What became of a writing subtask's branch, in every repository it could have
- * changed.
- *
- * Reported rather than thrown, and carried into the result the parent reads,
- * because "the work is on this branch" and "the work could not be published" are
- * both things the round has to act on and neither is the session's own failure.
- */
-type PushOutcome =
-  { ok: true; branch: string; repos: RepoPush[] } | { ok: false; why: string };
+/** What one repository holds uncommitted, as `git status --porcelain` names it. */
+export interface Uncommitted {
+  path: string;
+  files: string[];
+}
+
+/** What a writing session left on its branch. */
+export interface WritingOutcome {
+  branch: string;
+  /** Commits past where each repository started; `count` absent where uncounted. */
+  commits: { path: string; count?: number }[];
+  /** What was still uncommitted when the session ended. */
+  discarded: Uncommitted[];
+  /**
+   * Whether deleting it failed, which changes what the note above can claim: the
+   * files are listed either way, and only this says which of the two happened.
+   */
+  discardFailed?: boolean;
+  /** The warning round's own account of itself, when it had one. */
+  warning?: ClaudeCodeResult;
+}
 
 /**
  * What a **writing** session is told about the branch it is already on.
  *
- * The host checked it out before this session started and pushes it afterwards, so
- * the two things worth saying are the two a session would otherwise get wrong:
- * commit, because uncommitted work is not what gets pushed; and do not push or
- * switch branches, because there is no credential here and the name is how the
- * agent that briefed you finds the work at all.
+ * The host checked it out before this session started, so the two things worth
+ * saying are the two a session would otherwise get wrong: commit, because only
+ * commits outlive the session; and do not push or switch branches, because the
+ * agent that briefed you pushes, and finds the work by this name.
  */
-function branchNote(branch: string, submodules: readonly string[]): string {
+function branchNote(
+  branch: string,
+  submodules: readonly string[],
+  continues: boolean
+): string {
   const note = `## Your branch
 
-You are on \`${branch}\`, checked out for you, in a clone of the repository that is
-yours alone — no other session is editing this tree.
+You are on \`${branch}\`, checked out for you in a worktree nobody else is working in
+while you are.${continues ? " It already holds earlier work on this task: read its log before you start, and build on it." : ""}
 
-**Commit your work before you finish.** Committing is what makes it visible: the
-agent that briefed you fetches this branch and reviews the commits on it, and
-anything left uncommitted is not part of what it sees. Commit as you go if that
-suits you; the last commit is what matters.
+**Commit what you want to keep.** Only commits leave this session — the agent that
+briefed you reviews the commits on this branch and pushes them — and anything left
+uncommitted is deleted when you finish. Commit as you go if that suits you.
 
-Do not push, and do not switch or rename the branch. There is no credential in this
-container to push with, and the name above is the only way your work is found.`;
+Do not push, and do not switch or rename the branch. The name above is how your work
+is found.`;
   if (submodules.length === 0) return note;
   return `${note}
 
@@ -249,77 +247,99 @@ container to push with, and the name above is the only way your work is found.`;
 
 ${submodules.map((path) => `- \`${path}\``).join("\n")}
 
-Each is a repository of its own, cloned on its declared branch and then put on
-\`${branch}\` too. **Commit inside each one you change** — a change to a submodule is
-only published if it is committed in that submodule. Recording the new commit in
-the superproject is a separate commit, and only if the task asks for it. Only one
-level of submodules is checked out.
+Each is a repository of its own, on \`${branch}\` too. **Commit inside each one you
+change** — only a submodule's own commits are kept. Recording the new commit in the
+superproject is a separate commit, and only if the task asks for it. Only one level
+of submodules is checked out.
 
 Dependencies are installed at the top of the checkout only. Run \`npm ci\` in a
 submodule before building or testing it.`;
+}
+
+/** A list of files a model can read at a glance, bounded. */
+function listFiles(files: readonly string[], max = 12): string {
+  const shown = files
+    .slice(0, max)
+    .map((file) => `\`${file}\``)
+    .join(", ");
+  return files.length > max ? `${shown} and ${files.length - max} more` : shown;
+}
+
+/** A repository by the name a reader knows it by. */
+function repoLabel(path: string, many: boolean): string {
+  if (path !== ".") return `\`${path}\``;
+  return many ? "the superproject" : "the repository";
+}
+
+/**
+ * The one turn a session gets when it left work uncommitted.
+ *
+ * Once, and only after a session that finished: whatever is still uncommitted
+ * after it is deleted, so a second reminder would be a second chance to say the
+ * same thing, paid for again.
+ */
+export function warningPrompt(dirty: readonly Uncommitted[]): string {
+  const many = dirty.length > 1 || dirty.some((repo) => repo.path !== ".");
+  return [
+    "You left changes uncommitted, and they will be deleted when this session ends:",
+    "",
+    ...dirty.map(
+      (repo) => `- ${repoLabel(repo.path, many)}: ${listFiles(repo.files)}`
+    ),
+    "",
+    "Commit what should be kept, in the repository it belongs to, and leave the rest. " +
+      "Then reply with one line saying what you committed."
+  ].join("\n");
 }
 
 /**
  * What the parent is told about the branch, in the terms it has to act on.
  *
  * Its own sentence rather than left to the session's account of itself, because
- * the session does not know: the push happens after it has exited. A writing
- * subtask that says nothing about a branch is one the parent cannot review, so
- * every outcome says something — including the one where there was nothing to
- * push, which otherwise reads as a lost branch rather than a considered no-op.
+ * the session cannot know what survived it: the discard runs after it exits. A
+ * writing subtask that says nothing about its branch is one the parent cannot
+ * review, so every outcome says something — including no commits, which
+ * otherwise reads as a lost branch rather than a considered no-op.
  */
-/** `owner/repo` out of a clone url, or the url itself when it has no such shape. */
-function repoName(url: string): string {
-  try {
-    const path = new URL(url).pathname.replace(/^\/+|\/+$/g, "");
-    return path.replace(/\.git$/, "") || url;
-  } catch {
-    return url;
-  }
-}
-
-export function publishedNote(published: PushOutcome | undefined): string {
-  if (!published) return "";
-  if (!published.ok) {
-    return (
-      `**The work could not be published: ${published.why}** ` +
-      "It is not on the remote, so there is nothing to review or merge — " +
-      "delegate it again rather than reporting it as done."
+export function writingNote(writing: WritingOutcome): string {
+  const many = writing.commits.length > 1;
+  const committed = writing.commits.filter((repo) => repo.count !== 0);
+  const lines: string[] = [];
+  if (committed.length === 0) {
+    lines.push(
+      `**No commits were made on \`${writing.branch}\`**, so there is nothing to review. ` +
+        "Read the report above before delegating it again."
+    );
+  } else {
+    const where = committed
+      .map((repo) => {
+        const count =
+          repo.count === undefined
+            ? " (uncounted)"
+            : ` (${repo.count} commit${repo.count === 1 ? "" : "s"})`;
+        return `${repoLabel(repo.path, many)}${count}`;
+      })
+      .join(", ");
+    lines.push(
+      `**Committed on \`${writing.branch}\`** in ${where}. Nothing is pushed. ` +
+        `\`repo_worktree\` with that branch puts your tools in the worktree holding it, ` +
+        "to review, push and open the pull request from there. Delegate with " +
+        "`continue` set to it to add to the work."
     );
   }
-  const failed = published.repos.filter((repo) => !repo.ok);
-  const pushed = published.repos.filter(
-    (repo) => repo.ok && repo.commits !== 0
-  );
-  if (failed.length === 0 && pushed.length === 0) {
-    return "**No commits were made**, so nothing was pushed. Read the report above before delegating it again.";
+  if (writing.discarded.length > 0) {
+    lines.push(
+      `${
+        writing.discardFailed
+          ? "**Still uncommitted — deleting it failed**, so these are in the worktree:"
+          : "**Deleted, uncommitted:**"
+      } ${writing.discarded
+        .map(
+          (repo) => `${repoLabel(repo.path, many)}: ${listFiles(repo.files)}`
+        )
+        .join("; ")}.`
+    );
   }
-  const lines = [
-    ...pushed.map((repo) => {
-      const commits =
-        repo.ok && repo.commits !== undefined
-          ? ` (${repo.commits} commit${repo.commits === 1 ? "" : "s"})`
-          : "";
-      return (
-        `**Pushed \`${published.branch}\` to ${repo.name}${commits}.** ` +
-        `Fetch it with \`repo_fetch\` in \`${repo.dir}\` and review ` +
-        `\`origin/${published.branch}\` — the work is not in your own checkout.`
-      );
-    }),
-    ...failed.map((repo) =>
-      !repo.ok && repo.refused
-        ? `**The forge refused the push to ${repo.name}: ${repo.why}** ` +
-          "The session finished and committed its work, but that work is not " +
-          "on the remote, and this workspace is discarded with the subtask. " +
-          "**Do not delegate it again**: every push from this deployment uses " +
-          "the same credential and is refused the same way. Tell the user what " +
-          "the push needs — a workflow file needs a token with the `workflow` " +
-          "scope — and stop."
-        : `**Could not publish to ${repo.name}: ${repo.ok ? "" : repo.why}** ` +
-          "That part of the work is not on the remote — delegate it again " +
-          "rather than reporting it as done."
-    )
-  ];
   return lines.join("\n\n");
 }
 
@@ -342,13 +362,22 @@ export function publishedNote(published: PushOutcome | undefined): string {
 export function sessionBrief(
   request: RecipeExecutionRequest,
   note?: string,
-  writing?: { branch: string; submodules: readonly string[] }
+  writing?: {
+    branch: string;
+    submodules: readonly string[];
+    continues: boolean;
+  }
 ): string {
   const parts = [request.prompt, "", GH_NOTE];
   // Writing only. A reading session works in a copy that is deleted when it
   // ends, and the plugin tells it so; a brief that asked it to commit would
   // spend the session on work nobody will see.
-  if (writing) parts.push("", branchNote(writing.branch, writing.submodules));
+  if (writing) {
+    parts.push(
+      "",
+      branchNote(writing.branch, writing.submodules, writing.continues)
+    );
+  }
   if (note) {
     parts.push("", "## The state of this workspace", "", note);
   }
@@ -361,6 +390,84 @@ export function sessionBrief(
     );
   }
   return parts.join("\n");
+}
+
+/** What a host may hand a drain beyond its window. */
+type Sinks = Parameters<ClaudeCodeSession["start"]>[5];
+
+/** What {@link ClaudeCoderSubagent} reports a session from. */
+type SessionEnd = {
+  result?: ClaudeCodeResult;
+  exitCode: number;
+  stderr?: string;
+};
+
+/**
+ * The branch a writing subtask works on: the one it was asked to continue, or its
+ * own. Resolved on the parent against the worktrees before anything ran — see
+ * `@/workspace/subtask-workspace` — so here it only has to be named.
+ */
+function branchOf(request: RecipeExecutionRequest): string {
+  return request.params.continue || subtaskBranch(request);
+}
+
+/** Each listed repository and the commit it is on. */
+const READ_HEADS = `while IFS= read -r p; do
+  [ -n "$p" ] || continue
+  printf '%s\\t%s\\n' "$p" "$(git -C "$p" rev-parse HEAD 2>/dev/null)"
+done <<EOF
+$REPO_PATHS
+EOF`;
+
+/**
+ * What each listed repository holds uncommitted: its path, a tab, a file.
+ * Ignored files are not listed — they are not work anybody forgot to commit.
+ */
+const LIST_UNCOMMITTED = `while IFS= read -r p; do
+  [ -n "$p" ] || continue
+  git -C "$p" status --porcelain --ignore-submodules=all | while IFS= read -r line; do
+    printf '%s\\t%s\\n' "$p" "\${line#???}"
+  done
+done <<EOF
+$REPO_PATHS
+EOF`;
+
+/**
+ * Delete what each listed repository holds uncommitted, ignored files included —
+ * the parent reviews this tree, and a half-built `dist/` in it is not the
+ * branch. `node_modules` is spared: a mount point `clean` cannot remove.
+ *
+ * **The status is accumulated, not inherited.** A loop exits with its last
+ * command's status, so a failed `reset` would be reported as a success by the
+ * `clean` after it, and any repository's failure by the next repository's. The
+ * caller labels these files deleted, so a masked failure is a report naming
+ * files that are still on disk.
+ */
+const DISCARD = `rc=0
+while IFS= read -r p; do
+  [ -n "$p" ] || continue
+  git -C "$p" reset -q --hard || rc=1
+  git -C "$p" clean -ffdxq -e node_modules || rc=1
+done <<EOF
+$REPO_PATHS
+EOF
+exit $rc`;
+
+/** Commits each listed repository has past where it started. */
+const COUNT_COMMITS = `tab="$(printf '\\t')"
+while IFS="$tab" read -r p start; do
+  [ -n "$p" ] || continue
+  printf '%s\\t%s\\n' "$p" "$(git -C "$p" rev-list --count "$start..HEAD" 2>/dev/null)"
+done <<EOF
+$REPO_STARTS
+EOF`;
+
+/** Tab-separated lines as fields. */
+function tabbed(out: string): string[][] {
+  return out
+    .split("\n")
+    .filter(Boolean)
+    .map((line) => line.split("\t"));
 }
 
 export class ClaudeCoderSubagent extends RecipeSubagentHost<Env> {
@@ -545,16 +652,6 @@ export class ClaudeCoderSubagent extends RecipeSubagentHost<Env> {
         name,
         subtaskId: request.subtaskId
       });
-    // Resolved in the `finally` below, so {@link abortRun} can wait for this
-    // drain to unwind rather than only for the signal to be delivered.
-    let drained: () => void = () => {};
-    this.#inflight = {
-      name,
-      subtaskId: request.subtaskId,
-      settled: new Promise<void>((resolve) => {
-        drained = resolve;
-      })
-    };
 
     /**
      * Where a note goes the moment it is written, and where the drain may
@@ -569,7 +666,7 @@ export class ClaudeCoderSubagent extends RecipeSubagentHost<Env> {
      * the pairing — see `DrainOptions` in `@dynamicagents/plugins/claude-code`,
      * which carries the reasoning for both.
      */
-    const sinks = {
+    const sinks: Sinks = {
       onProgress: (event: ProgressEvent) => this.postProgress(event),
       onCheckpoint: (at: DrainCursor) => this.ctx.storage.put(CURSOR_KEY, at)
     };
@@ -578,24 +675,27 @@ export class ClaudeCoderSubagent extends RecipeSubagentHost<Env> {
     // reading one works in a throwaway copy — is not decided here and is not
     // reachable from here: the plugin derives it from the type inside `start`,
     // precisely so a host cannot leave the copy out. What this decides is the
-    // host's own half: a branch, and a push.
+    // host's own half: a branch, and what of the session is kept.
     const writes = request.type === CLAUDE_CODE_TYPE;
 
-    // What the brief says about the branch, and which repositories it spans.
-    // First chunk only, like the rest of the brief.
-    const writing =
-      writes && !cursor
-        ? {
-            branch: subtaskBranch(request),
-            submodules: await this.#submodules(name, dir as string)
-          }
-        : undefined;
+    // What the brief says about the branch, and which repositories it spans —
+    // recorded with where each starts, so what the session commits can be
+    // counted afterwards. First chunk only, like the rest of the brief.
+    let writing: Parameters<typeof sessionBrief>[2];
+    if (writes && !cursor) {
+      const submodules = await this.#submodules(name, dir as string);
+      await this.#recordStarts(name, dir as string, [".", ...submodules]);
+      writing = {
+        branch: branchOf(request),
+        submodules,
+        continues: Boolean(request.params.continue)
+      };
+    }
 
-    let outcome: DrainOutcome;
-    try {
-      outcome = cursor
-        ? await this.#session.resume(runner, cursor, sinks)
-        : await this.#session.start(
+    const outcome = await this.#drain(name, request.subtaskId, () =>
+      cursor
+        ? this.#session.resume(runner, cursor, sinks)
+        : this.#session.start(
             runner,
             request.subtaskId,
             // Required: the session decides from it whether to work in a copy.
@@ -603,11 +703,8 @@ export class ClaudeCoderSubagent extends RecipeSubagentHost<Env> {
             sessionBrief(request, note, writing),
             dir as string,
             sinks
-          );
-    } finally {
-      this.#inflight = undefined;
-      drained();
-    }
+          )
+    );
 
     /**
      * Commit the cursor **after** the drain, on every path including `done`.
@@ -632,32 +729,6 @@ export class ClaudeCoderSubagent extends RecipeSubagentHost<Env> {
     if (outcome.rateLimit) await this.#noteRateLimit(stub, outcome.rateLimit);
 
     /**
-     * Publish the branch, which is the only way this work reaches anybody.
-     *
-     * The parent has no sight of this container's tree — that is the point of it
-     * having one — so a branch that is not on the remote is a subtask that did
-     * nothing as far as the round is concerned.
-     *
-     * **After the drain, and that ordering is load-bearing.** The push reads the
-     * workspace's filesystem, and the container's edits only reach it once the
-     * sync has unwound; pushing before that publishes a branch missing the commits
-     * it exists to carry. `outcome.done` is what says the drain reached the end.
-     *
-     * Only when the session finished and said it succeeded.
-     *
-     * **A failed session's commits are discarded, and nothing recovers them.** Its
-     * workspace is reclaimed — storage and all — as soon as the execution settles,
-     * so there is no branch and no tree to come back to. That is the deliberate
-     * trade: publishing a branch from a session that reported failure would put
-     * work of unknown state on the remote under a name the parent is told to
-     * review. What survives is the report, which is what the round acts on.
-     */
-    let published: PushOutcome | undefined;
-    if (outcome.done && writes && outcome.result && !outcome.result.isError) {
-      published = await this.#publish(name, subtaskBranch(request));
-    }
-
-    /**
      * **Empty, because `onProgress` already posted them.**
      *
      * `RecipeChunkResult.progress` is what core's parent posts at the chunk
@@ -666,13 +737,125 @@ export class ClaudeCoderSubagent extends RecipeSubagentHost<Env> {
      * — deduped by the gatekeeper on their positional keys, and paid for either
      * way.
      */
-    return outcome.done
-      ? {
-          done: true,
-          progress: [],
-          result: this.#report(outcome, published)
+    if (!outcome.done) return { done: false, progress: [] };
+    if (!writes) {
+      return { done: true, progress: [], result: this.#report(outcome) };
+    }
+    return await this.#finishWriting(request, name, runner, outcome, sinks);
+  }
+
+  /**
+   * Drain one window of a session, with {@link abortRun} able to stop it.
+   *
+   * `settled` resolves in the `finally`, so a cancellation waits for the drain
+   * to unwind rather than only for its signal to be delivered.
+   */
+  async #drain(
+    name: string,
+    subtaskId: number,
+    run: () => Promise<DrainOutcome>
+  ): Promise<DrainOutcome> {
+    let drained: () => void = () => {};
+    this.#inflight = {
+      name,
+      subtaskId,
+      settled: new Promise<void>((resolve) => {
+        drained = resolve;
+      })
+    };
+    try {
+      return await run();
+    } finally {
+      this.#inflight = undefined;
+      drained();
+    }
+  }
+
+  /**
+   * End a writing session: give it its one warning round if it left work
+   * uncommitted, then delete what is still uncommitted and count what it kept.
+   *
+   * **After the drain, and that ordering is load-bearing.** Every read here goes
+   * through the workspace's filesystem, which the container's edits only reach
+   * once the sync has unwound; `done` is what says it has.
+   *
+   * The round is only for a session that finished and said it succeeded. One
+   * that failed, or died without a result, is reported as it is and loses what it
+   * left uncommitted without being asked — a turn spent asking a session that
+   * could not finish its task is a turn spent on a session that cannot finish.
+   *
+   * The round drains in this chunk when it can, and through the ordinary cursor
+   * on later chunks when it cannot: its drain is a session's drain. The exec id
+   * on the outcome is what says whose end is in hand; {@link WARNING_KEY} keeps
+   * the session's own result for the report meanwhile.
+   */
+  async #finishWriting(
+    request: RecipeExecutionRequest,
+    name: string,
+    runner: SessionRuntime,
+    outcome: Extract<DrainOutcome, { done: true }>,
+    sinks: Sinks
+  ): Promise<RecipeChunkResult> {
+    const stub = this.env.CLAUDE_CODER_WORKSPACE.get(
+      this.env.CLAUDE_CODER_WORKSPACE.idFromName(name)
+    );
+    const dir = await stub.checkoutDir();
+    const repos = (await this.ctx.storage.get<RepoStart[]>(REPOS_KEY)) ?? [];
+    const roundId = followUpExecIdFor(request.subtaskId);
+    const waiting = await this.ctx.storage.get<ClaudeCodeResult>(WARNING_KEY);
+    let session: SessionEnd = outcome;
+    let warning: ClaudeCodeResult | undefined;
+    if (waiting && outcome.cursor.execId === roundId) {
+      session = { result: waiting, exitCode: 0 };
+      warning = outcome.result;
+    } else {
+      // The session's own end — or, on a retry that lost the round's cursor
+      // before its first checkpoint, that end drained again, which starts the
+      // round or re-attaches to the one already running.
+      const first = waiting ?? outcome.result;
+      if (waiting) session = { result: waiting, exitCode: 0 };
+      if (dir && first && !first.isError && first.sessionId) {
+        const sessionId = first.sessionId;
+        const dirty = await this.#uncommitted(name, dir, repos);
+        if (dirty.length > 0) {
+          await this.ctx.storage.put(WARNING_KEY, first);
+          await this.ctx.storage.put(SESSION_KEY, {
+            name,
+            subtaskId: request.subtaskId
+          });
+          const round = await this.#drain(name, request.subtaskId, () =>
+            this.#session.followUp(
+              runner,
+              request.subtaskId,
+              sessionId,
+              warningPrompt(dirty),
+              dir,
+              sinks
+            )
+          );
+          await this.ctx.storage.put(CURSOR_KEY, round.cursor);
+          if (!round.done) return { done: false, progress: [] };
+          warning = round.result;
         }
-      : { done: false, progress: [] };
+      }
+    }
+    await this.ctx.storage.delete(SESSION_KEY);
+
+    const discarded = dir
+      ? await this.#discard(name, dir, repos)
+      : { files: [], failed: false };
+    const commits = dir ? await this.#commits(name, dir, repos) : [];
+    return {
+      done: true,
+      progress: [],
+      result: this.#report(session, {
+        branch: branchOf(request),
+        commits,
+        discarded: discarded.files,
+        ...(discarded.failed ? { discardFailed: true } : {}),
+        ...(warning ? { warning } : {})
+      })
+    };
   }
 
   /**
@@ -806,19 +989,93 @@ export class ClaudeCoderSubagent extends RecipeSubagentHost<Env> {
   }
 
   /**
-   * The submodules this subtask's clone carries, for the brief.
+   * The submodules this worktree carries, for the brief and the accounting.
    *
-   * Read from the clone rather than carried from `resolve`, which ran on the
+   * Read from the checkout rather than carried from `resolve`, which ran on the
    * parent: the two never share memory, and the checkout is what was cloned.
-   * Unreadable reads as none — the brief loses a paragraph. `#publish` reads the
-   * same list strictly, because there a submodule it cannot see is work lost.
+   * Unreadable reads as none — the brief loses a paragraph, and what the session
+   * commits in a submodule is kept all the same, just not counted.
    */
   async #submodules(workspace: string, dir: string): Promise<string[]> {
     try {
-      const exec = computerExec(container(this.env, () => workspace));
-      return (await readSubmodules(exec, dir)).map((sub) => sub.path);
+      return (await readSubmodules(this.#exec(workspace), dir)).map(
+        (sub) => sub.path
+      );
     } catch (err) {
-      console.warn("[claude-coder] could not read the clone's submodules", {
+      console.warn("[claude-coder] could not read the checkout's submodules", {
+        err: String(err)
+      });
+      return [];
+    }
+  }
+
+  /** A shell in a named workspace, under the settings every tool uses. */
+  #exec(workspace: string) {
+    return computerExec(container(this.env, () => workspace));
+  }
+
+  /**
+   * Where each repository starts, for {@link #commits} to count from.
+   *
+   * Once per subtask. A retried first chunk can arrive after the session it
+   * started has committed — the retry attaches to that session rather than
+   * starting another — and reading HEAD again then would move the baseline past
+   * the commits it exists to count.
+   */
+  async #recordStarts(
+    workspace: string,
+    dir: string,
+    paths: readonly string[]
+  ): Promise<void> {
+    if (await this.ctx.storage.get(REPOS_KEY)) return;
+    let starts: RepoStart[] = [];
+    try {
+      const read = await this.#exec(workspace)(READ_HEADS, {
+        cwd: dir,
+        env: { REPO_PATHS: paths.join("\n") }
+      });
+      starts = tabbed(read.stdout).map(([path = "", start = ""]) => ({
+        path,
+        start
+      }));
+    } catch (err) {
+      console.warn("[claude-coder] could not read where the session starts", {
+        err: String(err)
+      });
+    }
+    await this.ctx.storage.put(
+      REPOS_KEY,
+      starts.length > 0 ? starts : paths.map((path) => ({ path, start: "" }))
+    );
+  }
+
+  /** The repositories to account for — at least the checkout itself. */
+  #repos(repos: readonly RepoStart[]): readonly RepoStart[] {
+    return repos.length > 0 ? repos : [{ path: ".", start: "" }];
+  }
+
+  /** What each repository holds uncommitted, in the order they were recorded. */
+  async #uncommitted(
+    workspace: string,
+    dir: string,
+    repos: readonly RepoStart[]
+  ): Promise<Uncommitted[]> {
+    try {
+      const listed = await this.#exec(workspace)(LIST_UNCOMMITTED, {
+        cwd: dir,
+        env: {
+          REPO_PATHS: this.#repos(repos)
+            .map((repo) => repo.path)
+            .join("\n")
+        }
+      });
+      const byPath = new Map<string, string[]>();
+      for (const [path = "", file = ""] of tabbed(listed.stdout)) {
+        byPath.set(path, [...(byPath.get(path) ?? []), file]);
+      }
+      return [...byPath].map(([path, files]) => ({ path, files }));
+    } catch (err) {
+      console.warn("[claude-coder] could not read what is uncommitted", {
         err: String(err)
       });
       return [];
@@ -826,102 +1083,76 @@ export class ClaudeCoderSubagent extends RecipeSubagentHost<Env> {
   }
 
   /**
-   * Put the session's commits on the remote, from the Worker side — in the
-   * superproject and in every submodule that has any.
+   * Delete everything uncommitted, answering what that was and whether it went.
    *
-   * The credential never enters the container — the egress gateway strips
-   * `authorization` from everything not bound for Anthropic — so the push is the
-   * workspace object's, exactly as the parent's own pushes are. What changed is
-   * only *which* workspace: this subtask's, not the parent's.
-   *
-   * Each origin is read from its checkout rather than carried here, because the
-   * checkout is what was actually cloned and a url passed along a second path is
-   * a url that can disagree with it.
-   *
-   * Never throws. A session that did the work must not be reported as having
-   * failed because publishing it did; the report says so instead, and the round
-   * can act on that.
+   * Every repository is cleaned, not only the ones with something to report:
+   * ignored build output is not listed, and it is not the branch either.
+   * Reported whether or not the delete succeeds — a file named here that is still
+   * on disk is a smaller problem than one deleted without a word — but reported
+   * as what it was, which is what `failed` carries.
    */
-  async #publish(workspace: string, branch: string): Promise<PushOutcome> {
+  async #discard(
+    workspace: string,
+    dir: string,
+    repos: readonly RepoStart[]
+  ): Promise<{ files: Uncommitted[]; failed: boolean }> {
+    const dirty = await this.#uncommitted(workspace, dir, repos);
     try {
-      const binding = this.env.CLAUDE_CODER_WORKSPACE;
-      const stub = binding.get(binding.idFromName(workspace));
-      const root = await stub.checkoutDir();
-      if (!root) return { ok: false, why: "the workspace had no checkout" };
-
-      const exec = computerExec(container(this.env, () => workspace));
-      const repos: RepoPush[] = [];
-
-      // Read strictly, unlike the brief's copy: a submodule the push cannot see
-      // is committed work reclaimed with the workspace, so an unreadable list is
-      // reported as a failure beside whatever the superproject publishes.
-      let paths: string[] = [];
-      try {
-        paths = (await readSubmodules(exec, root)).map((sub) => sub.path);
-      } catch (err) {
-        repos.push({
-          dir: root,
-          name: "its submodules",
-          ok: false,
-          why: String(err)
-        });
-      }
-      const dirs = [root, ...paths.map((path) => `${root}/${path}`)];
-
-      for (const dir of dirs) {
-        const origin = await exec("git remote get-url origin", { cwd: dir });
-        const url = origin.stdout.trim();
-        if (!origin.success || !url) {
-          repos.push({
-            dir,
-            name: dir,
-            ok: false,
-            why: `could not read the origin: ${origin.stderr}`
-          });
-          continue;
+      const done = await this.#exec(workspace)(DISCARD, {
+        cwd: dir,
+        env: {
+          REPO_PATHS: this.#repos(repos)
+            .map((repo) => repo.path)
+            .join("\n")
         }
-        const name = repoName(url);
-
-        // Commits on no remote-tracking ref, which is what the session added
-        // whichever branch the clone was taken from. "Nothing to publish" is not
-        // a failure and must not read as one — a session can legitimately
-        // conclude no change was needed, and a round told "the push failed"
-        // would delegate the same work a second time.
-        const ahead = await exec(
-          "git rev-list --count HEAD --not --remotes=origin",
-          { cwd: dir }
-        );
-        const commits = ahead.success ? Number(ahead.stdout.trim()) : NaN;
-        if (commits === 0) {
-          repos.push({ dir, name, ok: true, commits: 0 });
-          continue;
-        }
-
-        const pushed = await stub.gitPush({
-          url,
-          dir,
-          branch,
-          // The host this checkout came from, which it already passed `/repo`'s
-          // allowlist to reach.
-          allowedHosts: [new URL(url).hostname]
-        });
-        repos.push(
-          pushed.ok
-            ? { dir, name, ok: true, ...(commits > 0 ? { commits } : {}) }
-            : {
-                dir,
-                name,
-                ok: false,
-                why: pushed.message,
-                ...(refusedByRemote(pushed.message)
-                  ? { refused: true as const }
-                  : {})
-              }
+      });
+      if (!done.success) {
+        console.warn(
+          "[claude-coder] the uncommitted work was not all deleted",
+          {
+            stderr: done.stderr.trim().slice(0, 500)
+          }
         );
       }
-      return { ok: true, branch, repos };
+      return { files: dirty, failed: !done.success };
     } catch (err) {
-      return { ok: false, why: String(err) };
+      console.warn("[claude-coder] could not delete the uncommitted work", {
+        err: String(err)
+      });
+      return { files: dirty, failed: true };
+    }
+  }
+
+  /** Commits past where each repository started; uncounted where unreadable. */
+  async #commits(
+    workspace: string,
+    dir: string,
+    repos: readonly RepoStart[]
+  ): Promise<WritingOutcome["commits"]> {
+    const listed = this.#repos(repos);
+    try {
+      const read = await this.#exec(workspace)(COUNT_COMMITS, {
+        cwd: dir,
+        env: {
+          REPO_STARTS: listed
+            .map((repo) => `${repo.path}\t${repo.start}`)
+            .join("\n")
+        }
+      });
+      const counts = new Map(
+        tabbed(read.stdout).map(([path = "", count = ""]) => [path, count])
+      );
+      return listed.map((repo) => {
+        const count = Number(counts.get(repo.path) || NaN);
+        return Number.isInteger(count)
+          ? { path: repo.path, count }
+          : { path: repo.path };
+      });
+    } catch (err) {
+      console.warn("[claude-coder] could not count the session's commits", {
+        err: String(err)
+      });
+      return listed.map((repo) => ({ path: repo.path }));
     }
   }
 
@@ -938,10 +1169,11 @@ export class ClaudeCoderSubagent extends RecipeSubagentHost<Env> {
    * reasoning — including why a denial count belongs beside the cost.
    */
   #report(
-    outcome: Extract<DrainOutcome, { done: true }>,
-    published?: PushOutcome
+    outcome: SessionEnd,
+    writing?: WritingOutcome
   ): RecipeExecutionResult {
     const result = outcome.result;
+    const kept = writing ? writingNote(writing) : "";
     // Diagnostic only — core never persists it, and the model that actually ran
     // is the one the session was launched with.
     const modelId = CLAUDE_CODE_SESSION.model;
@@ -962,8 +1194,9 @@ export class ClaudeCoderSubagent extends RecipeSubagentHost<Env> {
         error:
           `the Claude Code session exited with code ${outcome.exitCode} ` +
           "without reporting a result. Its output was lost with the process — " +
-          "the working tree may still hold partial edits." +
-          (said ? `\n\nIt printed:\n\n\`\`\`\n${said}\n\`\`\`` : ""),
+          "anything it left uncommitted has been deleted." +
+          (said ? `\n\nIt printed:\n\n\`\`\`\n${said}\n\`\`\`` : "") +
+          (kept ? `\n\n${kept}` : ""),
         modelId
       };
     }
@@ -984,7 +1217,7 @@ export class ClaudeCoderSubagent extends RecipeSubagentHost<Env> {
             : ` after an API ${result.apiErrorStatus}`);
       return {
         status: "failed",
-        error: `${detail}\n\n_${footer}_`,
+        error: [detail, kept, `_${footer}_`].filter(Boolean).join("\n\n"),
         modelId
       };
     }
@@ -999,7 +1232,14 @@ export class ClaudeCoderSubagent extends RecipeSubagentHost<Env> {
       resultParts: [
         {
           kind: "text",
-          text: [text, publishedNote(published), `_${footer}_`]
+          text: [
+            text,
+            kept,
+            `_${footer}_`,
+            writing?.warning
+              ? `_warning round: ${sessionFooter(writing.warning)}_`
+              : ""
+          ]
             .filter(Boolean)
             .join("\n\n")
         }

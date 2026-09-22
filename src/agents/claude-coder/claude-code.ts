@@ -51,7 +51,7 @@ export const GH_TOKEN_PLACEHOLDER = "not-a-credential-the-gateway-strips-this";
  * deployment; it simply gives up when its bucket empties instead of rotating.
  */
 /**
- * The seams only the **parent** can answer, because all three need the verified
+ * The seams only the **parent** can answer, because each needs the verified
  * caller and `callerKey()` throws on a facet.
  *
  * Grouped rather than passed one by one so that a side which resolves none of them
@@ -59,7 +59,10 @@ export const GH_TOKEN_PLACEHOLDER = "not-a-credential-the-gateway-strips-this";
  */
 export type ClaudeCodeRouting = Pick<
   ClaudeCodeConfig,
-  "workspaceName" | "subtaskWorkspace" | "reclaimSubtaskWorkspace"
+  | "workspaceName"
+  | "subtaskWorkspace"
+  | "releaseSubtaskWorkspace"
+  | "abortSubtaskWorkspace"
 >;
 
 /**
@@ -78,7 +81,8 @@ export function noWorkspaceRouting(why: string): ClaudeCodeRouting {
   return {
     workspaceName: refuse,
     subtaskWorkspace: async () => refuse(),
-    reclaimSubtaskWorkspace: async () => refuse()
+    releaseSubtaskWorkspace: async () => refuse(),
+    abortSubtaskWorkspace: async () => refuse()
   };
 }
 

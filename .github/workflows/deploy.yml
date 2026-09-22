@@ -19,7 +19,7 @@ jobs:
   #
   # agents.loopingai.org is this repository's deployment. A repository made
   # from the template inherits this file but not the credentials or the domain,
-  # so both jobs skip there rather than failing every push; a copy opts in by
+  # so the deploy skips there rather than failing every push; a copy opts in by
   # naming itself here and changing the URLs below.
   tested:
     if: github.repository == 'dynamicagents/starter'

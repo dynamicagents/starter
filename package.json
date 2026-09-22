@@ -36,7 +36,7 @@
     "@cloudflare/computer": "^0.3.1",
     "@cloudflare/shell": "0.4.3",
     "@dynamicagents/core": "git+https://github.com/dynamicagents/core.git#main",
-    "@dynamicagents/plugins": "git+https://github.com/dynamicagents/plugins.git#feat/worktree-pool",
+    "@dynamicagents/plugins": "git+https://github.com/dynamicagents/plugins.git#main",
     "@platformatic/vfs": "^0.4.0",
     "agents": "^0.24.0",
     "ai": "^7.0.101",

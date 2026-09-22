@@ -203,6 +203,41 @@ export function forgetWorktree(store: PoolStore, sentinel: string): void {
   store.put({ repo: row.repo, slot: row.slot, repos: [], usedAt: row.usedAt });
 }
 
+/**
+ * Empty the rows of worktrees whose checkout is gone, whoever reclaimed it.
+ *
+ * **The sweep's `onReclaimed` does not cover this, and mostly never fires.** A
+ * workspace reclaims itself on its own alarm, armed for a week past its last
+ * use; the sweep that would have reclaimed it runs weekly and asks the same
+ * question with the same threshold, so the alarm gets there first almost every
+ * time. `reclaimIfIdle` then answers nothing-to-do — see `./active-repo.ts`,
+ * `forget` — and the row outlives the checkout it describes.
+ *
+ * What that costs is not a stale entry. A row holding unpushed commits is never
+ * free ({@link isFree}), and nothing here would ever make it free again, so
+ * {@link claim} would pass over that slot for good and open a new one for every
+ * later subtask — each a full clone of a checkout the pool exists to reuse.
+ *
+ * So the checkout is asked about directly. `hasCheckout` answers for one
+ * worktree, and a workspace that was reclaimed has no record of one — reading
+ * that is a local storage read that neither starts a container nor marks the
+ * workspace used, so this does not keep alive what it is checking on.
+ */
+export async function reconcileWorktrees(
+  store: PoolStore,
+  hasCheckout: (sentinel: string) => Promise<boolean>
+): Promise<void> {
+  for (const sentinel of idleWorktrees(store)) {
+    const named = parseWorktreeRepo(sentinel);
+    if (!named) continue;
+    // An empty row describes no checkout, so there is nothing about it to be
+    // wrong — and asking would cost an RPC per slot per week to learn that.
+    if (!slotOf(store, named.repo, named.slot)?.repos.length) continue;
+    if (await hasCheckout(sentinel)) continue;
+    forgetWorktree(store, sentinel);
+  }
+}
+
 /** The sentinel of every worktree no session is working in. */
 export function idleWorktrees(store: PoolStore): string[] {
   return store

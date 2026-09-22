@@ -799,6 +799,25 @@ describe("the note on what a writing session kept", () => {
     );
   });
 
+  /**
+   * The loop that deletes it reports a failure — a masked one would leave these
+   * files on disk under a line saying they are gone.
+   */
+  it("says so when the delete failed, rather than claiming it worked", () => {
+    const note = writingNote({
+      branch,
+      commits: [{ path: ".", count: 1 }],
+      discarded: [{ path: ".", files: ["scratch.txt"] }],
+      discardFailed: true
+    });
+
+    expect(note).toContain(
+      "**Still uncommitted — deleting it failed**, so these are in the " +
+        "worktree: the repository: `scratch.txt`."
+    );
+    expect(note).not.toContain("**Deleted, uncommitted:**");
+  });
+
   /** Uncounted is not the same as none, so it is not reported as none. */
   it("reports a repository whose commits could not be counted", () => {
     const note = writingNote({

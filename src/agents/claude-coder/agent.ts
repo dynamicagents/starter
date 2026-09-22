@@ -15,6 +15,7 @@ import {
   forgetWorktree,
   idleWorktrees,
   parseWorktreeRepo,
+  reconcileWorktrees,
   sqlPoolStore
 } from "@/workspace/worktree-pool";
 import { parentPlugins } from "./plugins";
@@ -85,17 +86,50 @@ export class ClaudeCoderAgent extends RoundAgentBase<Env> {
     }
   }
 
-  /** Cron handler, delegating to the shared sweep. */
+  /**
+   * Cron handler, delegating to the shared sweep — and then reconciling the
+   * pool against what is actually still there.
+   *
+   * The second half is not a tidy-up of the first. `onReclaimed` fires only for
+   * a workspace *this sweep* retired, and a worktree's own idle alarm beats the
+   * weekly sweep to almost all of them; `reconcileWorktrees` carries what that
+   * leaves behind and why it matters.
+   */
   async reclaimIdleWorkspaces(): Promise<void> {
     const host = this.pluginHost();
     const pool = sqlPoolStore(host.storage);
+    const binding = this.env.CLAUDE_CODER_WORKSPACE;
     await sweepIdleWorkspaces({
       host,
-      binding: this.env.CLAUDE_CODER_WORKSPACE,
+      binding,
       label: LABEL,
       // A worktree the sweep retired has no checkout left, so its row goes back
       // to empty: the slot is cloned into again rather than trusted.
       onReclaimed: (repo) => forgetWorktree(pool, repo)
+    });
+    let key: string;
+    try {
+      key = host.callerKey();
+    } catch {
+      // Nothing was ever handed out on this instance, so there is no pool to
+      // reconcile — the same case `sweepIdleWorkspaces` returns early on.
+      return;
+    }
+    await reconcileWorktrees(pool, async (sentinel) => {
+      const name = workspaceName(key, sentinel);
+      try {
+        return Boolean(
+          await binding.get(binding.idFromName(name)).checkoutDir()
+        );
+      } catch (err) {
+        // Unreadable is not gone: a row is emptied on an answer, never on a
+        // failure to get one, so an unreachable object keeps its slot.
+        console.warn(`[${LABEL}] could not read a worktree's checkout`, {
+          name,
+          err: String(err)
+        });
+        return true;
+      }
     });
   }
 

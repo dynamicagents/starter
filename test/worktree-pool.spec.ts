@@ -6,6 +6,7 @@ import { SCRATCH_REPO } from "@/workspace/scratch";
 import {
   claim,
   forgetWorktree,
+  reconcileWorktrees,
   idleWorktrees,
   isFree,
   isSubtaskBranch,
@@ -310,5 +311,72 @@ describe("the pool in the parent's SQLite", () => {
       pool.delete(REPO, 1);
       expect(pool.all(REPO)).toEqual([{ ...row, usedAt: 2 }]);
     });
+  });
+});
+
+/**
+ * A worktree's own idle alarm beats the weekly sweep to almost every reclaim, so
+ * the sweep's `onReclaimed` never fires for it and the row outlives the checkout
+ * it describes. A row holding unpushed commits is never free, so nothing else
+ * would ever reuse that slot.
+ */
+describe("reconciling the pool against the worktrees that are left", () => {
+  const held = (slot: number): Worktree => ({
+    repo: REPO,
+    slot,
+    branch: `claude-coder/task-1/${slot}`,
+    repos: [repo({ tip: "unpushed" })],
+    usedAt: 1
+  });
+
+  it("empties the row of a worktree whose checkout is gone", async () => {
+    const store = memoryPoolStore();
+    store.put(held(0));
+    expect(isFree(store.all(REPO)[0]!)).toBe(false);
+
+    await reconcileWorktrees(store, async () => false);
+
+    const [row] = store.all(REPO);
+    expect(row).toEqual({ repo: REPO, slot: 0, repos: [], usedAt: 1 });
+    // The slot is the point: it can be claimed and cloned into again.
+    expect(isFree(row!)).toBe(true);
+  });
+
+  it("keeps a row whose worktree still has its checkout", async () => {
+    const store = memoryPoolStore();
+    store.put(held(0));
+
+    await reconcileWorktrees(store, async () => true);
+
+    expect(store.all(REPO)[0]).toEqual(held(0));
+  });
+
+  /** A session cannot be in a workspace that is gone, and is not asked about. */
+  it("leaves a worktree a subtask is working in alone", async () => {
+    const store = memoryPoolStore();
+    store.put({ ...held(0), live: { taskId: "task-1", subtaskId: 1 } });
+    const asked: string[] = [];
+
+    await reconcileWorktrees(store, async (sentinel) => {
+      asked.push(sentinel);
+      return false;
+    });
+
+    expect(asked).toEqual([]);
+    expect(store.all(REPO)[0]?.repos).toHaveLength(1);
+  });
+
+  /** An empty row describes no checkout, so there is nothing to ask about. */
+  it("asks nothing about a row that is already empty", async () => {
+    const store = memoryPoolStore();
+    store.put({ repo: REPO, slot: 0, repos: [], usedAt: 1 });
+    const asked: string[] = [];
+
+    await reconcileWorktrees(store, async (sentinel) => {
+      asked.push(sentinel);
+      return false;
+    });
+
+    expect(asked).toEqual([]);
   });
 });

@@ -6,7 +6,7 @@ import {
   subtaskWorkspaces
 } from "@/workspace/subtask-workspace";
 import { SCRATCH_REPO } from "@/workspace/scratch";
-import { worktreeRepo, type Worktree } from "@/workspace/worktree-pool";
+import { isFree, worktreeRepo, type Worktree } from "@/workspace/worktree-pool";
 import type { ActiveCheckout, ActiveRepo } from "@/workspace/active-repo";
 import { memoryPoolStore } from "./support/memory-pool";
 
@@ -71,6 +71,8 @@ function harness(opts: {
   tipsThrow?: boolean;
   /** Repositories whose remote has the branch being placed. */
   remote?: string[];
+  /** Fail the reset an abort runs. */
+  resetFails?: boolean;
 }) {
   const calls: string[] = [];
   let cloneFails = opts.cloneFails;
@@ -164,6 +166,9 @@ function harness(opts: {
         )
       ) {
         calls.push(`reset ${env.WORKTREE_REPOS?.replaceAll("\t", "@")}`);
+        if (opts.resetFails) {
+          return { success: false, stdout: "", stderr: "index.lock" };
+        }
       }
       return { success: true, stdout: "", stderr: "" };
     },
@@ -526,6 +531,51 @@ describe("aborting a writing subtask", () => {
     await subtasks.abort(ctx);
     await subtasks.release(ctx);
     expect(stopped).toEqual([]);
+  });
+
+  /**
+   * `stopSession` delivers `SIGTERM` and returns, so a session can still commit
+   * while the reset runs — this path is reached with no drain left to wait on.
+   * The tips here are what such a commit would leave, and none of it may be
+   * recorded as the branch's: the row says where the reset put it.
+   */
+  it("records where the reset left it, not what a session committed after", async () => {
+    const { subtasks, calls, pool } = harness({
+      selected: "acme/api",
+      checkout: CHECKOUT,
+      tips: { ".": "committed-after-the-reset" }
+    });
+    await subtasks.resolve(ctx);
+    calls.length = 0;
+
+    await subtasks.abort(ctx);
+    // Core runs this next on the same path, and it must find nothing to do.
+    await subtasks.release(ctx);
+
+    const [row] = pool.all("acme/api");
+    expect(row?.live).toBeUndefined();
+    expect(row?.repos.map((repo) => repo.tip)).toEqual([sha("origin/main")]);
+    expect(isFree(row!)).toBe(true);
+    // Only the reset — `release` read no tips, because it found no live row.
+    expect(calls).toEqual([`reset .@${sha("origin/main")}`]);
+  });
+
+  /** A reset that failed proves nothing about the tree, so the row is not freed. */
+  it("leaves the worktree held when the reset failed", async () => {
+    const { subtasks, pool } = harness({
+      selected: "acme/api",
+      checkout: CHECKOUT,
+      resetFails: true,
+      tips: { ".": "unpushed" }
+    });
+    await subtasks.resolve(ctx);
+
+    await subtasks.abort(ctx);
+    await subtasks.release(ctx);
+
+    const [row] = pool.all("acme/api");
+    expect(row?.repos.map((repo) => repo.tip)).toEqual(["unpushed"]);
+    expect(isFree(row!)).toBe(false);
   });
 });
 

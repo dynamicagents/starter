@@ -205,8 +205,13 @@ export interface WritingOutcome {
   branch: string;
   /** Commits past where each repository started; `count` absent where uncounted. */
   commits: { path: string; count?: number }[];
-  /** What was still uncommitted when the session ended, and was deleted. */
+  /** What was still uncommitted when the session ended. */
   discarded: Uncommitted[];
+  /**
+   * Whether deleting it failed, which changes what the note above can claim: the
+   * files are listed either way, and only this says which of the two happened.
+   */
+  discardFailed?: boolean;
   /** The warning round's own account of itself, when it had one. */
   warning?: ClaudeCodeResult;
 }
@@ -324,7 +329,11 @@ export function writingNote(writing: WritingOutcome): string {
   }
   if (writing.discarded.length > 0) {
     lines.push(
-      `**Deleted, uncommitted:** ${writing.discarded
+      `${
+        writing.discardFailed
+          ? "**Still uncommitted — deleting it failed**, so these are in the worktree:"
+          : "**Deleted, uncommitted:**"
+      } ${writing.discarded
         .map(
           (repo) => `${repoLabel(repo.path, many)}: ${listFiles(repo.files)}`
         )
@@ -427,14 +436,22 @@ EOF`;
  * Delete what each listed repository holds uncommitted, ignored files included —
  * the parent reviews this tree, and a half-built `dist/` in it is not the
  * branch. `node_modules` is spared: a mount point `clean` cannot remove.
+ *
+ * **The status is accumulated, not inherited.** A loop exits with its last
+ * command's status, so a failed `reset` would be reported as a success by the
+ * `clean` after it, and any repository's failure by the next repository's. The
+ * caller labels these files deleted, so a masked failure is a report naming
+ * files that are still on disk.
  */
-const DISCARD = `while IFS= read -r p; do
+const DISCARD = `rc=0
+while IFS= read -r p; do
   [ -n "$p" ] || continue
-  git -C "$p" reset -q --hard
-  git -C "$p" clean -ffdxq -e node_modules
+  git -C "$p" reset -q --hard || rc=1
+  git -C "$p" clean -ffdxq -e node_modules || rc=1
 done <<EOF
 $REPO_PATHS
-EOF`;
+EOF
+exit $rc`;
 
 /** Commits each listed repository has past where it started. */
 const COUNT_COMMITS = `tab="$(printf '\\t')"
@@ -824,7 +841,9 @@ export class ClaudeCoderSubagent extends RecipeSubagentHost<Env> {
     }
     await this.ctx.storage.delete(SESSION_KEY);
 
-    const discarded = dir ? await this.#discard(name, dir, repos) : [];
+    const discarded = dir
+      ? await this.#discard(name, dir, repos)
+      : { files: [], failed: false };
     const commits = dir ? await this.#commits(name, dir, repos) : [];
     return {
       done: true,
@@ -832,7 +851,8 @@ export class ClaudeCoderSubagent extends RecipeSubagentHost<Env> {
       result: this.#report(session, {
         branch: branchOf(request),
         commits,
-        discarded,
+        discarded: discarded.files,
+        ...(discarded.failed ? { discardFailed: true } : {}),
         ...(warning ? { warning } : {})
       })
     };
@@ -1063,18 +1083,19 @@ export class ClaudeCoderSubagent extends RecipeSubagentHost<Env> {
   }
 
   /**
-   * Delete everything uncommitted, answering what that was.
+   * Delete everything uncommitted, answering what that was and whether it went.
    *
    * Every repository is cleaned, not only the ones with something to report:
    * ignored build output is not listed, and it is not the branch either.
    * Reported whether or not the delete succeeds — a file named here that is still
-   * on disk is a smaller problem than one deleted without a word.
+   * on disk is a smaller problem than one deleted without a word — but reported
+   * as what it was, which is what `failed` carries.
    */
   async #discard(
     workspace: string,
     dir: string,
     repos: readonly RepoStart[]
-  ): Promise<Uncommitted[]> {
+  ): Promise<{ files: Uncommitted[]; failed: boolean }> {
     const dirty = await this.#uncommitted(workspace, dir, repos);
     try {
       const done = await this.#exec(workspace)(DISCARD, {
@@ -1093,12 +1114,13 @@ export class ClaudeCoderSubagent extends RecipeSubagentHost<Env> {
           }
         );
       }
+      return { files: dirty, failed: !done.success };
     } catch (err) {
       console.warn("[claude-coder] could not delete the uncommitted work", {
         err: String(err)
       });
+      return { files: dirty, failed: true };
     }
-    return dirty;
   }
 
   /** Commits past where each repository started; uncounted where unreadable. */

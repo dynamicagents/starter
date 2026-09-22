@@ -693,6 +693,9 @@ export function subtaskWorkspaces(config: {
         name
       );
       if (!reset.success) {
+        // Left live and left as it is: `release` runs next, reads the tips and
+        // holds the worktree on them, which is the right side to err on for a
+        // worktree that may still carry the commits this meant to discard.
         console.warn(
           `[${config.label}] could not discard an aborted subtask's commits`,
           {
@@ -700,7 +703,38 @@ export function subtaskWorkspaces(config: {
             stderr: reset.stderr.trim().slice(0, 500)
           }
         );
+        return;
       }
+      /**
+       * Record where the reset put it, and free it here rather than leaving that
+       * to `release`.
+       *
+       * `stopSession` above delivers `SIGTERM` and returns; Claude Code then
+       * aborts its turn, kills its process tree and runs its `SessionEnd` hooks,
+       * so a session can still commit for a moment after the reset ran. The
+       * facet's own cancellation waits that out — `ClaudeCoderSubagent.abortRun`
+       * awaits the drain before resetting — but this path runs in the parent, a
+       * Durable Object away from the promise that would say when the drain
+       * unwound, and it is reached precisely when there is no drain left to
+       * await: a chunk whose isolate was evicted or whose branch failed.
+       *
+       * So the reset is not ordered against the session, and what that would
+       * cost is `release` reading a tip a moment later and recording a commit
+       * this exists to discard — which `isFree` then reads as work worth
+       * keeping, holding the slot on a branch nobody asked for. Writing `start`
+       * here says what the reset did, and dropping `live` means `release` finds
+       * no row and records nothing.
+       *
+       * Files written after the reset are a smaller matter and are left: the
+       * next subtask to claim this slot is prepared with `checkout -f` and
+       * `clean -ffdx` before it runs, which is where an unordered write ends.
+       */
+      const { live: _live, mode: _mode, ready: _ready, ...rest } = row;
+      config.pool.put({
+        ...rest,
+        repos: row.repos.map((repo) => ({ ...repo, tip: repo.start })),
+        usedAt: now()
+      });
     }
   };
 }

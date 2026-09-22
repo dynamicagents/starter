@@ -17,6 +17,8 @@ import { BROWSER_FAMILY } from "@dynamicagents/plugins/browser";
 import { REPO_FAMILY } from "@dynamicagents/plugins/repo";
 import { parentPlugins, subagentPlugins } from "@/agents/claude-coder/plugins";
 import {
+  publishedNote,
+  refusedByRemote,
   sessionBrief,
   sessionFooter,
   settleDrain,
@@ -227,12 +229,12 @@ const { freshStub: freshWorkspace } = makeDoHelpers<ClaudeCoderWorkspaceDO>(
   env.CLAUDE_CODER_WORKSPACE
 );
 
-const request = (): RecipeExecutionRequest => ({
+const request = (type: string = CLAUDE_CODE_TYPE): RecipeExecutionRequest => ({
   taskId: "task-1",
   subtaskId: 1,
-  type: CLAUDE_CODE_TYPE,
+  type,
   recipe: {
-    key: CLAUDE_CODE_TYPE,
+    key: type,
     version: 1,
     soul: "unused",
     toolFamilies: [],
@@ -254,12 +256,21 @@ const request = (): RecipeExecutionRequest => ({
  * conjure a checkout or a plugin registration. A failed subtask with a sentence
  * on it reaches the parent, which can tell the user.
  */
-describe("executeChunk refuses to guess", () => {
+/**
+ * Both types: one that misses this path runs core's own loop over its inert
+ * recipe — one turn on the subagent model, no tools, and a report that is the
+ * script it would have run. Failing with the sentences below is what proves it
+ * took the session path.
+ */
+describe.each([
+  ["writing", CLAUDE_CODE_TYPE],
+  ["reading", CLAUDE_CODE_READ_TYPE]
+])("executeChunk refuses to guess — %s", (_label, type) => {
   it("fails with a wiring sentence when no workspace reached it", async () => {
-    const stub = freshSubagent("no-workspace");
+    const stub = freshSubagent(`no-workspace-${type}`);
     const outcome = await runInDurableObject(
       stub,
-      (instance: ClaudeCoderSubagent) => instance.executeChunk(request(), 0)
+      (instance: ClaudeCoderSubagent) => instance.executeChunk(request(type), 0)
     );
 
     expect(outcome.done).toBe(true);
@@ -270,6 +281,8 @@ describe("executeChunk refuses to guess", () => {
       // Names the actual fault — the plugin belongs on the parent, where
       // `resolveRuntime` runs — rather than reporting a missing container.
       expect(outcome.result.error).toMatch(/must be installed on the parent/);
+    } else {
+      expect.unreachable("a subtask with no workspace must fail");
     }
   });
 
@@ -277,16 +290,18 @@ describe("executeChunk refuses to guess", () => {
     // A real workspace, reachable and empty: `checkoutDir()` has nothing to
     // report because nothing has been opened in it. The refusal is correct here
     // and wrong for the case below, which is why the two are specified together.
-    const workspace = freshWorkspace("no-checkout");
+    const workspace = freshWorkspace(`no-checkout-${type}`);
     const name = await runInDurableObject(workspace, (_i, state) =>
       state.id.toString()
     );
 
-    const stub = freshSubagent("no-checkout");
+    const stub = freshSubagent(`no-checkout-${type}`);
     const outcome = await runInDurableObject(
       stub,
       (instance: ClaudeCoderSubagent) =>
-        instance.executeChunk(request(), 0, { [WORKSPACE_RUNTIME_KEY]: name })
+        instance.executeChunk(request(type), 0, {
+          [WORKSPACE_RUNTIME_KEY]: name
+        })
     );
 
     expect(outcome.done).toBe(true);
@@ -656,6 +671,145 @@ describe("the brief a session starts from", () => {
     expect(brief.indexOf("the workspace is full")).toBeLessThan(
       brief.indexOf("the flag should be --json")
     );
+  });
+});
+
+describe("the branch a writing session is told about", () => {
+  it("names the submodules, and says to commit inside each one", () => {
+    const brief = sessionBrief(request(), undefined, {
+      branch: "claude-coder/task-1/1",
+      submodules: ["core", "starter"]
+    });
+
+    expect(brief).toContain("You are on `claude-coder/task-1/1`");
+    expect(brief).toContain("- `core`\n- `starter`");
+    expect(brief).toMatch(/Commit inside each one you change/);
+    // The install is the root's alone, and a session that does not know that
+    // runs a submodule's suite against no dependencies.
+    expect(brief).toMatch(/Run `npm ci` in a\nsubmodule/);
+  });
+
+  it("says nothing about submodules in a repository without any", () => {
+    const brief = sessionBrief(request(), undefined, {
+      branch: "claude-coder/task-1/1",
+      submodules: []
+    });
+
+    expect(brief).toContain("## Your branch");
+    expect(brief).not.toContain("Submodules");
+  });
+
+  /** A reading session's copy is deleted, so asking it to commit wastes it. */
+  it("says nothing about a branch to a reading session", () => {
+    expect(sessionBrief(request(CLAUDE_CODE_READ_TYPE))).not.toContain(
+      "## Your branch"
+    );
+  });
+});
+
+/**
+ * What the parent is told about where the work went, which it cannot see for
+ * itself — the push happens after the session exits, in a container the parent
+ * has no view of.
+ */
+describe("the note on what was published", () => {
+  const branch = "claude-coder/task-1/1";
+
+  it("names each repository pushed to, and where to fetch it", () => {
+    const note = publishedNote({
+      ok: true,
+      branch,
+      repos: [
+        { dir: "/workspace/super", name: "acme/super", ok: true, commits: 0 },
+        {
+          dir: "/workspace/super/starter",
+          name: "acme/starter",
+          ok: true,
+          commits: 2
+        }
+      ]
+    });
+
+    expect(note).toContain(`Pushed \`${branch}\` to acme/starter (2 commits)`);
+    expect(note).toContain("`repo_fetch` in `/workspace/super/starter`");
+    expect(note).toContain(`\`origin/${branch}\``);
+    // Nothing is said about a repository the session did not change.
+    expect(note).not.toContain("acme/super");
+  });
+
+  it("says nothing was pushed when no repository has commits", () => {
+    const note = publishedNote({
+      ok: true,
+      branch,
+      repos: [{ dir: "/workspace/r", name: "acme/r", ok: true, commits: 0 }]
+    });
+
+    expect(note).toMatch(/No commits were made/);
+  });
+
+  it("names a repository that could not be published, beside one that was", () => {
+    const note = publishedNote({
+      ok: true,
+      branch,
+      repos: [
+        { dir: "/workspace/super", name: "acme/super", ok: true, commits: 1 },
+        {
+          dir: "/workspace/super/core",
+          name: "acme/core",
+          ok: false,
+          why: "rejected"
+        }
+      ]
+    });
+
+    expect(note).toContain("Pushed");
+    expect(note).toContain("Could not publish to acme/core: rejected");
+  });
+
+  /**
+   * The production refusal, verbatim. A parent told to delegate again re-ran a
+   * whole session to be refused by the same token, twice.
+   */
+  const WORKFLOW_REFUSAL =
+    "git push failed: One or more branches were not updated: \n  - refs/heads/claude-coder/t/89: refusing to allow a Personal Access Token to create or update workflow `.github/workflows/deploy.yml` without `workflow` scope";
+
+  it("tells the parent not to redo work the forge refused", () => {
+    const note = publishedNote({
+      ok: true,
+      branch,
+      repos: [
+        {
+          dir: "/workspace/super/gatekeeper",
+          name: "acme/gatekeeper",
+          ok: false,
+          why: WORKFLOW_REFUSAL,
+          refused: true
+        }
+      ]
+    });
+
+    expect(note).toContain("The forge refused the push to acme/gatekeeper");
+    expect(note).toContain("without `workflow` scope");
+    expect(note).toContain("Do not delegate it again");
+    expect(note).not.toContain("delegate it again rather");
+  });
+
+  it("recognises a refusal by the forge, and nothing that merely failed to arrive", () => {
+    expect(refusedByRemote(WORKFLOW_REFUSAL)).toBe(true);
+    expect(refusedByRemote("remote: Permission denied to acme/x")).toBe(true);
+    expect(refusedByRemote("could not resolve host: github.com")).toBe(false);
+    expect(refusedByRemote("the workspace had no checkout")).toBe(false);
+  });
+
+  /** An uncounted repository is pushed, so it is reported as pushed. */
+  it("reports a push whose commits could not be counted", () => {
+    const note = publishedNote({
+      ok: true,
+      branch,
+      repos: [{ dir: "/workspace/r", name: "acme/r", ok: true }]
+    });
+
+    expect(note).toContain(`Pushed \`${branch}\` to acme/r.`);
   });
 });
 

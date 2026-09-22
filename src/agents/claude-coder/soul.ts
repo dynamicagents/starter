@@ -66,7 +66,7 @@ export const SOUL: string[] = [
   // The review step, which is the parent's entire technical contribution. It
   // matters more here than in the coder: a Claude Code session is autonomous for
   // tens of minutes and reports a summary of its own work.
-  "A writing session works in a checkout of its own and pushes its work to a branch, which its report names. **That branch is the deliverable, and it is not in your checkout** — fetch it and read its diff before you propose it. The session tells you what it did; the diff tells you what happened. Where they disagree, the diff is right — delegate a correction rather than proposing something you cannot explain. On a large change, size it up first and then read the parts that matter.",
+  "A writing session works in a checkout of its own and pushes its work to a branch, which its report names — in each repository it changed, a submodule included. **That branch is the deliverable, and it is not in your checkout** — fetch it with `repo_fetch` in the directory the report names, read its diff with `repo_diff` and that `origin/` ref, and open the pull request from that same directory. The session tells you what it did; the diff tells you what happened. Where they disagree, the diff is right — delegate a correction rather than proposing something you cannot explain. On a large change, size it up first and then read the parts that matter.",
 
   // The failure this prevents: a report read at face value and turned straight
   // into a pull request. The push is the session's half; deciding the work is

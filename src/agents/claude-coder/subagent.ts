@@ -11,6 +11,7 @@ import type {
 } from "@dynamicagents/core/subtasks";
 import {
   claudeCodeSession,
+  CLAUDE_CODE_READ_TYPE,
   CLAUDE_CODE_TYPE,
   WORKSPACE_RUNTIME_KEY,
   type ClaudeCodeSession,
@@ -26,7 +27,7 @@ import {
 import { CLAUDE_CODE_SESSION, CLAUDE_CODER_CONFIG } from "@/config";
 import { claudeCoder } from "./definition";
 import { computerExec, openWorkspace } from "@dynamicagents/plugins/computer";
-import { subtaskBranch } from "@/workspace/subtask-workspace";
+import { readSubmodules, subtaskBranch } from "@/workspace/subtask-workspace";
 import { container } from "./plugins";
 import { claudeCodeConfig, noWorkspaceRouting } from "./claude-code";
 import { subagentPlugins } from "./plugins";
@@ -173,14 +174,51 @@ holds the credential on the other side of this container. Report what you change
 let it deliver.`;
 
 /**
- * What became of a writing subtask's branch.
+ * What became of one repository's copy of a writing subtask's branch.
+ *
+ * `dir` is where that repository sits in the parent's own checkout too — the
+ * subtask's clone reuses the parent's path — so it is the directory the parent
+ * fetches in. `commits` is absent when they could not be counted, which is
+ * pushed anyway rather than read as nothing to push.
+ */
+type RepoPush =
+  | { dir: string; name: string; ok: true; commits?: number }
+  | {
+      dir: string;
+      name: string;
+      ok: false;
+      why: string;
+      /** The forge answered and said no — see {@link refusedByRemote}. */
+      refused?: true;
+    };
+
+/**
+ * Whether a failed push was the remote refusing it, as against failing to reach
+ * it.
+ *
+ * The difference decides what the parent should do next. A push that never
+ * arrived may land on a second attempt; a push the forge refused — a token
+ * without the scope a workflow file needs, a protected branch — is refused the
+ * same way every time, and a parent told to delegate again spends a whole
+ * session to be refused again. `git-host` reports a per-ref rejection as "One or
+ * more branches were not updated", with the forge's own reason after it.
+ */
+export function refusedByRemote(why: string): boolean {
+  return /branches were not updated|refusing to allow|protected branch|permission denied|\b403\b/i.test(
+    why
+  );
+}
+
+/**
+ * What became of a writing subtask's branch, in every repository it could have
+ * changed.
  *
  * Reported rather than thrown, and carried into the result the parent reads,
  * because "the work is on this branch" and "the work could not be published" are
  * both things the round has to act on and neither is the session's own failure.
  */
 type PushOutcome =
-  { ok: true; branch: string; commits?: number } | { ok: false; why: string };
+  { ok: true; branch: string; repos: RepoPush[] } | { ok: false; why: string };
 
 /**
  * What a **writing** session is told about the branch it is already on.
@@ -191,8 +229,8 @@ type PushOutcome =
  * switch branches, because there is no credential here and the name is how the
  * agent that briefed you finds the work at all.
  */
-function branchNote(branch: string): string {
-  return `## Your branch
+function branchNote(branch: string, submodules: readonly string[]): string {
+  const note = `## Your branch
 
 You are on \`${branch}\`, checked out for you, in a clone of the repository that is
 yours alone — no other session is editing this tree.
@@ -204,6 +242,21 @@ suits you; the last commit is what matters.
 
 Do not push, and do not switch or rename the branch. There is no credential in this
 container to push with, and the name above is the only way your work is found.`;
+  if (submodules.length === 0) return note;
+  return `${note}
+
+### Submodules
+
+${submodules.map((path) => `- \`${path}\``).join("\n")}
+
+Each is a repository of its own, cloned on its declared branch and then put on
+\`${branch}\` too. **Commit inside each one you change** — a change to a submodule is
+only published if it is committed in that submodule. Recording the new commit in
+the superproject is a separate commit, and only if the task asks for it. Only one
+level of submodules is checked out.
+
+Dependencies are installed at the top of the checkout only. Run \`npm ci\` in a
+submodule before building or testing it.`;
 }
 
 /**
@@ -215,7 +268,17 @@ container to push with, and the name above is the only way your work is found.`;
  * every outcome says something — including the one where there was nothing to
  * push, which otherwise reads as a lost branch rather than a considered no-op.
  */
-function publishedNote(published: PushOutcome | undefined): string {
+/** `owner/repo` out of a clone url, or the url itself when it has no such shape. */
+function repoName(url: string): string {
+  try {
+    const path = new URL(url).pathname.replace(/^\/+|\/+$/g, "");
+    return path.replace(/\.git$/, "") || url;
+  } catch {
+    return url;
+  }
+}
+
+export function publishedNote(published: PushOutcome | undefined): string {
   if (!published) return "";
   if (!published.ok) {
     return (
@@ -224,10 +287,40 @@ function publishedNote(published: PushOutcome | undefined): string {
       "delegate it again rather than reporting it as done."
     );
   }
-  if (published.commits === 0) {
+  const failed = published.repos.filter((repo) => !repo.ok);
+  const pushed = published.repos.filter(
+    (repo) => repo.ok && repo.commits !== 0
+  );
+  if (failed.length === 0 && pushed.length === 0) {
     return "**No commits were made**, so nothing was pushed. Read the report above before delegating it again.";
   }
-  return `**Pushed to \`${published.branch}\`.** Fetch it and review that branch — the work is not in your own checkout.`;
+  const lines = [
+    ...pushed.map((repo) => {
+      const commits =
+        repo.ok && repo.commits !== undefined
+          ? ` (${repo.commits} commit${repo.commits === 1 ? "" : "s"})`
+          : "";
+      return (
+        `**Pushed \`${published.branch}\` to ${repo.name}${commits}.** ` +
+        `Fetch it with \`repo_fetch\` in \`${repo.dir}\` and review ` +
+        `\`origin/${published.branch}\` — the work is not in your own checkout.`
+      );
+    }),
+    ...failed.map((repo) =>
+      !repo.ok && repo.refused
+        ? `**The forge refused the push to ${repo.name}: ${repo.why}** ` +
+          "The session finished and committed its work, but that work is not " +
+          "on the remote, and this workspace is discarded with the subtask. " +
+          "**Do not delegate it again**: every push from this deployment uses " +
+          "the same credential and is refused the same way. Tell the user what " +
+          "the push needs — a workflow file needs a token with the `workflow` " +
+          "scope — and stop."
+        : `**Could not publish to ${repo.name}: ${repo.ok ? "" : repo.why}** ` +
+          "That part of the work is not on the remote — delegate it again " +
+          "rather than reporting it as done."
+    )
+  ];
+  return lines.join("\n\n");
 }
 
 /**
@@ -249,13 +342,13 @@ function publishedNote(published: PushOutcome | undefined): string {
 export function sessionBrief(
   request: RecipeExecutionRequest,
   note?: string,
-  branch?: string
+  writing?: { branch: string; submodules: readonly string[] }
 ): string {
   const parts = [request.prompt, "", GH_NOTE];
-  // Writing only. A reading session shares the parent's checkout and must not be
-  // told to commit in it — it could not anyway, but a brief that asks for
-  // something the permission mode refuses spends the session on the refusal.
-  if (branch) parts.push("", branchNote(branch));
+  // Writing only. A reading session works in a copy that is deleted when it
+  // ends, and the plugin tells it so; a brief that asked it to commit would
+  // spend the session on work nobody will see.
+  if (writing) parts.push("", branchNote(writing.branch, writing.submodules));
   if (note) {
     parts.push("", "## The state of this workspace", "", note);
   }
@@ -325,10 +418,14 @@ export class ClaudeCoderSubagent extends RecipeSubagentHost<Env> {
     selfOrigin?: string,
     live?: ChunkProgressContext
   ): Promise<RecipeChunkResult> {
-    // Defensive rather than expected: this agent declares one type. A different
-    // one means somebody added a second, and core's runner is the right thing to
-    // hand it to.
-    if (request.type !== CLAUDE_CODE_TYPE) {
+    // Every type this agent declares is a Claude Code session, and each has to
+    // be named here: one that is not goes to core's runner, which runs its inert
+    // recipe on the subagent model — one turn, no tools, and a report that is
+    // the script the model would have run.
+    if (
+      request.type !== CLAUDE_CODE_TYPE &&
+      request.type !== CLAUDE_CODE_READ_TYPE
+    ) {
       return super.executeChunk(request, chunk, runtime, selfOrigin, live);
     }
 
@@ -477,12 +574,22 @@ export class ClaudeCoderSubagent extends RecipeSubagentHost<Env> {
       onCheckpoint: (at: DrainCursor) => this.ctx.storage.put(CURSOR_KEY, at)
     };
 
-    // Writing or reading, asked once. What that *means* for the session — the
-    // permission mode it launches under — is not decided here and is not
+    // Writing or reading, asked once. What that *means* for the session — a
+    // reading one works in a throwaway copy — is not decided here and is not
     // reachable from here: the plugin derives it from the type inside `start`,
-    // precisely so a host cannot hand a reading session the ability to edit.
-    // What this decides is the host's own half: a branch, and a push.
+    // precisely so a host cannot leave the copy out. What this decides is the
+    // host's own half: a branch, and a push.
     const writes = request.type === CLAUDE_CODE_TYPE;
+
+    // What the brief says about the branch, and which repositories it spans.
+    // First chunk only, like the rest of the brief.
+    const writing =
+      writes && !cursor
+        ? {
+            branch: subtaskBranch(request),
+            submodules: await this.#submodules(name, dir as string)
+          }
+        : undefined;
 
     let outcome: DrainOutcome;
     try {
@@ -491,13 +598,9 @@ export class ClaudeCoderSubagent extends RecipeSubagentHost<Env> {
         : await this.#session.start(
             runner,
             request.subtaskId,
-            // Required, and the session derives its permission mode from it.
+            // Required: the session decides from it whether to work in a copy.
             request.type,
-            sessionBrief(
-              request,
-              note,
-              writes ? subtaskBranch(request) : undefined
-            ),
+            sessionBrief(request, note, writing),
             dir as string,
             sinks
           );
@@ -703,6 +806,126 @@ export class ClaudeCoderSubagent extends RecipeSubagentHost<Env> {
   }
 
   /**
+   * The submodules this subtask's clone carries, for the brief.
+   *
+   * Read from the clone rather than carried from `resolve`, which ran on the
+   * parent: the two never share memory, and the checkout is what was cloned.
+   * Unreadable reads as none — the brief loses a paragraph. `#publish` reads the
+   * same list strictly, because there a submodule it cannot see is work lost.
+   */
+  async #submodules(workspace: string, dir: string): Promise<string[]> {
+    try {
+      const exec = computerExec(container(this.env, () => workspace));
+      return (await readSubmodules(exec, dir)).map((sub) => sub.path);
+    } catch (err) {
+      console.warn("[claude-coder] could not read the clone's submodules", {
+        err: String(err)
+      });
+      return [];
+    }
+  }
+
+  /**
+   * Put the session's commits on the remote, from the Worker side — in the
+   * superproject and in every submodule that has any.
+   *
+   * The credential never enters the container — the egress gateway strips
+   * `authorization` from everything not bound for Anthropic — so the push is the
+   * workspace object's, exactly as the parent's own pushes are. What changed is
+   * only *which* workspace: this subtask's, not the parent's.
+   *
+   * Each origin is read from its checkout rather than carried here, because the
+   * checkout is what was actually cloned and a url passed along a second path is
+   * a url that can disagree with it.
+   *
+   * Never throws. A session that did the work must not be reported as having
+   * failed because publishing it did; the report says so instead, and the round
+   * can act on that.
+   */
+  async #publish(workspace: string, branch: string): Promise<PushOutcome> {
+    try {
+      const binding = this.env.CLAUDE_CODER_WORKSPACE;
+      const stub = binding.get(binding.idFromName(workspace));
+      const root = await stub.checkoutDir();
+      if (!root) return { ok: false, why: "the workspace had no checkout" };
+
+      const exec = computerExec(container(this.env, () => workspace));
+      const repos: RepoPush[] = [];
+
+      // Read strictly, unlike the brief's copy: a submodule the push cannot see
+      // is committed work reclaimed with the workspace, so an unreadable list is
+      // reported as a failure beside whatever the superproject publishes.
+      let paths: string[] = [];
+      try {
+        paths = (await readSubmodules(exec, root)).map((sub) => sub.path);
+      } catch (err) {
+        repos.push({
+          dir: root,
+          name: "its submodules",
+          ok: false,
+          why: String(err)
+        });
+      }
+      const dirs = [root, ...paths.map((path) => `${root}/${path}`)];
+
+      for (const dir of dirs) {
+        const origin = await exec("git remote get-url origin", { cwd: dir });
+        const url = origin.stdout.trim();
+        if (!origin.success || !url) {
+          repos.push({
+            dir,
+            name: dir,
+            ok: false,
+            why: `could not read the origin: ${origin.stderr}`
+          });
+          continue;
+        }
+        const name = repoName(url);
+
+        // Commits on no remote-tracking ref, which is what the session added
+        // whichever branch the clone was taken from. "Nothing to publish" is not
+        // a failure and must not read as one — a session can legitimately
+        // conclude no change was needed, and a round told "the push failed"
+        // would delegate the same work a second time.
+        const ahead = await exec(
+          "git rev-list --count HEAD --not --remotes=origin",
+          { cwd: dir }
+        );
+        const commits = ahead.success ? Number(ahead.stdout.trim()) : NaN;
+        if (commits === 0) {
+          repos.push({ dir, name, ok: true, commits: 0 });
+          continue;
+        }
+
+        const pushed = await stub.gitPush({
+          url,
+          dir,
+          branch,
+          // The host this checkout came from, which it already passed `/repo`'s
+          // allowlist to reach.
+          allowedHosts: [new URL(url).hostname]
+        });
+        repos.push(
+          pushed.ok
+            ? { dir, name, ok: true, ...(commits > 0 ? { commits } : {}) }
+            : {
+                dir,
+                name,
+                ok: false,
+                why: pushed.message,
+                ...(refusedByRemote(pushed.message)
+                  ? { refused: true as const }
+                  : {})
+              }
+        );
+      }
+      return { ok: true, branch, repos };
+    } catch (err) {
+      return { ok: false, why: String(err) };
+    }
+  }
+
+  /**
    * Turn a finished drain into a terminal result.
    *
    * **The text can never be empty.** `persistResult` converts an empty result
@@ -714,68 +937,6 @@ export class ClaudeCoderSubagent extends RecipeSubagentHost<Env> {
    * The footer under both is {@link sessionFooter}, which carries its own
    * reasoning — including why a denial count belongs beside the cost.
    */
-  /**
-   * Put the session's commits on the remote, from the Worker side.
-   *
-   * The credential never enters the container — the egress gateway strips
-   * `authorization` from everything not bound for Anthropic — so the push is the
-   * workspace object's, exactly as the parent's own pushes are. What changed is
-   * only *which* workspace: this subtask's, not the parent's.
-   *
-   * The origin is read from the checkout rather than carried here, because the
-   * checkout is what was actually cloned and a url passed along a second path is a
-   * url that can disagree with it.
-   *
-   * Never throws. A session that did the work must not be reported as having
-   * failed because publishing it did; the report says so instead, and the round
-   * can act on that.
-   */
-  async #publish(workspace: string, branch: string): Promise<PushOutcome> {
-    try {
-      const binding = this.env.CLAUDE_CODER_WORKSPACE;
-      const stub = binding.get(binding.idFromName(workspace));
-      const dir = await stub.checkoutDir();
-      if (!dir) return { ok: false, why: "the workspace had no checkout" };
-
-      const exec = computerExec(container(this.env, () => workspace));
-
-      const origin = await exec("git remote get-url origin", { cwd: dir });
-      const url = origin.stdout.trim();
-      if (!origin.success || !url) {
-        return {
-          ok: false,
-          why: `could not read the origin: ${origin.stderr}`
-        };
-      }
-
-      // Counted against the branch this was cloned from. "Nothing to publish" is
-      // not a failure and must not read as one — a session can legitimately
-      // conclude no change was needed, and a round told "the push failed" would
-      // delegate the same work a second time.
-      const ahead = await exec("git rev-list --count HEAD ^origin/HEAD", {
-        cwd: dir
-      });
-      const commits = Number(ahead.stdout.trim());
-      if (ahead.success && commits === 0) {
-        return { ok: true, branch, commits: 0 };
-      }
-
-      const pushed = await stub.gitPush({
-        url,
-        dir,
-        branch,
-        // The host this checkout came from, which it already passed `/repo`'s
-        // allowlist to reach.
-        allowedHosts: [new URL(url).hostname]
-      });
-      return pushed.ok
-        ? { ok: true, branch, ...(commits > 0 ? { commits } : {}) }
-        : { ok: false, why: pushed.message };
-    } catch (err) {
-      return { ok: false, why: String(err) };
-    }
-  }
-
   #report(
     outcome: Extract<DrainOutcome, { done: true }>,
     published?: PushOutcome

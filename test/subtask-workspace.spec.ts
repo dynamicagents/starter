@@ -2,6 +2,9 @@ import { describe, it, expect } from "vitest";
 import { workspaceName } from "@dynamicagents/plugins/computer";
 import {
   isSubtaskRepo,
+  parseGitmodules,
+  readSubmodules,
+  submoduleCloneUrl,
   subtaskBranch,
   subtaskRepo
 } from "@/workspace/subtask-workspace";
@@ -124,13 +127,27 @@ const CHECKOUT: ActiveCheckout = {
 };
 
 /** Enough of the workspace RPC surface for `resolve` to run against. */
-function fakeBinding(state: { dir?: string }) {
+function fakeBinding(state: {
+  dir?: string;
+  cloneFails?: string;
+  reclaimThrows?: string;
+}) {
   const calls: string[] = [];
   const stub = {
     checkoutDir: async () => state.dir,
-    gitClone: async () => {
-      calls.push("clone");
-      state.dir = CHECKOUT.dir;
+    gitClone: async (req: { dir: string; branch?: string }) => {
+      if (state.cloneFails) {
+        calls.push("clone");
+        return { ok: false as const, message: state.cloneFails };
+      }
+      // The superproject as a bare "clone", so the ordinary case reads plainly;
+      // a submodule with where it went and on which branch.
+      if (req.dir === CHECKOUT.dir) {
+        calls.push("clone");
+        state.dir = CHECKOUT.dir;
+      } else {
+        calls.push(`clone ${req.dir}@${req.branch ?? ""}`);
+      }
       return { ok: true as const, detail: "cloned" };
     },
     noteCheckout: async () => {
@@ -143,6 +160,7 @@ function fakeBinding(state: { dir?: string }) {
     },
     reclaimIfIdle: async () => {
       calls.push("reclaim");
+      if (state.reclaimThrows) throw new Error(state.reclaimThrows);
       return { reclaimed: true, idleMs: 0, bytes: 0 };
     }
   };
@@ -155,13 +173,31 @@ function fakeBinding(state: { dir?: string }) {
   };
 }
 
+/** `.gitmodules` as `git config --null --get-regexp` prints it. */
+const gitmodules = (entries: Record<string, string>) =>
+  Object.entries(entries)
+    .map(([key, value]) => `${key}\n${value}\0`)
+    .join("");
+
 function harness(opts: {
   selected?: string;
   checkout?: ActiveCheckout;
   dir?: string;
   execFails?: boolean;
+  /** What `.gitmodules` declares, in `--null` form. */
+  submodules?: string;
+  /** Submodule paths a previous attempt already cloned. */
+  populated?: string[];
+  /** Fail every clone with this message. */
+  cloneFails?: string;
+  /** Throw this from the reclaim. */
+  reclaimThrows?: string;
 }) {
-  const state = { dir: opts.dir };
+  const state = {
+    dir: opts.dir,
+    ...(opts.cloneFails ? { cloneFails: opts.cloneFails } : {}),
+    ...(opts.reclaimThrows ? { reclaimThrows: opts.reclaimThrows } : {})
+  };
   const { calls, binding } = fakeBinding(state);
   const commands: string[] = [];
   const envs: Record<string, string>[] = [];
@@ -172,6 +208,25 @@ function harness(opts: {
     exec: async (command, options) => {
       commands.push(command);
       envs.push(options.env ?? {});
+      // In the same list as the clones, because its place relative to them is
+      // the point: cleared before a clone, never after one.
+      if (command.includes('rm -rf "$CHECKOUT_DIR"')) {
+        calls.push(`clear ${options.env?.CHECKOUT_DIR}`);
+      }
+      if (command.includes(".gitmodules")) {
+        // No match exits 1 with nothing said, which is how git reports a
+        // checkout without submodules.
+        return opts.submodules
+          ? { success: true, stdout: opts.submodules, stderr: "" }
+          : { success: false, stdout: "", stderr: "" };
+      }
+      if (command.includes("SUBMODULE_PATHS")) {
+        return {
+          success: true,
+          stdout: (opts.populated ?? []).map((p) => `${p}\n`).join(""),
+          stderr: ""
+        };
+      }
       return opts.execFails
         ? { success: false, stdout: "", stderr: "no such ref" }
         : { success: true, stdout: "", stderr: "" };
@@ -179,14 +234,19 @@ function harness(opts: {
     active,
     label: "test"
   });
-  return { subtasks, calls, commands, envs, active };
+  /** The command that starts the branch, and what it was handed. */
+  const branching = () => {
+    const at = commands.findIndex((c) => c.includes("SUBTASK_BRANCH"));
+    return { command: commands[at] ?? "", env: envs[at] ?? {} };
+  };
+  return { subtasks, calls, commands, envs, active, branching };
 }
 
 describe("preparing a writing subtask's workspace", () => {
   const ctx = { taskId: "task-a", subtaskId: 1 };
 
   it("clones, records, installs and starts the branch", async () => {
-    const { subtasks, calls, commands, envs, active } = harness({
+    const { subtasks, calls, active, branching } = harness({
       selected: "acme/api",
       checkout: CHECKOUT
     });
@@ -194,9 +254,18 @@ describe("preparing a writing subtask's workspace", () => {
     const name = await subtasks.resolve(ctx);
 
     expect(name).toBe(`caller|${subtaskRepo(ctx)}`);
-    expect(calls).toEqual(["clone", "noteCheckout", "startInstall"]);
-    expect(commands[0]).toContain("checkout");
-    expect(envs[0]).toEqual({ SUBTASK_BRANCH: subtaskBranch(ctx) });
+    expect(calls).toEqual([
+      `clear ${CHECKOUT.dir}`,
+      "clone",
+      "noteCheckout",
+      "startInstall"
+    ]);
+    expect(branching().command).toContain("checkout");
+    // The superproject alone, when there are no submodules.
+    expect(branching().env).toEqual({
+      SUBTASK_BRANCH: subtaskBranch(ctx),
+      SUBTASK_REPOS: ".\t"
+    });
     // Enrolled for the weekly sweep without routing the parent's tools to it: a
     // workspace the sweep cannot see has no backstop but its own alarm.
     expect(active.noted).toEqual([subtaskRepo(ctx)]);
@@ -211,8 +280,25 @@ describe("preparing a writing subtask's workspace", () => {
    * after the clone, so the branch the parent fetches would never be created and
    * the session would run on the source branch with nowhere to publish.
    */
+  /**
+   * The likeliest reason a clone fails is a branch that exists only in the
+   * parent's checkout: a subtask clones from the remote. The clone initialises
+   * before it fetches, which is why the retry clears first — see the case above.
+   */
+  it("names the branch it could not clone", async () => {
+    const { subtasks } = harness({
+      selected: "acme/api",
+      checkout: { ...CHECKOUT, branch: "pins/local-only" },
+      cloneFails: "git fetch failed: Could not find pins/local-only."
+    });
+
+    await expect(subtasks.resolve(ctx)).rejects.toThrow(
+      /could not clone https:\/\/github\.com\/acme\/api\.git at pins\/local-only into a subtask workspace: git fetch failed/
+    );
+  });
+
   it("finishes a setup that a previous attempt left half-done", async () => {
-    const { subtasks, calls, envs } = harness({
+    const { subtasks, calls, branching } = harness({
       selected: "acme/api",
       checkout: CHECKOUT,
       dir: CHECKOUT.dir
@@ -226,20 +312,25 @@ describe("preparing a writing subtask's workspace", () => {
     expect(calls).toEqual(["noteCheckout", "startInstall"]);
     // The branch reaches git as a value, never as command text, so this is where
     // it has to be asserted.
-    expect(envs[0]).toEqual({ SUBTASK_BRANCH: subtaskBranch(ctx) });
+    expect(branching().env.SUBTASK_BRANCH).toBe(subtaskBranch(ctx));
   });
 
   /** `checkout -B` would reset the branch and discard a retry's own commits. */
   it("switches to the branch if it exists rather than resetting it", async () => {
-    const { subtasks, commands } = harness({
+    const { subtasks, branching } = harness({
       selected: "acme/api",
       checkout: CHECKOUT
     });
 
     await subtasks.resolve(ctx);
 
-    expect(commands[0]).not.toContain("checkout -B");
-    expect(commands[0]).toContain("|| git checkout -b");
+    expect(branching().command).not.toContain("checkout -B");
+    expect(branching().command).toMatch(
+      /if ! git -C "\$path" checkout --quiet "\$SUBTASK_BRANCH"/
+    );
+    expect(branching().command).toContain(
+      'checkout --quiet -b "$SUBTASK_BRANCH"'
+    );
   });
 
   /**
@@ -257,12 +348,44 @@ describe("preparing a writing subtask's workspace", () => {
     expect(calls).toEqual([]);
   });
 
-  it("refuses when nothing has been cloned at all", async () => {
+  /**
+   * Better than cloning a guess — and the sentence names the refusal that leaves
+   * a checkout on disk unrecorded, because an agent looking at that checkout
+   * will not believe "nothing was cloned".
+   */
+  it("refuses when no checkout was recorded, and says how one is", async () => {
     const { subtasks } = harness({ selected: "acme/api" });
 
-    // Better than cloning a guess: the parent's soul is told to open a directory
-    // before delegating, and this is the sentence that says it did not.
-    await expect(subtasks.resolve(ctx)).rejects.toThrow(/nothing for it/);
+    await expect(subtasks.resolve(ctx)).rejects.toThrow(
+      /no recorded checkout.*records one only when it leaves a clean tree/s
+    );
+  });
+
+  /**
+   * The workspace's reset can land before the reclaim's answer, which is then
+   * lost with the instance — every reclaim in production ended this way. The
+   * error says what happened, so it is read as a reclaim.
+   */
+  it("reads a workspace that reports itself reclaimed as reclaimed", async () => {
+    const { subtasks, active } = harness({
+      selected: "acme/api",
+      checkout: CHECKOUT,
+      reclaimThrows: "Error: workspace reclaimed"
+    });
+
+    await expect(subtasks.reclaim(ctx)).resolves.toBeUndefined();
+    expect(active.forgotten).toEqual([subtaskRepo(ctx)]);
+  });
+
+  it("keeps a workspace on the sweep list when its reclaim really failed", async () => {
+    const { subtasks, active } = harness({
+      selected: "acme/api",
+      checkout: CHECKOUT,
+      reclaimThrows: "container unreachable"
+    });
+
+    await expect(subtasks.reclaim(ctx)).resolves.toBeUndefined();
+    expect(active.forgotten).toEqual([]);
   });
 
   it("reclaims the workspace and drops it from the sweep list", async () => {
@@ -275,5 +398,205 @@ describe("preparing a writing subtask's workspace", () => {
 
     expect(calls).toEqual(["reclaim"]);
     expect(active.forgotten).toEqual([subtaskRepo(ctx)]);
+  });
+});
+
+/**
+ * A superproject: the clone is the superproject alone, so each submodule has to
+ * be cloned into it, and every repository the session could commit in has to be
+ * on the branch the parent will fetch.
+ */
+describe("a writing subtask in a superproject", () => {
+  const ctx = { taskId: "task-a", subtaskId: 1 };
+  const SUPER: ActiveCheckout = {
+    url: "https://github.com/acme/super",
+    dir: "/workspace/super",
+    branch: "main"
+  };
+  const DECLARED = gitmodules({
+    "submodule.core.path": "core",
+    "submodule.core.url": "https://github.com/acme/core.git",
+    "submodule.core.branch": "main",
+    "submodule.starter.path": "starter",
+    "submodule.starter.url": "../starter.git",
+    "submodule.starter.branch": "next",
+    "submodule.pinned.path": "vendor/pinned",
+    "submodule.pinned.url": "https://github.com/acme/pinned"
+  });
+
+  /** The fake binding compares against `CHECKOUT.dir`; point it here. */
+  function superHarness(over: Parameters<typeof harness>[0] = {}) {
+    return harness({
+      selected: "acme/super",
+      checkout: { ...CHECKOUT, ...SUPER, dir: CHECKOUT.dir },
+      submodules: DECLARED,
+      ...over
+    });
+  }
+
+  it("clones every submodule into the checkout, on its declared branch", async () => {
+    const { subtasks, calls } = superHarness();
+
+    await subtasks.resolve(ctx);
+
+    expect(calls).toEqual([
+      `clear ${CHECKOUT.dir}`,
+      "clone",
+      // Recorded before the submodules, so a retry that fails at one finds the
+      // superproject and does not clone over it.
+      "noteCheckout",
+      `clone ${CHECKOUT.dir}/core@main`,
+      `clone ${CHECKOUT.dir}/starter@next`,
+      // No declared branch: the default one, then the pinned commit below.
+      `clone ${CHECKOUT.dir}/vendor/pinned@`,
+      "startInstall"
+    ]);
+  });
+
+  it("puts the superproject and every submodule on the branch", async () => {
+    const { subtasks, branching } = superHarness();
+
+    await subtasks.resolve(ctx);
+
+    expect(branching().env).toEqual({
+      SUBTASK_BRANCH: subtaskBranch(ctx),
+      SUBTASK_REPOS: [
+        ".\t",
+        "core\t",
+        "starter\t",
+        // Detached to the superproject's pin before its branch is made.
+        "vendor/pinned\tpinned"
+      ].join("\n")
+    });
+  });
+
+  /** Every step runs on every chunk; a clone that is there is not made again. */
+  it("does not clone a submodule a previous attempt already cloned", async () => {
+    const { subtasks, calls } = superHarness({
+      dir: CHECKOUT.dir,
+      populated: ["core", "starter"]
+    });
+
+    await subtasks.resolve(ctx);
+
+    expect(calls).toEqual([
+      "noteCheckout",
+      `clone ${CHECKOUT.dir}/vendor/pinned@`,
+      "startInstall"
+    ]);
+  });
+
+  /** `.gitmodules` is repository content, so a url in it has passed nothing. */
+  it("refuses a submodule hosted anywhere but the parent's host", async () => {
+    const { subtasks, calls } = superHarness({
+      submodules: gitmodules({
+        "submodule.x.path": "x",
+        "submodule.x.url": "https://evil.example/acme/x"
+      })
+    });
+
+    await expect(subtasks.resolve(ctx)).rejects.toThrow(
+      /only over https from github\.com/
+    );
+    expect(calls).toEqual([`clear ${CHECKOUT.dir}`, "clone", "noteCheckout"]);
+  });
+
+  /**
+   * A submodule clone that failed part-way has a `.git` and no commit. Counted
+   * as present it would stay empty; cloned into, it is refused.
+   */
+  it("asks each submodule's own repository whether it has a commit", async () => {
+    const { subtasks, commands } = superHarness({ dir: CHECKOUT.dir });
+
+    await subtasks.resolve(ctx);
+
+    const survey = commands.find((c) => c.includes("SUBMODULE_PATHS")) ?? "";
+    // Its own `.git`: `git -C` there would walk up and answer for the
+    // superproject.
+    expect(survey).toContain('git --git-dir="$p/.git" rev-parse --verify');
+    expect(survey).toContain('rm -rf "$p"');
+  });
+});
+
+describe("reading .gitmodules", () => {
+  it("groups each submodule's fields, including names with dots in them", () => {
+    expect(
+      parseGitmodules(
+        gitmodules({
+          "submodule.a.b.path": "libs/a.b",
+          "submodule.a.b.url": "../a.b.git",
+          "submodule.a.b.branch": "main",
+          "submodule.c.path": "c",
+          "submodule.c.url": "https://github.com/acme/c"
+        })
+      )
+    ).toEqual([
+      { path: "libs/a.b", url: "../a.b.git", branch: "main" },
+      { path: "c", url: "https://github.com/acme/c" }
+    ]);
+  });
+
+  it("drops an entry git could not check out either", () => {
+    expect(parseGitmodules(gitmodules({ "submodule.a.path": "a" }))).toEqual(
+      []
+    );
+  });
+});
+
+describe("where a submodule is cloned from", () => {
+  const parent = "https://github.com/acme/super.git";
+
+  it("resolves a relative url the way git does, against the superproject's", () => {
+    expect(
+      submoduleCloneUrl({ path: "core", url: "../core.git" }, parent)
+    ).toBe("https://github.com/acme/core.git");
+    expect(submoduleCloneUrl({ path: "x", url: "./x" }, parent)).toBe(
+      "https://github.com/acme/super.git/x"
+    );
+  });
+
+  it("refuses ssh, which a container with no key cannot reach anyway", () => {
+    expect(() =>
+      submoduleCloneUrl(
+        { path: "core", url: "git@github.com:acme/core.git" },
+        parent
+      )
+    ).toThrow(/only over https/);
+  });
+});
+
+/**
+ * A `.gitmodules` path becomes a clone target, a cwd, and a row of the lists the
+ * branch script reads — so it is refused before any of those, not at each.
+ */
+describe("which submodule paths are accepted", () => {
+  const read = (path: string) =>
+    readSubmodules(
+      async () => ({
+        success: true,
+        stdout: gitmodules({
+          "submodule.x.path": path,
+          "submodule.x.url": "https://github.com/acme/x"
+        }),
+        stderr: ""
+      }),
+      "/workspace/super"
+    );
+
+  it("accepts an ordinary nested path", async () => {
+    await expect(read("libs/core")).resolves.toEqual([
+      { path: "libs/core", url: "https://github.com/acme/x" }
+    ]);
+  });
+
+  it.each([
+    ["one that walks out", "../elsewhere"],
+    ["an absolute one", "/etc"],
+    // One path read as two rows, the second outside the checkout.
+    ["one with a newline", "safe\n../outside"],
+    ["one with a tab", "safe\tpinned"],
+    ["one with an empty segment", "a//b"]
+  ])("refuses %s", async (_label, path) => {
+    await expect(read(path)).rejects.toThrow(/could leave the checkout/);
   });
 });

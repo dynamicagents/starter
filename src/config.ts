@@ -185,8 +185,8 @@ export const CODER_CONFIG: CoreConfigOverrides = {
  * ends the round with a control tool — so every turn it spends is a decision
  * about a container boot and a Claude Code session, and a round that delegates
  * the wrong subtask is paid for at that price rather than a retry's. The flash
- * model is the second attempt, which is the trade `PROACTIVE_CONFIG` makes for
- * latency and this one makes for judgement.
+ * model is the second attempt. `PROACTIVE_CONFIG` is the other departure from
+ * the shared pair, for a different reason its own comment gives.
  *
  * `reasoningEffort` stays at the inherited `high`, which is core's ceiling —
  * `ModelConfig.reasoningEffort` has no level above it.

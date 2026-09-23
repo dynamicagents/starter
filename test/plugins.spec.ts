@@ -9,7 +9,7 @@ import {
 import { BROWSER_FAMILY } from "@dynamicagents/plugins/browser";
 import { WORKSPACE_FAMILY } from "@dynamicagents/plugins/workspace";
 import { general } from "@/agents/reactive/general";
-import { REACTIVE_CONFIG } from "@/config";
+import { CLAUDE_CODER_CONFIG, CODER_CONFIG, REACTIVE_CONFIG } from "@/config";
 
 /**
  * The seam between this repo and the packages it composes: what happens when
@@ -87,5 +87,26 @@ describe("config resolution", () => {
     const resolved = resolveConfig(REACTIVE_CONFIG);
     expect(resolved.model.chatModelId).toBe(REACTIVE_CONFIG.model!.chatModelId);
     expect(resolved.maxSubtasks).toBe(REACTIVE_CONFIG.maxSubtasks);
+  });
+
+  /**
+   * claude-coder's parent is the one agent whose pair is inverted, and the
+   * inversion is the whole of what it changes. Stated as a relationship rather
+   * than two model ids so that moving the family stays a one-line edit, and
+   * asserted by swapping the pair back: anything else that drifts apart —
+   * including a field added to `MODEL` later — fails here.
+   */
+  it("inverts the model pair for claude-coder alone", () => {
+    const shared = CODER_CONFIG.model!;
+    const inverted = CLAUDE_CODER_CONFIG.model!;
+
+    expect(inverted.chatModelId).toBe(shared.fallbackChatModelId);
+    expect(inverted.fallbackChatModelId).toBe(shared.chatModelId);
+    expect(REACTIVE_CONFIG.model!.chatModelId).toBe(shared.chatModelId);
+    expect({
+      ...inverted,
+      chatModelId: shared.chatModelId,
+      fallbackChatModelId: shared.fallbackChatModelId
+    }).toEqual(shared);
   });
 });

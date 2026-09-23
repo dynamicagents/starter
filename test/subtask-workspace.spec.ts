@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import {
   parseGitmodules,
   readSubmodules,
@@ -73,6 +73,14 @@ function harness(opts: {
   remote?: string[];
   /** Fail the reset an abort runs. */
   resetFails?: boolean;
+  /** What keeping a failed subtask's work leaves each repository's HEAD at. */
+  kept?: Record<string, { head: string; wip?: boolean }>;
+  /**
+   * Fail the commit that keeps it. Every repository's HEAD is still reported,
+   * as the script reports them: it carries on past a repository that failed and
+   * exits non-zero at the end.
+   */
+  keepFails?: boolean;
 }) {
   const calls: string[] = [];
   let cloneFails = opts.cloneFails;
@@ -80,6 +88,7 @@ function harness(opts: {
   const pool = memoryPoolStore();
   const active = fakeActive(opts.selected, opts.checkout);
   const placed: Record<string, string>[] = [];
+  const keeps: { cwd: string; env: Record<string, string> }[] = [];
   const stopped: string[] = [];
   let current = "";
   const stub = {
@@ -153,6 +162,20 @@ function harness(opts: {
           });
         return { success: true, stdout: rows.join("\n"), stderr: "" };
       }
+      if (command.includes("WORKTREE_KEEP_PATHS")) {
+        keeps.push({ cwd: options.cwd, env });
+        const paths = (env.WORKTREE_KEEP_PATHS ?? "").split("\n");
+        calls.push(`keep ${paths.join(",")}`);
+        const rows = paths.map((path) => {
+          const kept = opts.kept?.[path];
+          return `${path}\t${kept?.head ?? ""}\t${kept?.wip ? "wip" : ""}`;
+        });
+        return {
+          success: !opts.keepFails,
+          stdout: rows.join("\n"),
+          stderr: opts.keepFails ? "index.lock" : ""
+        };
+      }
       if (command.includes("WORKTREE_PATHS")) {
         if (opts.tipsThrow) throw new Error("container unreachable");
         const rows = (env.WORKTREE_PATHS ?? "")
@@ -184,7 +207,7 @@ function harness(opts: {
   const heal = () => {
     cloneFails = undefined;
   };
-  return { subtasks, calls, pool, active, placed, stopped, heal };
+  return { subtasks, calls, pool, active, placed, keeps, stopped, heal };
 }
 
 const ctx = { taskId: "task-a", subtaskId: 1 };
@@ -580,6 +603,125 @@ describe("aborting a writing subtask", () => {
 });
 
 /**
+ * A subtask the Workflow gave up on: its step ran out of retries, which says
+ * nothing about the session. Every one lost this way was healthy, so its work is
+ * kept where a `continue` will find it, and the failure says so.
+ */
+describe("keeping what a failed writing subtask did", () => {
+  const BRANCH = "claude-coder/task-a/1";
+
+  it("stops the session and commits what it left, resetting nothing", async () => {
+    const { subtasks, calls, stopped, keeps } = harness({
+      selected: "acme/api",
+      checkout: CHECKOUT,
+      kept: { ".": { head: "wip-commit", wip: true } }
+    });
+    await subtasks.resolve(ctx);
+    calls.length = 0;
+
+    const note = await subtasks.fail(ctx);
+
+    expect(stopped).toEqual([`${SLOT0}#1`]);
+    expect(calls).toEqual(["keep ."]);
+    // From `/`, so the command's own shell is not a process it waits to leave
+    // the worktree.
+    expect(keeps[0]?.cwd).toBe("/");
+    expect(keeps[0]?.env.WORKTREE_DIR).toBe(CHECKOUT.dir);
+    expect(note).toContain(`\`${BRANCH}\``);
+    expect(note).toContain("WIP commit");
+    expect(note).toContain("`continue`");
+  });
+
+  it("holds the worktree on its branch, for a `continue` to find", async () => {
+    const { subtasks, pool, calls } = harness({
+      selected: "acme/api",
+      checkout: CHECKOUT,
+      kept: { ".": { head: "wip-commit", wip: true } },
+      tips: { ".": "wip-commit" }
+    });
+    await subtasks.resolve(ctx);
+
+    await subtasks.fail(ctx);
+    // Core runs this next on the same path.
+    await subtasks.release(ctx);
+
+    const [row] = pool.all("acme/api");
+    expect(row?.branch).toBe(BRANCH);
+    expect(isFree(row!)).toBe(false);
+    calls.length = 0;
+    expect(
+      await subtasks.resolve({ ...ctx, subtaskId: 2, continue: BRANCH })
+    ).toBe(SLOT0);
+    expect(calls).toContain("place continue");
+  });
+
+  it("names the branch alone when everything was already committed", async () => {
+    const { subtasks } = harness({
+      selected: "acme/api",
+      checkout: CHECKOUT,
+      kept: { ".": { head: "session-commit" } }
+    });
+    await subtasks.resolve(ctx);
+
+    const note = await subtasks.fail(ctx);
+
+    expect(note).toContain(`\`${BRANCH}\``);
+    expect(note).not.toContain("WIP");
+  });
+
+  it("says nothing when the session did nothing", async () => {
+    const { subtasks } = harness({
+      selected: "acme/api",
+      checkout: CHECKOUT,
+      kept: { ".": { head: sha("origin/main") } }
+    });
+    await subtasks.resolve(ctx);
+
+    // A branch with nothing on it is not worth continuing, and saying it is would
+    // send the model to an empty branch.
+    expect(await subtasks.fail(ctx)).toBeUndefined();
+  });
+
+  it("stops a session whose worktree never got ready, and keeps nothing", async () => {
+    const { subtasks, calls, stopped } = harness({
+      selected: "acme/api",
+      checkout: CHECKOUT,
+      cloneFails: { dir: CHECKOUT.dir, message: "network" }
+    });
+    await expect(subtasks.resolve(ctx)).rejects.toThrow();
+    calls.length = 0;
+
+    expect(await subtasks.fail(ctx)).toBeUndefined();
+    expect(stopped).toEqual([`${SLOT0}#1`]);
+    expect(calls).toEqual([]);
+  });
+
+  it("still names what was committed when the WIP commit failed", async () => {
+    // Nothing was reset, so the session's own commits are there either way.
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const { subtasks } = harness({
+        selected: "acme/api",
+        checkout: CHECKOUT,
+        keepFails: true,
+        kept: { ".": { head: "session-commit" } }
+      });
+      await subtasks.resolve(ctx);
+
+      expect(await subtasks.fail(ctx)).toContain(`\`${BRANCH}\``);
+      expect(warn).toHaveBeenCalledWith(
+        expect.stringContaining(
+          "could not commit what an interrupted session left"
+        ),
+        expect.anything()
+      );
+    } finally {
+      warn.mockRestore();
+    }
+  });
+});
+
+/**
  * A superproject: the clone is the superproject alone, so each submodule is
  * cloned into the worktree with objects of its own, and every repository the
  * session could commit in is put on the branch.
@@ -609,6 +751,28 @@ describe("a worktree of a superproject", () => {
       ...over
     });
   }
+
+  it("keeps a failed subtask's work in every repository, leaving pins out of the superproject's", async () => {
+    const { subtasks, keeps } = superHarness({
+      kept: { core: { head: "core-wip", wip: true } }
+    });
+    await subtasks.resolve(ctx);
+
+    expect(await subtasks.fail(ctx)).toContain("WIP commit");
+    expect(keeps[0]?.env.WORKTREE_KEEP_PATHS?.split("\n")).toEqual([
+      ".",
+      "core",
+      "starter",
+      "vendor/pinned"
+    ]);
+    // Moving a pin is a decision, and the continuing session places each
+    // submodule on the branch by itself.
+    expect(keeps[0]?.env.WORKTREE_KEEP_SUBMODULES?.split("\n")).toEqual([
+      "core",
+      "starter",
+      "vendor/pinned"
+    ]);
+  });
 
   it("clones and fetches every submodule, on its declared branch", async () => {
     const { subtasks, calls } = superHarness();

@@ -403,6 +403,12 @@ type SessionEnd = {
 };
 
 /**
+ * How a session the host stopped exits: Claude Code's answer to the `SIGTERM`
+ * `killRun` in `@dynamicagents/plugins/claude-code` sends.
+ */
+const STOPPED_EXIT = 143;
+
+/**
  * The branch a writing subtask works on: the one it was asked to continue, or its
  * own. Resolved on the parent against the worktrees before anything ran — see
  * `@/workspace/subtask-workspace` — so here it only has to be named.
@@ -503,12 +509,13 @@ export class ClaudeCoderSubagent extends RecipeSubagentHost<Env> {
    * copy to do. Mirrors the base class's own `inflight`.
    *
    * `settled` resolves when that drain has finished unwinding — see
-   * {@link abortRun}, which is the only reason it is recorded.
+   * {@link abortRun}. `yielded` ends its window early — see {@link yieldRun}.
    */
   #inflight?: {
     name: string;
     subtaskId: number;
     settled: Promise<void>;
+    yielded: AbortController;
   };
 
   /**
@@ -692,9 +699,9 @@ export class ClaudeCoderSubagent extends RecipeSubagentHost<Env> {
       };
     }
 
-    const outcome = await this.#drain(name, request.subtaskId, () =>
+    const outcome = await this.#drain(name, request.subtaskId, (signal) =>
       cursor
-        ? this.#session.resume(runner, cursor, sinks)
+        ? this.#session.resume(runner, cursor, { ...sinks, signal })
         : this.#session.start(
             runner,
             request.subtaskId,
@@ -702,7 +709,7 @@ export class ClaudeCoderSubagent extends RecipeSubagentHost<Env> {
             request.type,
             sessionBrief(request, note, writing),
             dir as string,
-            sinks
+            { ...sinks, signal }
           )
     );
 
@@ -753,20 +760,24 @@ export class ClaudeCoderSubagent extends RecipeSubagentHost<Env> {
   async #drain(
     name: string,
     subtaskId: number,
-    run: () => Promise<DrainOutcome>
+    run: (signal: AbortSignal) => Promise<DrainOutcome>
   ): Promise<DrainOutcome> {
     let drained: () => void = () => {};
-    this.#inflight = {
+    const inflight = {
       name,
       subtaskId,
       settled: new Promise<void>((resolve) => {
         drained = resolve;
-      })
+      }),
+      yielded: new AbortController()
     };
+    this.#inflight = inflight;
     try {
-      return await run();
+      return await run(inflight.yielded.signal);
     } finally {
-      this.#inflight = undefined;
+      // Only its own: a drain unwinding after a retry started must not clear
+      // the retry's.
+      if (this.#inflight === inflight) this.#inflight = undefined;
       drained();
     }
   }
@@ -823,14 +834,14 @@ export class ClaudeCoderSubagent extends RecipeSubagentHost<Env> {
             name,
             subtaskId: request.subtaskId
           });
-          const round = await this.#drain(name, request.subtaskId, () =>
+          const round = await this.#drain(name, request.subtaskId, (signal) =>
             this.#session.followUp(
               runner,
               request.subtaskId,
               sessionId,
               warningPrompt(dirty),
               dir,
-              sinks
+              { ...sinks, signal }
             )
           );
           await this.ctx.storage.put(CURSOR_KEY, round.cursor);
@@ -841,9 +852,18 @@ export class ClaudeCoderSubagent extends RecipeSubagentHost<Env> {
     }
     await this.ctx.storage.delete(SESSION_KEY);
 
-    const discarded = dir
-      ? await this.#discard(name, dir, repos)
-      : { files: [], failed: false };
+    /**
+     * Nothing is discarded for a session stopped from outside. It did not choose
+     * what it left, and whoever stopped it decides: a cancel resets the worktree,
+     * and a failed branch keeps it — `fail` in `@/workspace/subtask-workspace`
+     * commits it, and a discard here, on a drain still unwinding when the
+     * branch failed, would race that commit and lose the work it exists to keep.
+     */
+    const stopped = outcome.exitCode === STOPPED_EXIT;
+    const discarded =
+      dir && !stopped
+        ? await this.#discard(name, dir, repos)
+        : { files: [], failed: false };
     const commits = dir ? await this.#commits(name, dir, repos) : [];
     return {
       done: true,
@@ -952,6 +972,20 @@ export class ClaudeCoderSubagent extends RecipeSubagentHost<Env> {
       });
       return await super.abortRun();
     }
+  }
+
+  /**
+   * Give the session back to the retry that replaced this chunk: the window ends
+   * now and returns its cursor, and the session goes on running.
+   *
+   * Core calls this when a chunk step is retried while the attempt it replaces
+   * is still draining — see `chunk-attempts.ts` in `@dynamicagents/core/round`.
+   * The session's stream admits one subscriber, so a drain left running is what
+   * refused every retry until the step had none left. `super.yieldRun()` would
+   * reach only a model call, and this class holds none.
+   */
+  override async yieldRun(): Promise<void> {
+    this.#inflight?.yielded.abort();
   }
 
   /**

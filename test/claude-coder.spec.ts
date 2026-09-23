@@ -576,6 +576,24 @@ describe("waiting for an interrupted session to unwind", () => {
 });
 
 /**
+ * A chunk step retried while the attempt it replaces is still draining. Core asks
+ * that attempt to yield, and what it yields is the drain's window — the session
+ * goes on. The drain itself needs a container, which this pool has none of; the
+ * window ending on the signal is covered where the drain lives, in
+ * `@dynamicagents/plugins/claude-code`.
+ */
+describe("a chunk replaced by a retry of itself", () => {
+  it("has nothing to give back when no session is draining", async () => {
+    const stub = freshSubagent("yield-idle");
+    await expect(
+      runInDurableObject(stub, (instance: ClaudeCoderSubagent) =>
+        instance.yieldRun()
+      )
+    ).resolves.toBeUndefined();
+  });
+});
+
+/**
  * A branch that failed at its step, or a cancel that found no drain in hand,
  * still has to stop the session: core calls `abortExecution` for both, and the
  * session it started is what is left running.

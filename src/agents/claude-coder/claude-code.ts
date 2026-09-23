@@ -63,6 +63,7 @@ export type ClaudeCodeRouting = Pick<
   | "subtaskWorkspace"
   | "releaseSubtaskWorkspace"
   | "abortSubtaskWorkspace"
+  | "failSubtaskWorkspace"
 >;
 
 /**
@@ -82,7 +83,8 @@ export function noWorkspaceRouting(why: string): ClaudeCodeRouting {
     workspaceName: refuse,
     subtaskWorkspace: async () => refuse(),
     releaseSubtaskWorkspace: async () => refuse(),
-    abortSubtaskWorkspace: async () => refuse()
+    abortSubtaskWorkspace: async () => refuse(),
+    failSubtaskWorkspace: async () => refuse()
   };
 }
 

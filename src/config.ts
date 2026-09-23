@@ -301,6 +301,7 @@ export const CLAUDE_CODE_SESSION = {
   | "subtaskWorkspace"
   | "releaseSubtaskWorkspace"
   | "abortSubtaskWorkspace"
+  | "failSubtaskWorkspace"
 >;
 
 /**

@@ -75,7 +75,11 @@ function harness(opts: {
   resetFails?: boolean;
   /** What keeping a failed subtask's work leaves each repository's HEAD at. */
   kept?: Record<string, { head: string; wip?: boolean }>;
-  /** Fail the commit that keeps it. */
+  /**
+   * Fail the commit that keeps it. Every repository's HEAD is still reported,
+   * as the script reports them: it carries on past a repository that failed and
+   * exits non-zero at the end.
+   */
   keepFails?: boolean;
 }) {
   const calls: string[] = [];

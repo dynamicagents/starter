@@ -403,6 +403,12 @@ type SessionEnd = {
 };
 
 /**
+ * How a session the host stopped exits: Claude Code's answer to the `SIGTERM`
+ * `killRun` in `@dynamicagents/plugins/claude-code` sends.
+ */
+const STOPPED_EXIT = 143;
+
+/**
  * The branch a writing subtask works on: the one it was asked to continue, or its
  * own. Resolved on the parent against the worktrees before anything ran — see
  * `@/workspace/subtask-workspace` — so here it only has to be named.
@@ -846,9 +852,18 @@ export class ClaudeCoderSubagent extends RecipeSubagentHost<Env> {
     }
     await this.ctx.storage.delete(SESSION_KEY);
 
-    const discarded = dir
-      ? await this.#discard(name, dir, repos)
-      : { files: [], failed: false };
+    /**
+     * Nothing is discarded for a session stopped from outside. It did not choose
+     * what it left, and whoever stopped it decides: a cancel resets the worktree,
+     * and a failed branch keeps it — `fail` in `@/workspace/subtask-workspace`
+     * commits it, and a discard here, on a drain still unwinding when the
+     * branch failed, would race that commit and lose the work it exists to keep.
+     */
+    const stopped = outcome.exitCode === STOPPED_EXIT;
+    const discarded =
+      dir && !stopped
+        ? await this.#discard(name, dir, repos)
+        : { files: [], failed: false };
     const commits = dir ? await this.#commits(name, dir, repos) : [];
     return {
       done: true,

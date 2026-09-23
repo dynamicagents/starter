@@ -297,7 +297,9 @@ export function keptWorkNote(branch: string, wip: boolean): string {
 /**
  * Commit what an interrupted session left uncommitted, in each repository listed,
  * and say where each one's branch now is — path, HEAD, and `wip` where this
- * committed.
+ * committed. Every repository is reported even when one fails, and the command
+ * fails after: a commit the session made is still there to name when the one
+ * made for it could not be.
  *
  * **Waits for the session's processes to leave the worktree first**, because
  * `stopSession` delivers `SIGTERM` and returns: a commit taken while the session
@@ -316,6 +318,7 @@ export function keptWorkNote(branch: string, wip: boolean): string {
  */
 const KEEP_INTERRUPTED = `waited=0
 busy=""
+failed=""
 while [ "$waited" -lt ${KEEP_WAIT_SECONDS} ]; do
   busy=""
   for p in /proc/[0-9]*; do
@@ -339,16 +342,21 @@ while IFS= read -r path; do
 $WORKTREE_KEEP_SUBMODULES
 SUBS
   fi
-  git -C "$repo" add -A -- "$@" || exit 1
   wip=""
-  if ! git -C "$repo" diff --cached --quiet; then
-    git -C "$repo" commit --no-verify -q -m "$WIP_MESSAGE" || exit 1
-    wip="wip"
+  if ! git -C "$repo" add -A -- "$@"; then
+    failed=1
+  elif ! git -C "$repo" diff --cached --quiet; then
+    if git -C "$repo" commit --no-verify -q -m "$WIP_MESSAGE"; then
+      wip="wip"
+    else
+      failed=1
+    fi
   fi
   printf '%s\t%s\t%s\n' "$path" "$(git -C "$repo" rev-parse HEAD)" "$wip"
 done <<EOF
 $WORKTREE_KEEP_PATHS
-EOF`;
+EOF
+[ -z "$failed" ]`;
 
 /** What {@link PUT_ON_BRANCH} reports for one repository. */
 interface Placed {

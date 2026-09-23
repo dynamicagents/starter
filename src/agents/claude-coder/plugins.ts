@@ -142,7 +142,8 @@ export const parentPlugins = (host: PluginHost<Env>): AgentPlugin[] => {
     workspaceName: name,
     subtaskWorkspace: subtasks.resolve,
     releaseSubtaskWorkspace: subtasks.release,
-    abortSubtaskWorkspace: subtasks.abort
+    abortSubtaskWorkspace: subtasks.abort,
+    failSubtaskWorkspace: subtasks.fail
   };
   const workspace = () => binding.get(binding.idFromName(name()));
   /** Shared with the workspace object — see `@/workspace/git-identity`. */

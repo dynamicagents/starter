@@ -272,6 +272,84 @@ done <<EOF
 $WORKTREE_REPOS
 EOF`;
 
+/** See {@link KEEP_INTERRUPTED}. */
+const KEEP_WAIT_SECONDS = 30;
+
+/** The commit {@link KEEP_INTERRUPTED} makes, as a person reading the log sees it. */
+const WIP_MESSAGE =
+  "WIP: interrupted session\n\n" +
+  "What the session had not committed when its subtask failed, committed by the " +
+  "host so it is not lost. It may be half-finished: check it before building on it.";
+
+/**
+ * What the delegating model reads about a failed subtask's kept work — core
+ * appends it to the failure.
+ */
+export function keptWorkNote(branch: string, wip: boolean): string {
+  return (
+    `Its work up to that point is kept on \`${branch}\`` +
+    (wip ? ", with what it had not committed in a WIP commit on top." : ".") +
+    ` Delegate again with \`continue\` set to \`${branch}\` to pick up from ` +
+    "there rather than start over."
+  );
+}
+
+/**
+ * Commit what an interrupted session left uncommitted, in each repository listed,
+ * and say where each one's branch now is — path, HEAD, and `wip` where this
+ * committed.
+ *
+ * **Waits for the session's processes to leave the worktree first**, because
+ * `stopSession` delivers `SIGTERM` and returns: a commit taken while the session
+ * is still unwinding races its last writes, and a lock it held is not yet stale.
+ * Only once nothing is left does an `index.lock` mean a git process that died,
+ * which is when it is safe to remove. Run from `/` so this command's own shell is
+ * not one of the processes it waits for. The bound is a ceiling for something
+ * the session started that outlives it — a server — not a measurement; past it
+ * the commit goes ahead around whatever is still running.
+ *
+ * `--no-verify`, because a hook that refuses a half-finished tree would lose the
+ * tree. Submodule pointers are left out of the superproject's commit — moving a
+ * pin is a decision, and the continuing session places each submodule on the
+ * branch by itself — and so is any `node_modules`, which `.gitignore` may not
+ * name.
+ */
+const KEEP_INTERRUPTED = `waited=0
+busy=""
+while [ "$waited" -lt ${KEEP_WAIT_SECONDS} ]; do
+  busy=""
+  for p in /proc/[0-9]*; do
+    case "$(readlink "$p/cwd" 2>/dev/null)" in
+      "$WORKTREE_DIR"|"$WORKTREE_DIR"/*) busy=1; break ;;
+    esac
+  done
+  [ -z "$busy" ] && break
+  sleep 1
+  waited=$((waited + 1))
+done
+while IFS= read -r path; do
+  [ -n "$path" ] || continue
+  repo="$WORKTREE_DIR/$path"
+  [ -n "$busy" ] || rm -f "$repo/.git/index.lock"
+  set -- . ':(exclude,glob)**/node_modules/**'
+  if [ "$path" = "." ]; then
+    while IFS= read -r sub; do
+      [ -n "$sub" ] && set -- "$@" ":(exclude)$sub"
+    done <<SUBS
+$WORKTREE_KEEP_SUBMODULES
+SUBS
+  fi
+  git -C "$repo" add -A -- "$@" || exit 1
+  wip=""
+  if ! git -C "$repo" diff --cached --quiet; then
+    git -C "$repo" commit --no-verify -q -m "$WIP_MESSAGE" || exit 1
+    wip="wip"
+  fi
+  printf '%s\t%s\t%s\n' "$path" "$(git -C "$repo" rev-parse HEAD)" "$wip"
+done <<EOF
+$WORKTREE_KEEP_PATHS
+EOF`;
+
 /** What {@link PUT_ON_BRANCH} reports for one repository. */
 interface Placed {
   path: string;
@@ -301,6 +379,11 @@ export interface SubtaskWorkspaces {
   release(ctx: { taskId: string; subtaskId: number }): Promise<void>;
   /** The subtask was cut short: stop it and discard what it committed. */
   abort(ctx: { taskId: string; subtaskId: number }): Promise<void>;
+  /**
+   * The Workflow gave up on the subtask: stop it and keep what it did, answering
+   * where — or nothing, when it did nothing.
+   */
+  fail(ctx: { taskId: string; subtaskId: number }): Promise<string | undefined>;
 }
 
 export function subtaskWorkspaces(config: {
@@ -735,6 +818,80 @@ export function subtaskWorkspaces(config: {
         repos: row.repos.map((repo) => ({ ...repo, tip: repo.start })),
         usedAt: now()
       });
+    },
+
+    /**
+     * Keep what a failed subtask did, where a `continue` will find it.
+     *
+     * The opposite of {@link abort}, and on purpose: a step that ran out of
+     * retries says nothing about the session, and the ones lost that way were
+     * healthy. So nothing is reset, and what the session had not committed is
+     * committed for it — a `continue` places the worktree with `checkout -f` and
+     * `clean`, and a worktree whose tips never moved from their base is free,
+     * so an uncommitted edit would otherwise go with the next subtask to claim
+     * the slot.
+     *
+     * The row stays live: `release` runs next on the same path, reads the tips
+     * this left, and holds the worktree on them.
+     */
+    async fail(ctx): Promise<string | undefined> {
+      const row = liveRow(ctx);
+      if (!row) return undefined;
+      const name = nameOf(row);
+      try {
+        await config.stopSession(name, ctx.subtaskId);
+      } catch (err) {
+        console.warn(
+          `[${config.label}] could not stop a session to keep its work`,
+          {
+            slot: row.slot,
+            err: String(err)
+          }
+        );
+      }
+      if (!row.ready || !row.dir || !row.branch) return undefined;
+      const paths = row.repos.map((repo) => repo.path);
+      const kept = await config.exec(
+        KEEP_INTERRUPTED,
+        {
+          cwd: "/",
+          env: {
+            WORKTREE_DIR: row.dir,
+            WORKTREE_KEEP_PATHS: paths.join("\n"),
+            WORKTREE_KEEP_SUBMODULES: paths
+              .filter((path) => path !== ".")
+              .join("\n"),
+            WIP_MESSAGE
+          }
+        },
+        name
+      );
+      if (!kept.success) {
+        // Nothing was reset, so the worktree holds whatever the session left;
+        // only an uncommitted edit is at risk, and only if the slot is freed.
+        console.warn(
+          `[${config.label}] could not commit what an interrupted session left`,
+          { slot: row.slot, stderr: kept.stderr.trim().slice(0, 500) }
+        );
+      }
+      const heads = new Map(
+        kept.stdout
+          .split("\n")
+          .filter(Boolean)
+          .map((line) => {
+            const [path = "", head = "", wip = ""] = line.split("\t");
+            return [path, { head, wip: wip === "wip" }] as const;
+          })
+      );
+      const moved = row.repos.filter((repo) => {
+        const head = heads.get(repo.path)?.head;
+        return head !== undefined && head !== "" && head !== repo.start;
+      });
+      if (moved.length === 0) return undefined;
+      return keptWorkNote(
+        row.branch,
+        moved.some((repo) => heads.get(repo.path)?.wip)
+      );
     }
   };
 }

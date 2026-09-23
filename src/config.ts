@@ -179,8 +179,26 @@ export const CODER_CONFIG: CoreConfigOverrides = {
  *
  * Inheriting the coder's number rather than restating it is what keeps a value
  * this consequential from being written down twice.
+ *
+ * **The model pair is inverted against {@link MODEL}, and only here.** The parent
+ * round does no work of its own — it reads diffs, decides what to delegate and
+ * ends the round with a control tool — so every turn it spends is a decision
+ * about a container boot and a Claude Code session, and a round that delegates
+ * the wrong subtask is paid for at that price rather than a retry's. The flash
+ * model is the second attempt. `PROACTIVE_CONFIG` is the other departure from
+ * the shared pair, for a different reason its own comment gives.
+ *
+ * `reasoningEffort` stays at the inherited `high`, which is core's ceiling —
+ * `ModelConfig.reasoningEffort` has no level above it.
  */
-export const CLAUDE_CODER_CONFIG: CoreConfigOverrides = { ...CODER_CONFIG };
+export const CLAUDE_CODER_CONFIG: CoreConfigOverrides = {
+  ...CODER_CONFIG,
+  model: {
+    ...MODEL,
+    chatModelId: "@cf/zai-org/glm-5.3",
+    fallbackChatModelId: "@cf/zai-org/glm-5.3-flash"
+  }
+};
 
 /**
  * What bounds one Claude Code session — and **this is the whole list**.

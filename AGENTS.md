@@ -43,6 +43,8 @@ a type-only import, because the next person makes it a value import.
 ## Adding and removing agents
 
 Scaffolding an agent belongs to `npm create dynamicagents`, not to a script here.
+Deleting one never edits a deployed migration tag: its Durable Object class goes into
+`deleted_classes` in a new one — the `migrations` comments in `wrangler.jsonc` say why.
 
 **A tenant id is a public identifier.** A gatekeeper registers against it and it rides
 in a JWT claim, so renaming one is a re-registration, not a refactor.

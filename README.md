@@ -376,6 +376,10 @@ Scaffolding an agent is moving to
 `npm create dynamicagents@latest agent`. It is a work in progress; follow it at
 [dynamicagents.dev](https://dynamicagents.dev).
 
+Deleting one never edits a migration tag you have deployed: its Durable Object class
+goes into `deleted_classes` in a new tag. The `migrations` comments in
+[`wrangler.jsonc`](wrangler.jsonc) say why.
+
 ---
 
 ## What runs in CI

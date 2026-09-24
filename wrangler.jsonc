@@ -249,7 +249,21 @@
       {
         "class_name": "ClaudeCoderWorkspaceDO",
         "name": "CLAUDE_CODER_WORKSPACE"
-      }
+      },
+
+      // Not an agent, and not optional. Core files every subagent note on the
+      // Task's transcript and posts a link instead of the note, so an agent
+      // Durable Object that starts without this binding throws at `onStart` —
+      // core's `@dynamicagents/core/artifacts` owns the reasoning and the
+      // error names the lines. The class is core's own, re-exported unchanged
+      // from src/index.ts, and one object serves the whole deployment: a
+      // reader arrives holding a token and nothing else, so the object it
+      // reaches cannot be keyed by task.
+      //
+      // Binding it is half the wiring. The links are served by the delegation
+      // at the top of `fetch` in src/index.ts, and without that one an
+      // artifact URL falls through to routes that know nothing about it.
+      { "class_name": "Artifacts", "name": "ARTIFACTS" }
     ]
   },
   // **A tag is applied once, ever.** Anything appended to a tag you have already
@@ -290,6 +304,13 @@
       // workspace it owns.
       "tag": "v5",
       "new_sqlite_classes": ["ClaudeCoderAgent", "ClaudeCoderWorkspaceDO"]
+    },
+    {
+      // Core's class rather than one of ours, and it still needs a tag here:
+      // a migration is a property of the deployment that binds the class, not
+      // of the package that wrote it.
+      "tag": "v6",
+      "new_sqlite_classes": ["Artifacts"]
     }
   ],
 

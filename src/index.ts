@@ -62,7 +62,7 @@ export { ClaudeCoderWorkflow } from "./agents/claude-coder/workflow";
  * card, Durable Object, Workflow. That declaration is what is mounted here *and*
  * what the agent's Workflow resolves its DO stub from, so the two can never
  * address different objects. Adding an agent is one file plus a line below plus
- * its wrangler bindings; `npm run agent:new <tenant>` does all of it.
+ * its wrangler bindings.
  *
  * A tenant rather than a path prefix, and one signing key rather than one per
  * agent, both because the AgentCard lives at a **well-known URI** — RFC 8615

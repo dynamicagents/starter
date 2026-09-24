@@ -5,8 +5,8 @@
 Zero-trust A2A, durable task lifecycle, delegation to isolated subagents, episodic
 memory. Clone it, generate keys, deploy.
 
-It ships **several example agents in one Worker** — grow the one you want, and
-`npm run agent:remove` the rest. Adding or removing a capability is a single line.
+It ships **several example agents in one Worker** — grow the one you want and
+delete the rest. Adding or removing a capability is a single line.
 
 Everything here is an _example_. The round loop, the durable Subtask rows, the
 subagent execution and the task lifecycle all live in `@dynamicagents/core`, so this
@@ -371,30 +371,14 @@ identity nobody chose. That identity is yours to write.
 
 ## Add or delete an agent
 
-One command each.
+Scaffolding an agent is moving to
+[`create-dynamicagents`](https://github.com/dynamicagents/create-dynamicagents) —
+`npm create dynamicagents@latest agent`. It is a work in progress; follow it at
+[dynamicagents.dev](https://dynamicagents.dev).
 
-```bash
-npm run agent:new demo                 # a delegating round agent
-npm run agent:new watcher --kind single  # a single-turn agent, its own loop
-npm run agent:remove demo
-```
-
-Each edits every place an agent exists — its directory, [`src/index.ts`](src/index.ts),
-[`wrangler.jsonc`](wrangler.jsonc) (DO binding, sqlite migration, workflow binding), and
-[`scripts/verify-isolation.mjs`](scripts/verify-isolation.mjs) — then runs prettier over
-what it touched. `agent:new` then tells you what it cannot decide for you: the config
-entry and the agent's soul.
-
-Do it by hand and a missed edit fails at a different time each: a forgotten DO binding at
-deploy, a forgotten `new_sqlite_classes` entry at the first request, a forgotten
-isolation entry _never_ — it just quietly stops checking that agent.
-
-Add-then-remove returns every file it touched byte-for-byte to where it started, which
-is the test that keeps this honest.
-
-> The signing key and `GATEKEEPER_ORIGINS` are **not** removed: they belong to the
-> deployment, not to any one agent. A secret only the removed agent's plugins needed is
-> yours to drop.
+Deleting one never edits a migration tag you have deployed: its Durable Object class
+goes into `deleted_classes` in a new tag. The `migrations` comments in
+[`wrangler.jsonc`](wrangler.jsonc) say why.
 
 ---
 

@@ -42,20 +42,9 @@ a type-only import, because the next person makes it a value import.
 
 ## Adding and removing agents
 
-```bash
-npm run agent:new <tenant> [--kind round|single]
-npm run agent:remove <tenant>
-```
-
-Never do it by hand. An agent exists in four places — its directory, `src/index.ts`,
-three blocks in `wrangler.jsonc`, and `scripts/verify-isolation.mjs` — and each
-missed one fails at a different time: a forgotten DO binding at deploy, a forgotten
-`new_sqlite_classes` entry at the first request, a forgotten isolation entry
-_never_, because it just stops checking that agent.
-
-Add-then-remove must return all four files byte-for-byte to where they started.
-That round trip is the test that keeps the script honest; run it if you change the
-script.
+Scaffolding an agent belongs to `npm create dynamicagents`, not to a script here.
+Deleting one never edits a deployed migration tag: its Durable Object class goes into
+`deleted_classes` in a new one — the `migrations` comments in `wrangler.jsonc` say why.
 
 **A tenant id is a public identifier.** A gatekeeper registers against it and it rides
 in a JWT claim, so renaming one is a re-registration, not a refactor.

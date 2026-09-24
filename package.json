@@ -27,9 +27,7 @@
     "verify:references": "node scripts/verify-references.mjs",
     "link:local": "node scripts/link-local.mjs",
     "cf": "node scripts/cf.mjs",
-    "prepare": "husky",
-    "agent:new": "node scripts/agent.mjs new",
-    "agent:remove": "node scripts/agent.mjs remove"
+    "prepare": "husky"
   },
   "dependencies": {
     "@a2a-js/sdk": "^1.1.0",

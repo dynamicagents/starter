@@ -271,10 +271,6 @@
   // failure surfaces far from this file — at the first request to the agent, or
   // at deploy with "New version of script does not export class 'X' which is
   // depended on by existing Durable Objects". Always add a new tag.
-  //
-  // This has caught people out three times, including `agent:new` itself, which
-  // appends to the last tag because it cannot know what you have deployed. Check
-  // its edit before you deploy.
   "migrations": [
     {
       "tag": "v1",

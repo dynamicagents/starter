@@ -232,7 +232,7 @@ function branchNote(
   const note = `## Your branch
 
 You are on \`${branch}\`, checked out for you in a worktree nobody else is working in
-while you are.${continues ? " It already holds earlier work on this task: read its log before you start, and build on it." : ""}
+while you are.${continues ? " It already holds earlier work: read its log before you start, and build on it." : ""}
 
 **Commit what you want to keep.** Only commits leave this session — the agent that
 briefed you reviews the commits on this branch and pushes them — and anything left

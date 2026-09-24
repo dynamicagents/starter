@@ -105,8 +105,8 @@ export function subtaskBranch(ctx: {
  * `./subtask-workspace.ts` refuses that one.
  */
 export function isBranchName(branch: string): boolean {
-  // git's own rules for a branch name, plus a leading `-`, which git takes as
-  // an option before it reads a name.
+  // git's own rules for a branch name, and `@` besides: git accepts it, but
+  // `checkout @` reads it as HEAD, so a continue would stay where it is.
   return (
     branch !== "" &&
     branch !== "HEAD" &&

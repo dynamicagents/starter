@@ -7,7 +7,6 @@ import type { CoreConfigOverrides } from "@dynamicagents/core";
 // which checks the shape while keeping the literal types.
 import type { ClaudeCodeConfig } from "@dynamicagents/plugins/claude-code";
 import type { RecallTuning } from "@dynamicagents/plugins/recall";
-import type { TriageTuning } from "@dynamicagents/plugins/triage";
 
 /**
  * Every value this agent tunes, in one file.
@@ -32,12 +31,12 @@ import type { TriageTuning } from "@dynamicagents/plugins/triage";
  * model calls a control tool, and one that answers in prose instead burns the
  * whole budget reaching no ending.
  *
- * The fallback is the primary's **full-size sibling**, not another vendor
- * (`PROACTIVE_CONFIG` replaces it with its own): it buys depth on a round the
- * flash model could not hold together, and gives up independence, since an
- * outage or rate limit is correlated within a family and takes both down. Core
- * refuses only an identical pair — point the fallback at another family if a
- * vendor-wide failure would cost more than a weaker second attempt.
+ * The fallback is the primary's **full-size sibling**, not another vendor: it
+ * buys depth on a round the flash model could not hold together, and gives up
+ * independence, since an outage or rate limit is correlated within a family and
+ * takes both down. Core refuses only an identical pair — point the fallback at
+ * another family if a vendor-wide failure would cost more than a weaker second
+ * attempt.
  *
  * Both must support function calling and tolerate a long system prompt. After
  * changing either, re-read `mainAgentLimits.maxTurns`: a model needing more steps
@@ -171,8 +170,7 @@ export const CF_CODER_CONFIG: CoreConfigOverrides = {
  * ends the round with a control tool — so every turn it spends is a decision
  * about a container boot and a Claude Code session, and a round that delegates
  * the wrong subtask is paid for at that price rather than a retry's. The flash
- * model is the second attempt. `PROACTIVE_CONFIG` is the other departure from
- * the shared pair, for a different reason its own comment gives.
+ * model is the second attempt.
  *
  * `reasoningEffort` stays at the inherited `high`, which is core's ceiling —
  * `ModelConfig.reasoningEffort` has no level above it.
@@ -291,32 +289,6 @@ export const CLAUDE_CODE_SESSION = {
 >;
 
 /**
- * The proactive agent: single-turn, no delegation, so most of the delegation
- * config above is inert for it and left at core's baseline.
- *
- * Its fallback is chosen for **latency rather than depth** — this agent answers
- * in one turn in a live channel, where a fast adequate reply beats a strong one
- * arriving after the conversation moved on. `compactAfterTokens` is far higher
- * because a channel conversation is long and cheap per message, unlike a
- * delegating agent's branch results.
- */
-export const PROACTIVE_CONFIG: CoreConfigOverrides = {
-  model: { ...MODEL, fallbackChatModelId: "@cf/google/gemma-4-26b-a4b-it" },
-  session: {
-    memoryMaxTokens: 1200,
-    compactAfterTokens: 60_000,
-    compactTailTokens: 5_000
-  }
-};
-
-/**
- * The proactive loop's step ceiling — starter-owned, not a `CoreConfig` field.
- * Core ships `AgentLimits` in turns and wall-clock because those are the only
- * currencies both loops agreed on; a single-turn step count is not one of them.
- */
-export const MAX_STEPS = 8;
-
-/**
  * `@dynamicagents/plugins/recall` tuning.
  *
  * The embedding model's output dimension and metric must match the Vectorize
@@ -333,15 +305,3 @@ export const RECALL = {
    */
   metadataTextMax: 2000
 } as const satisfies RecallTuning;
-
-/**
- * `@dynamicagents/plugins/triage` tuning — the proactive agent's pre-turn gate.
- *
- * A small, fast model on purpose: it runs in front of *every* message the agent
- * sees, most of which are not for it, and its verdict is a single boolean.
- */
-export const TRIAGE = {
-  modelId: "@cf/qwen/qwen3-30b-a3b-fp8",
-  historyMessages: 12,
-  messageMaxChars: 500
-} as const satisfies TriageTuning;

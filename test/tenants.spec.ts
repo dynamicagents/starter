@@ -22,7 +22,7 @@ import worker from "@/index";
  * `createA2AWorker` and has nothing to check.
  */
 
-const TENANTS = ["reactive", "proactive", "cf-coder", "claude-coder"] as const;
+const TENANTS = ["reactive", "cf-coder", "claude-coder"] as const;
 
 const get = (path: string) =>
   worker.fetch(new Request(`${AGENT_ORIGIN}${path}`), env);
@@ -203,7 +203,7 @@ describe("tenant isolation", () => {
     // The isolation this design buys, and the thing the audience cannot express
     // — every tenant shares one endpoint and therefore one `aud`, so only the
     // tenant claim separates them.
-    const res = await rpc(sendMessage("proactive"), {
+    const res = await rpc(sendMessage("cf-coder"), {
       authorization: `Bearer ${await tokenFor("reactive")}`
     });
     expect(res.status).toBe(401);

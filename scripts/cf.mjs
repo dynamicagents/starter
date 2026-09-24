@@ -40,7 +40,7 @@
 //   npm run cf -- wf handle-task 27to4pc4w7eo0psa59o
 //   npm run cf -- ai --since 2h
 //   npm run cf -- ai --task <taskId> --all
-//   npm run cf -- ai --agent proactive --phase triage --since 1d
+//   npm run cf -- ai --agent reactive --phase round --since 1d
 //   npm run cf -- ai 01KY4PSY6T1HBA7A2V22NKCFZC
 //   npm run cf -- containers
 //   npm run cf -- GET workflows -q per_page=50

@@ -30,8 +30,6 @@ import path from "node:path";
 
 const root = path.resolve(import.meta.dirname, "..");
 const plugin = (name) => `@dynamicagents/plugins/dist/${name}/`;
-/** A core subpath. `/round` is the delegation engine — opt-in, and its own graph. */
-const core = (name) => `@dynamicagents/core/dist/${name}/`;
 
 /**
  * One agent, its entry points, and what must not be in its graph.
@@ -65,12 +63,7 @@ const AGENTS = [
       "src/agents/reactive/workflow.ts",
       "src/agents/reactive/subagent.ts"
     ],
-    forbidden: [
-      plugin("triage"),
-      plugin("computer"),
-      plugin("repo"),
-      "@cloudflare/computer"
-    ],
+    forbidden: [plugin("computer"), plugin("repo"), "@cloudflare/computer"],
     // Re-baselined when `splitting` was turned on above, not because this agent
     // grew: the old number simply never counted the chunks it reaches through a
     // dynamic `import()`. Measured 3687 KiB the first time it was weighed
@@ -81,32 +74,6 @@ const AGENTS = [
     // "What every agent carries" above — since it imports neither `/alarm` nor
     // `/job` and still carries the scheduler.
     maxBytes: 4_900_000
-  },
-  {
-    name: "proactive",
-    entries: [
-      "src/agents/proactive/agent.ts",
-      "src/agents/proactive/workflow.ts"
-    ],
-    // Also no `/workspace`: this agent never delegates, so no execution ever
-    // needs a durable file store — and `@cloudflare/shell` is a real dependency
-    // to carry for nothing.
-    //
-    // And no `@dynamicagents/core/round`. That is the strongest assertion here: core
-    // ships the whole delegating loop — DAG scheduler, chunked subagent
-    // execution, the repair ladder — behind an opt-in subpath, and an agent that
-    // answers in one turn must not pay a byte for it. If this ever fails, the
-    // root barrel has started re-exporting `/round`.
-    forbidden: [
-      plugin("workspace"),
-      plugin("computer"),
-      plugin("repo"),
-      "@cloudflare/shell",
-      "@cloudflare/computer",
-      core("round")
-    ],
-    // Measured 1909 KiB. See "What every agent carries" above.
-    maxBytes: 2_110_000
   },
   {
     name: "cf-coder",
@@ -121,10 +88,10 @@ const AGENTS = [
       // added only there was neither leak-checked nor size-counted.
       "src/agents/cf-coder/workspace-do.ts"
     ],
-    // No triage, no recall — and no `/workspace`, which is the one
-    // worth stating: the computer plugin is this agent's filesystem, and having
-    // both would hand the model two unrelated ones with no way to tell from a
-    // path which it is addressing.
+    // No recall — and no `/workspace`, which is the one worth stating: the
+    // computer plugin is this agent's filesystem, and having both would hand the
+    // model two unrelated ones with no way to tell from a path which it is
+    // addressing.
     //
     // `/claude-code` is the newest entry and the one doing the most work. Both
     // coders share one workspace base, from
@@ -135,7 +102,6 @@ const AGENTS = [
     // subclass — which would also put an Anthropic credential path in an agent
     // that has no business with one.
     forbidden: [
-      plugin("triage"),
       plugin("recall"),
       plugin("workspace"),
       plugin("claude-code"),
@@ -188,10 +154,10 @@ const AGENTS = [
     // in its `plugins.ts`. No `/workspace` for the same reason as cf-coder: the
     // computer plugin is this agent's filesystem and two would be ambiguous.
     //
-    // No `triage`. Nothing here forbids `/claude-code`, obviously
-    // — this is the one agent that installs it, and cf-coder's entry above is
-    // the other half of that pair.
-    forbidden: [plugin("triage"), plugin("workspace"), "@cloudflare/shell"],
+    // Nothing here forbids `/claude-code`, obviously — this is the one agent
+    // that installs it, and cf-coder's entry above is the other half of that
+    // pair.
+    forbidden: [plugin("workspace"), "@cloudflare/shell"],
     // Sized like cf-coder's, which is the right comparison: same container
     // client, same isomorphic-git, same round loop. What it adds over cf-coder
     // is `/recall` and `/claude-code`, and what it drops is nothing.

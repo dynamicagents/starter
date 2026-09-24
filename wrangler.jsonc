@@ -205,7 +205,7 @@
     "remote": true
   },
 
-  // `@dynamicagents/plugins/recall` — used by reactive and proactive. Must be a
+  // `@dynamicagents/plugins/recall` — used by reactive and claude-coder. Must be a
   // 1024-dim cosine index to match the `@cf/baai/bge-m3` embedding model.
   // Vectorize has no local mode, so tests inject a fake index.
   //   wrangler vectorize create da-starter-recall --dimensions=1024 --metric=cosine
@@ -230,7 +230,6 @@
   "durable_objects": {
     "bindings": [
       { "class_name": "ReactiveAgent", "name": "ReactiveAgent" },
-      { "class_name": "ProactiveAgent", "name": "ProactiveAgent" },
       { "class_name": "CfCoderAgent", "name": "CfCoderAgent" },
       { "class_name": "ClaudeCoderAgent", "name": "ClaudeCoderAgent" },
 
@@ -319,6 +318,12 @@
       // why the class leaving the code is not enough.
       "tag": "v8",
       "deleted_classes": ["ArcPlayerAgent"]
+    },
+    {
+      // The proactive agent's objects. See v4 for why the class leaving the
+      // code is not enough.
+      "tag": "v9",
+      "deleted_classes": ["ProactiveAgent"]
     }
   ],
 
@@ -331,11 +336,6 @@
       "binding": "HANDLE_TASK_WORKFLOW",
       "name": "handle-task",
       "class_name": "HandleTaskWorkflow"
-    },
-    {
-      "binding": "NOTIFY_WORKFLOW",
-      "name": "notify-task",
-      "class_name": "NotifyTaskWorkflow"
     },
     {
       "binding": "CF_CODER_WORKFLOW",

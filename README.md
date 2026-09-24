@@ -58,7 +58,6 @@ Register each agent with your gatekeeper using the **same endpoint** and its own
 | endpoint                    | tenant id      |
 | --------------------------- | -------------- |
 | `https://<your-worker>/a2a` | `reactive`     |
-| `https://<your-worker>/a2a` | `proactive`    |
 | `https://<your-worker>/a2a` | `cf-coder`     |
 | `https://<your-worker>/a2a` | `claude-coder` |
 
@@ -69,9 +68,8 @@ live](#where-the-endpoints-live). Register whatever path this deployment actuall
 > Workers AI agent takes its models from `MODEL` in [`src/config.ts`](src/config.ts),
 > and those are not served on Workers Free. On the free tier, point `MODEL`'s
 > `chatModelId` and `fallbackChatModelId` at models that are, and that support function
-> calling. Then check `PROACTIVE_CONFIG` in the same file: it sets its own
-> `fallbackChatModelId` over `MODEL`'s, and core refuses a fallback identical to the
-> primary.
+> calling. Then check `CLAUDE_CODER_CONFIG` in the same file: it sets its own
+> `chatModelId` and `fallbackChatModelId` rather than inheriting `MODEL`'s.
 
 > **Browser Rendering needs a paid Workers plan.** On the free tier, remove `browser()`
 > from the agents' `plugins.ts` and the `browser` binding from `wrangler.jsonc`.
@@ -100,7 +98,7 @@ export const reactive = defineAgent({
 // src/index.ts — mounted
 createA2AWorker<Env>({
   manifest: hostManifest,
-  agents: [reactive, proactive, cfCoder, claudeCoder]
+  agents: [reactive, cfCoder, claudeCoder]
 });
 ```
 
@@ -164,7 +162,7 @@ tenant-aware card method:
   "jsonrpc": "2.0",
   "id": 1,
   "method": "GetExtendedAgentCard",
-  "params": { "tenant": "proactive" }
+  "params": { "tenant": "reactive" }
 }
 ```
 
@@ -196,25 +194,15 @@ request body, and a token minted for one agent would work against any sibling.
 
 ## The agents
 
-| Agent                                       | What it is                                                              | Why it's here                                                                                    |
-| ------------------------------------------- | ----------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------ |
-| [`reactive/`](src/agents/reactive/)         | Round loop, delegation, subagent execution                              | The flagship                                                                                     |
-| [`proactive/`](src/agents/proactive/)       | Sees every message, decides whether each is for it, answers in one turn | **The second consumer** — the only thing proving core isn't shaped around reactive's assumptions |
-| [`cf-coder/`](src/agents/cf-coder/)         | Clones a repo into a Linux sandbox, changes it, opens a pull request    | Proves a plugin can own a Durable Object and a container without core knowing                    |
-| [`claude-coder/`](src/agents/claude-coder/) | The same, but each subtask is a Claude Code session in the container    | **Proves a subtask need not be a model loop at all** — `executeChunk` is overridden outright     |
+| Agent                                       | What it is                                                           | Why it's here                                                                                |
+| ------------------------------------------- | -------------------------------------------------------------------- | -------------------------------------------------------------------------------------------- |
+| [`reactive/`](src/agents/reactive/)         | Round loop, delegation, subagent execution                           | The flagship                                                                                 |
+| [`cf-coder/`](src/agents/cf-coder/)         | Clones a repo into a Linux sandbox, changes it, opens a pull request | Proves a plugin can own a Durable Object and a container without core knowing                |
+| [`claude-coder/`](src/agents/claude-coder/) | The same, but each subtask is a Claude Code session in the container | **Proves a subtask need not be a model loop at all** — `executeChunk` is overridden outright |
 
 Reactive and both coders are all `RoundAgentBase` from
 [`@dynamicagents/core/round`](https://github.com/dynamicagents/core) and differ in five
-methods each. Proactive extends `DynamicAgent` directly and writes its own loop — it
-imports no part of `/round` at all, and `npm run verify:isolation` asserts that on the
-built graph. Two genuinely different loop shapes on one core.
-
-|             | reactive                                                  | proactive                            |
-| ----------- | --------------------------------------------------------- | ------------------------------------ |
-| bound by    | a mutable `TurnBudget` metered across rounds              | a flat `MAX_STEPS`                   |
-| ends when   | the model calls a control tool (`toolChoice: "required"`) | the model stops, or calls `no_reply` |
-| can decline | no — every round answers or delegates                     | yes, that is the point               |
-| rounds      | many, driven by a Workflow                                | exactly one                          |
+methods each.
 
 ### The two coders need one thing the others do not
 
@@ -406,11 +394,6 @@ that pulled it in. Sizes move with every dependency bump — the ceilings in
 [`scripts/verify-isolation.mjs`](scripts/verify-isolation.mjs) are what CI enforces, and
 raising one is a deliberate act that belongs in the same commit as whatever grew it.
 
-Proactive's `forbidden` list carries `@dynamicagents/core/dist/round/` as well as the
-plugins its siblings install. That is the strongest line in the file: core ships the
-whole delegating loop behind an opt-in subpath, and an agent that answers in one turn
-must not pay a byte for it. It is also why proactive is ~1.5 MiB rather than ~2.5.
-
 It earns its keep: it has caught a real leak — a shared base class living in one agent's
 directory, which dragged that agent's plugins into a sibling's graph that installs none of
 them.
@@ -462,7 +445,7 @@ a deploy actually raises: what did it log, did the workflow finish its steps, an
 the model get asked. Each subcommand prints a digest rather than the raw envelope — `logs`
 a level-tallied timeline, `wf <name> <instance>` per-step pass/fail, `ai <logId>` the
 prompt and reply as text — with `--json` or `--raw` when you want the body. This Worker's
-workflows are `handle-task`, `notify-task`, `cf-coder` and `claude-coder`.
+workflows are `handle-task`, `cf-coder` and `claude-coder`.
 
 The credentials go in `.cf.env`, not `.env`, because they are not bindings: they
 authenticate **you** to the Cloudflare API, not the Worker to anything. Keeping them in
@@ -513,7 +496,6 @@ src/
   workspace/            ← the container-backed workspace both coders share
   agents/
     reactive/           ← definition, plugins, soul, manifest, the `general` plugin
-    proactive/          ← its own loop + workflow, plus the same set
     cf-coder/           ← the same set, plus the `code` subtask type
     claude-coder/       ← the same set, plus a subagent that drives the CLI
 test/

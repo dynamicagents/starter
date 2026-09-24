@@ -5,7 +5,7 @@
 Zero-trust A2A, durable task lifecycle, delegation to isolated subagents, episodic
 memory. Clone it, generate keys, deploy.
 
-It ships **five example agents in one Worker** — grow the one you want, and
+It ships **several example agents in one Worker** — grow the one you want, and
 `npm run agent:remove` the rest. Adding or removing a capability is a single line.
 
 Everything here is an _example_. The round loop, the durable Subtask rows, the
@@ -59,7 +59,6 @@ Register each agent with your gatekeeper using the **same endpoint** and its own
 | --------------------------- | -------------- |
 | `https://<your-worker>/a2a` | `reactive`     |
 | `https://<your-worker>/a2a` | `proactive`    |
-| `https://<your-worker>/a2a` | `arc-player`   |
 | `https://<your-worker>/a2a` | `coder`        |
 | `https://<your-worker>/a2a` | `claude-coder` |
 
@@ -101,7 +100,7 @@ export const reactive = defineAgent({
 // src/index.ts — mounted
 createA2AWorker<Env>({
   manifest: hostManifest,
-  agents: [reactive, proactive, arcPlayer, coder, claudeCoder]
+  agents: [reactive, proactive, coder, claudeCoder]
 });
 ```
 
@@ -201,11 +200,10 @@ request body, and a token minted for one agent would work against any sibling.
 | ------------------------------------------- | ----------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------ |
 | [`reactive/`](src/agents/reactive/)         | Round loop, delegation, subagent execution                              | The flagship                                                                                     |
 | [`proactive/`](src/agents/proactive/)       | Sees every message, decides whether each is for it, answers in one turn | **The second consumer** — the only thing proving core isn't shaped around reactive's assumptions |
-| [`arc-player/`](src/agents/arc-player/)     | Plays ARC-AGI-3 games                                                   | Proves a domain plugin composes without touching anything shared                                 |
 | [`coder/`](src/agents/coder/)               | Clones a repo into a Linux sandbox, changes it, opens a pull request    | Proves a plugin can own a Durable Object and a container without core knowing                    |
 | [`claude-coder/`](src/agents/claude-coder/) | The same, but each subtask is a Claude Code session in the container    | **Proves a subtask need not be a model loop at all** — `executeChunk` is overridden outright     |
 
-Reactive, arc-player and both coders are all `RoundAgentBase` from
+Reactive and both coders are all `RoundAgentBase` from
 [`@dynamicagents/core/round`](https://github.com/dynamicagents/core) and differ in five
 methods each. Proactive extends `DynamicAgent` directly and writes its own loop — it
 imports no part of `/round` at all, and `npm run verify:isolation` asserts that on the
@@ -354,8 +352,9 @@ There is deliberately **no shared plugin list**: a single one would put every pl
 every agent and make the guarantee unmeasurable.
 
 `plugins` takes a host object rather than `env` because a plugin may need more than
-bindings — `arcAgi` needs the DO's storage for its ledger, and `recall` needs the verified
-caller as a **thunk**, since that identity does not exist yet when `onStart` runs.
+bindings — claude-coder's plugins need the DO's storage for their worktree pool, and
+`recall` needs the verified caller as a **thunk**, since that identity does not exist yet
+when `onStart` runs.
 
 ### Writing your own
 
@@ -377,7 +376,7 @@ One command each.
 ```bash
 npm run agent:new demo                 # a delegating round agent
 npm run agent:new watcher --kind single  # a single-turn agent, its own loop
-npm run agent:remove arc-player
+npm run agent:remove demo
 ```
 
 Each edits every place an agent exists — its directory, [`src/index.ts`](src/index.ts),
@@ -394,8 +393,8 @@ Add-then-remove returns every file it touched byte-for-byte to where it started,
 is the test that keeps this honest.
 
 > The signing key and `GATEKEEPER_ORIGINS` are **not** removed: they belong to the
-> deployment, not to any one agent. A secret only one agent's plugins needed —
-> `ARC_API_KEY` — is yours to drop.
+> deployment, not to any one agent. A secret only the removed agent's plugins needed is
+> yours to drop.
 
 ---
 
@@ -409,7 +408,7 @@ npx wrangler deploy --dry-run --outdir dist
 ```
 
 `verify:isolation` is the one that survives a refactor six months from now. This Worker
-deploys as **one bundle containing every agent**, so grepping `dist/` for "arc-agi"
+deploys as **one bundle containing every agent**, so grepping `dist/` for "computer"
 would always find it and prove nothing. Instead each agent's entry is bundled on its own,
 and esbuild's **metafile** — the exact list of modules in the graph, not a string search —
 is checked for plugins that agent does not install:
@@ -428,9 +427,9 @@ plugins its siblings install. That is the strongest line in the file: core ships
 whole delegating loop behind an opt-in subpath, and an agent that answers in one turn
 must not pay a byte for it. It is also why proactive is ~1.5 MiB rather than ~2.5.
 
-It earns its keep: it caught a real leak during this repo's own construction, when the
-shared base class still lived in `agents/reactive/` and arc-player extending it dragged
-`/browser` and `/recall` into a graph that installs neither.
+It earns its keep: it has caught a real leak — a shared base class living in one agent's
+directory, which dragged that agent's plugins into a sibling's graph that installs none of
+them.
 
 ---
 
@@ -479,7 +478,7 @@ a deploy actually raises: what did it log, did the workflow finish its steps, an
 the model get asked. Each subcommand prints a digest rather than the raw envelope — `logs`
 a level-tallied timeline, `wf <name> <instance>` per-step pass/fail, `ai <logId>` the
 prompt and reply as text — with `--json` or `--raw` when you want the body. This Worker's
-workflows are `handle-task`, `arc-handle-task` and `notify-task`.
+workflows are `handle-task`, `notify-task`, `coder` and `claude-coder`.
 
 The credentials go in `.cf.env`, not `.env`, because they are not bindings: they
 authenticate **you** to the Cloudflare API, not the Worker to anything. Keeping them in
@@ -531,7 +530,6 @@ src/
   agents/
     reactive/           ← definition, plugins, soul, manifest, the `general` plugin
     proactive/          ← its own loop + workflow, plus the same set
-    arc-player/         ← definition, plugins, soul, manifest, thin subclasses
     coder/              ← the same set, plus the `code` subtask type
     claude-coder/       ← the same set, plus a subagent that drives the CLI
 test/

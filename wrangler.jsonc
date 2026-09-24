@@ -197,7 +197,7 @@
   // one; container directory snapshots, not a bucket, are the intended fix. See
   // `src/workspace/install-plan.ts`.
 
-  // `@dynamicagents/plugins/browser` — used by reactive and arc-player.
+  // `@dynamicagents/plugins/browser` — used by reactive.
   // NOTE: requires a PAID Workers plan; Browser Rendering is not on the free
   // tier. `remote: true` is required for Quick Actions under `wrangler dev`.
   "browser": {
@@ -222,8 +222,8 @@
   // (`identity.key`), holding that caller's SQLite-backed Session — continuous
   // history plus writable memory.
   //
-  // `ReactiveSubagent` / `ArcPlayerSubagent` are deliberately absent. Each is a
-  // managed facet created beneath ReactiveAgent/ArcPlayerAgent, so it needs no
+  // The subagent classes (`ReactiveSubagent` and its siblings) are deliberately
+  // absent. Each is a managed facet created beneath its agent, so it needs no
   // binding and no `new_sqlite_classes` entry; it only has to be exported from
   // src/index.ts so `ctx.exports` can resolve it by class name. They DO need a
   // test-only binding — see the comment in vitest.config.ts.
@@ -231,7 +231,6 @@
     "bindings": [
       { "class_name": "ReactiveAgent", "name": "ReactiveAgent" },
       { "class_name": "ProactiveAgent", "name": "ProactiveAgent" },
-      { "class_name": "ArcPlayerAgent", "name": "ArcPlayerAgent" },
       { "class_name": "CoderAgent", "name": "CoderAgent" },
       { "class_name": "ClaudeCoderAgent", "name": "ClaudeCoderAgent" },
 
@@ -311,23 +310,24 @@
       // of the package that wrote it.
       "tag": "v6",
       "new_sqlite_classes": ["Artifacts"]
+    },
+    {
+      // The arc-player agent's objects, and the facets beneath them. See v4 for
+      // why the class leaving the code is not enough.
+      "tag": "v7",
+      "deleted_classes": ["ArcPlayerAgent"]
     }
   ],
 
   // Async A2A (accept + notify): the Worker accepts a turn synchronously and
   // hands generation plus the gatekeeper push-notification callback to a durable
-  // Workflow. Reactive and arc-player run the same round loop over different
-  // souls and plugins, so they share one workflow body behind an entrypoint each.
+  // Workflow. The round agents run the same loop over different souls and
+  // plugins, so they share core's workflow body behind an entrypoint each.
   "workflows": [
     {
       "binding": "HANDLE_TASK_WORKFLOW",
       "name": "handle-task",
       "class_name": "HandleTaskWorkflow"
-    },
-    {
-      "binding": "ARC_HANDLE_TASK_WORKFLOW",
-      "name": "arc-handle-task",
-      "class_name": "ArcHandleTaskWorkflow"
     },
     {
       "binding": "NOTIFY_WORKFLOW",
@@ -362,7 +362,6 @@
     "required": [
       "A2A_SIGNING_KEY",
       "GATEKEEPER_ORIGINS",
-      "ARC_API_KEY",
       // Both coders. `GITHUB_TOKEN` needs contents and pull-request write.
       //
       // It is read exclusively inside a workspace object, never crosses an RPC

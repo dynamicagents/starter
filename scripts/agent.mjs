@@ -67,14 +67,14 @@ if (!KINDS.has(kind)) {
   die(`--kind must be 'round' or 'single' (got '${kind}')`);
 }
 
-/** `arc-player` → `ArcPlayer`. The DO class and binding name. */
+/** `claude-coder` → `ClaudeCoder`. The DO class and binding name. */
 const pascal = tenant
   .split("-")
   .map((part) => part[0].toUpperCase() + part.slice(1))
   .join("");
-/** `arc-player` → `ARC_PLAYER`. The workflow binding name. */
+/** `claude-coder` → `CLAUDE_CODER`. The workflow binding name. */
 const screaming = tenant.replace(/-/g, "_").toUpperCase();
-/** `arc-player` → `arcPlayer`. The `definition.ts` export and its import alias. */
+/** `claude-coder` → `claudeCoder`. The `definition.ts` export and its import alias. */
 const camel = pascal[0].toLowerCase() + pascal.slice(1);
 
 /**

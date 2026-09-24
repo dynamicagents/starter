@@ -5,7 +5,7 @@
  * ## What this actually checks, and why it is not the obvious thing
  *
  * This Worker deploys as **one bundle containing every agent**, so grepping
- * `dist/` for "arc-agi" would always find it and prove nothing. The invariant
+ * `dist/` for "computer" would always find it and prove nothing. The invariant
  * that matters is the one a user relies on the moment they delete the agents
  * they don't want: *each agent's graph pulls in only the plugins that agent
  * installed.* So each entry is bundled on its own here, in CI only, and the
@@ -66,7 +66,6 @@ const AGENTS = [
       "src/agents/reactive/subagent.ts"
     ],
     forbidden: [
-      plugin("arc-agi"),
       plugin("triage"),
       plugin("computer"),
       plugin("repo"),
@@ -99,7 +98,6 @@ const AGENTS = [
     // answers in one turn must not pay a byte for it. If this ever fails, the
     // root barrel has started re-exporting `/round`.
     forbidden: [
-      plugin("arc-agi"),
       plugin("workspace"),
       plugin("computer"),
       plugin("repo"),
@@ -109,24 +107,6 @@ const AGENTS = [
     ],
     // Measured 1909 KiB. See "What every agent carries" above.
     maxBytes: 2_110_000
-  },
-  {
-    name: "arc-player",
-    entries: [
-      "src/agents/arc-player/agent.ts",
-      "src/agents/arc-player/subagent.ts"
-    ],
-    // No triage, no browser, no recall: this agent plays games.
-    forbidden: [
-      plugin("triage"),
-      plugin("browser"),
-      plugin("recall"),
-      plugin("computer"),
-      plugin("repo"),
-      "@cloudflare/computer"
-    ],
-    // Measured 3560 KiB. See "What every agent carries" above.
-    maxBytes: 3_940_000
   },
   {
     name: "coder",
@@ -141,7 +121,7 @@ const AGENTS = [
       // added only there was neither leak-checked nor size-counted.
       "src/agents/coder/workspace-do.ts"
     ],
-    // No arc-agi, no triage, no recall — and no `/workspace`, which is the one
+    // No triage, no recall — and no `/workspace`, which is the one
     // worth stating: the computer plugin is this agent's filesystem, and having
     // both would hand the model two unrelated ones with no way to tell from a
     // path which it is addressing.
@@ -155,7 +135,6 @@ const AGENTS = [
     // subclass — which would also put an Anthropic credential path in an agent
     // that has no business with one.
     forbidden: [
-      plugin("arc-agi"),
       plugin("triage"),
       plugin("recall"),
       plugin("workspace"),
@@ -209,15 +188,10 @@ const AGENTS = [
     // in its `plugins.ts`. No `/workspace` for the same reason as the coder: the
     // computer plugin is this agent's filesystem and two would be ambiguous.
     //
-    // No `arc-agi`, no `triage`. Nothing here forbids `/claude-code`, obviously
+    // No `triage`. Nothing here forbids `/claude-code`, obviously
     // — this is the one agent that installs it, and the coder's entry above is
     // the other half of that pair.
-    forbidden: [
-      plugin("arc-agi"),
-      plugin("triage"),
-      plugin("workspace"),
-      "@cloudflare/shell"
-    ],
+    forbidden: [plugin("triage"), plugin("workspace"), "@cloudflare/shell"],
     // Sized like the coder's, which is the right comparison: same container
     // client, same isomorphic-git, same round loop. What it adds over the coder
     // is `/recall` and `/claude-code`, and what it drops is nothing.
@@ -292,7 +266,7 @@ for (const agent of AGENTS) {
         external: EXTERNAL,
         // Required, not cosmetic. The Agents SDK resolves a facet through
         // `ctx.exports[this.constructor.name]`, so a build that minifies class
-        // identifiers turns `ArcPlayerSubagent` into `_a` and the lookup fails at
+        // identifiers turns `ReactiveSubagent` into `_a` and the lookup fails at
         // runtime. Keeping names here also keeps this measurement honest against the
         // real deploy, which does the same.
         keepNames: true,

@@ -15,7 +15,7 @@ import { general } from "./general";
  * tree-shaker's opinion. `npm run verify:isolation` asserts it on the built graph.
  *
  * Each agent in this Worker has its own copy of this file, which is what keeps
- * arc-agi out of the proactive agent's graph. There is deliberately no shared
+ * `/workspace` out of the proactive agent's graph. There is deliberately no shared
  * one: a single list would put every plugin in every agent.
  */
 

@@ -22,13 +22,7 @@ import worker from "@/index";
  * `createA2AWorker` and has nothing to check.
  */
 
-const TENANTS = [
-  "reactive",
-  "proactive",
-  "arc-player",
-  "coder",
-  "claude-coder"
-] as const;
+const TENANTS = ["reactive", "proactive", "coder", "claude-coder"] as const;
 
 const get = (path: string) =>
   worker.fetch(new Request(`${AGENT_ORIGIN}${path}`), env);

@@ -30,7 +30,6 @@ import { createVcr, recordFromEnv } from "@dynamicagents/core/testing/node";
 // per-origin, so the key the gatekeeper pins is too.
 process.env.A2A_SIGNING_KEY ??= JSON.stringify(TEST_AGENT_PRIVATE_JWK);
 process.env.GATEKEEPER_ORIGINS ??= JSON.stringify([GATEKEEPER_ORIGIN]);
-process.env.ARC_API_KEY ??= "test-key";
 // The coder's. Never real: nothing in the suite reaches GitHub — the repo tools
 // are tested against an injected `exec`. It exists only so `secrets.required` is
 // satisfied and the pool stops warning.
@@ -105,10 +104,6 @@ export default defineConfig({
         durableObjects: {
           REACTIVE_SUBAGENT: {
             className: "ReactiveSubagent",
-            useSQLite: true
-          },
-          ARC_PLAYER_SUBAGENT: {
-            className: "ArcPlayerSubagent",
             useSQLite: true
           },
           CODER_SUBAGENT: {

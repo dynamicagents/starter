@@ -13,10 +13,10 @@ import { reactive } from "./definition";
 /**
  * The reactive agent's task workflow.
  *
- * A thin entrypoint over core's `runHandleTask` rather than a copy of it. Two
- * classes exist (this and `ArcHandleTaskWorkflow`) because a wrangler workflow
- * binding names exactly one class and each agent's instances must be its own; the
- * round loop, wave scheduling and delivery underneath are core's.
+ * A thin entrypoint over core's `runHandleTask` rather than a copy of it. Each
+ * round agent has its own class because a wrangler workflow binding names exactly
+ * one class and each agent's instances must be its own; the round loop, wave
+ * scheduling and delivery underneath are core's.
  *
  * `reactive.resolveAgent` is the same declaration `src/index.ts` mounts the tenant
  * with, so the workflow and the tenant can never address different Durable

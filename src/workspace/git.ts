@@ -32,7 +32,7 @@ export function workspaceGit(config: {
    *
    * Typed on the shared base rather than on one agent's class: the three RPCs
    * below are declared there, and naming a concrete subclass would make this
-   * function the coder's alone for no reason a caller could act on.
+   * function cf-coder's alone for no reason a caller could act on.
    */
   binding: DurableObjectNamespace<WorkspaceObjectBase>;
   workspaceName: () => string;

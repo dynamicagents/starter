@@ -234,7 +234,7 @@ describe("a round that may wait", () => {
 
   it("supplies the note core refuses to invent", () => {
     // `buildTurnInstructions` throws when an agent enables deferrals without it,
-    // and the coder does enable them — so a policy missing this fails at DO start
+    // and both coders enable them — so a policy missing this fails at DO start
     // rather than at the round that runs out.
     expect(roundPolicy.deferralsSpentNote).toBeDefined();
   });

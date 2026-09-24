@@ -71,7 +71,7 @@ const PARENT_SANDBOX_CAPABILITY = [
  * Exported because the cancel path in `agent.ts` needs the *same* settings.
  */
 export function container(env: Env, workspaceName: () => string) {
-  return workspaceContainer(env.CODER_WORKSPACE, workspaceName);
+  return workspaceContainer(env.CF_CODER_WORKSPACE, workspaceName);
 }
 
 /**
@@ -91,8 +91,8 @@ export const parentPlugins = (host: PluginHost<Env>): AgentPlugin[] => {
     workspaceName(host.callerKey(), active.get())
   );
   const workspace = () =>
-    host.env.CODER_WORKSPACE.get(
-      host.env.CODER_WORKSPACE.idFromName(
+    host.env.CF_CODER_WORKSPACE.get(
+      host.env.CF_CODER_WORKSPACE.idFromName(
         workspaceName(host.callerKey(), active.get())
       )
     );
@@ -121,7 +121,7 @@ export const parentPlugins = (host: PluginHost<Env>): AgentPlugin[] => {
       // its own environment — so the container never holds the credential at
       // all, in any command, for any length of time.
       git: workspaceGit({
-        binding: host.env.CODER_WORKSPACE,
+        binding: host.env.CF_CODER_WORKSPACE,
         // The same name `config` resolves, and it has to be: a push acting on a
         // different workspace than the container writes into would push whatever
         // that other checkout happened to contain.

@@ -5,21 +5,21 @@ import {
   type RoundPolicy,
   type SubagentClass
 } from "@dynamicagents/core/round";
-import { CODER_CONFIG } from "@/config";
-import { coder } from "./definition";
+import { CF_CODER_CONFIG } from "@/config";
+import { cfCoder } from "./definition";
 import { roundPolicy } from "@/round-policy";
 import { activeRepo } from "@/workspace/active-repo";
 import { discardWorkingTree, sweepIdleWorkspaces } from "@/workspace/lifecycle";
 import { workspaceName } from "@dynamicagents/plugins/computer";
 import { parentPlugins } from "./plugins";
 import { soulPrompt } from "./soul";
-import { CoderSubagent } from "./subagent";
+import { CfCoderSubagent } from "./subagent";
 
 /** This agent's log prefix and workspace label. */
-const LABEL = "coder";
+const LABEL = "cf-coder";
 
 /**
- * The coder agent.
+ * The cf-coder agent.
  *
  * A delegating round agent like `reactive`: the loop, the durable Subtask rows
  * and the subagent execution are all `@dynamicagents/core/round`, and the model pair
@@ -29,9 +29,9 @@ const LABEL = "coder";
  * below are all lifecycle, not inference: a weekly reclaim sweep for workspaces
  * nothing is calling into, and a working-tree reset when a task is cancelled.
  */
-export class CoderAgent extends RoundAgentBase<Env> {
+export class CfCoderAgent extends RoundAgentBase<Env> {
   protected agentConfig(): CoreConfigOverrides {
-    return { ...CODER_CONFIG, agentName: coder.tenant };
+    return { ...CF_CODER_CONFIG, agentName: cfCoder.tenant };
   }
 
   /**
@@ -53,7 +53,7 @@ export class CoderAgent extends RoundAgentBase<Env> {
   }
 
   protected subagentClass(): SubagentClass {
-    return CoderSubagent;
+    return CfCoderSubagent;
   }
 
   /**
@@ -92,7 +92,7 @@ export class CoderAgent extends RoundAgentBase<Env> {
   async reclaimIdleWorkspaces(): Promise<void> {
     await sweepIdleWorkspaces({
       host: this.pluginHost(),
-      binding: this.env.CODER_WORKSPACE,
+      binding: this.env.CF_CODER_WORKSPACE,
       label: LABEL
     });
   }
@@ -110,7 +110,7 @@ export class CoderAgent extends RoundAgentBase<Env> {
     const active = activeRepo(this.pluginHost());
     const repo = active.get();
     await discardWorkingTree({
-      binding: this.env.CODER_WORKSPACE,
+      binding: this.env.CF_CODER_WORKSPACE,
       name: workspaceName(this.identityKeyOrTask(taskId), repo),
       repo,
       label: LABEL

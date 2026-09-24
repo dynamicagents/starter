@@ -7,9 +7,9 @@ import {
   type NonRecoverableKind,
   type TaskVerdict
 } from "@dynamicagents/core/round";
-import { CODER_CONFIG } from "@/config";
+import { CF_CODER_CONFIG } from "@/config";
 import { failureCopy, roundPolicy } from "@/round-policy";
-import { coder } from "./definition";
+import { cfCoder } from "./definition";
 
 /**
  * What an operator is told when a credential is refused.
@@ -76,8 +76,8 @@ const CREDENTIAL_COPY: Record<NonRecoverableKind, string> = {
   ].join("\n")
 };
 
-/** The coder agent's task workflow: core's orchestration, its own binding. */
-export class CoderWorkflow extends WorkflowEntrypoint<Env, HandleTaskParams> {
+/** The cf-coder agent's task workflow: core's orchestration, its own binding. */
+export class CfCoderWorkflow extends WorkflowEntrypoint<Env, HandleTaskParams> {
   /**
    * No `catch` here, deliberately: `runHandleTask` guards itself. A transient
    * fault that never stops being one would otherwise leave the Task in `working`
@@ -89,8 +89,8 @@ export class CoderWorkflow extends WorkflowEntrypoint<Env, HandleTaskParams> {
     step: WorkflowStep
   ): Promise<TaskVerdict> {
     return await runHandleTask(event.payload, step, {
-      resolveAgent: (identity) => coder.resolveAgent(this.env, identity),
-      config: resolveConfig(CODER_CONFIG),
+      resolveAgent: (identity) => cfCoder.resolveAgent(this.env, identity),
+      config: resolveConfig(CF_CODER_CONFIG),
       policy: roundPolicy,
       // Core owns the signal and the delivery — including the guarded write that
       // doubles as the cancellation check — and asks the host only for the
@@ -106,7 +106,7 @@ export class CoderWorkflow extends WorkflowEntrypoint<Env, HandleTaskParams> {
       failureCopy: (kind, detail) => {
         if (kind === "exhausted" || kind === "unanswered")
           return failureCopy(kind);
-        console.error("[coder] credential refused", {
+        console.error("[cf-coder] credential refused", {
           taskId: event.payload.taskId,
           kind,
           detail
@@ -116,7 +116,7 @@ export class CoderWorkflow extends WorkflowEntrypoint<Env, HandleTaskParams> {
       signingKey: this.env.A2A_SIGNING_KEY,
       // Names this agent in the abandoned-task log line. Every agent shares this
       // Worker and therefore one log stream.
-      label: "coder"
+      label: "cf-coder"
     });
   }
 }

@@ -109,17 +109,17 @@ const AGENTS = [
     maxBytes: 2_110_000
   },
   {
-    name: "coder",
+    name: "cf-coder",
     entries: [
-      "src/agents/coder/agent.ts",
-      "src/agents/coder/workflow.ts",
-      "src/agents/coder/subagent.ts",
+      "src/agents/cf-coder/agent.ts",
+      "src/agents/cf-coder/workflow.ts",
+      "src/agents/cf-coder/subagent.ts",
       // The workspace object is a deployed class of this agent's too, and
       // omitting it left the one assertion below that names `/claude-code`
       // unable to fail: the shared base arrives in this graph anyway (via
       // `workspaceName` in `agent.ts`), but the *subclass* did not, so an import
       // added only there was neither leak-checked nor size-counted.
-      "src/agents/coder/workspace-do.ts"
+      "src/agents/cf-coder/workspace-do.ts"
     ],
     // No triage, no recall — and no `/workspace`, which is the one
     // worth stating: the computer plugin is this agent's filesystem, and having
@@ -179,28 +179,28 @@ const AGENTS = [
       "src/agents/claude-coder/agent.ts",
       "src/agents/claude-coder/workflow.ts",
       "src/agents/claude-coder/subagent.ts",
-      // Included for the reason the coder's is, and more sharply: this subclass
+      // Included for the reason cf-coder's is, and more sharply: this subclass
       // is where the credential-egress gateway is wired, so it is the single
       // file this check most needs to be watching.
       "src/agents/claude-coder/workspace-do.ts"
     ],
-    // The coder's list, minus `recall` — this agent installs it, for the reason
-    // in its `plugins.ts`. No `/workspace` for the same reason as the coder: the
+    // cf-coder's list, minus `recall` — this agent installs it, for the reason
+    // in its `plugins.ts`. No `/workspace` for the same reason as cf-coder: the
     // computer plugin is this agent's filesystem and two would be ambiguous.
     //
     // No `triage`. Nothing here forbids `/claude-code`, obviously
-    // — this is the one agent that installs it, and the coder's entry above is
+    // — this is the one agent that installs it, and cf-coder's entry above is
     // the other half of that pair.
     forbidden: [plugin("triage"), plugin("workspace"), "@cloudflare/shell"],
-    // Sized like the coder's, which is the right comparison: same container
-    // client, same isomorphic-git, same round loop. What it adds over the coder
+    // Sized like cf-coder's, which is the right comparison: same container
+    // client, same isomorphic-git, same round loop. What it adds over cf-coder
     // is `/recall` and `/claude-code`, and what it drops is nothing.
     // Re-baseline against a measurement, never to make a red build green.
     //
     // Measured 5976 KiB, and sized with the same ~8% headroom as the rest: the
-    // tighter margin the coder's comment above describes is what sends a build
+    // tighter margin cf-coder's comment above describes is what sends a build
     // red on the next bump for no real reason. It carries the same 99 KiB of
-    // container client the coder does, for the same reason.
+    // container client cf-coder does, for the same reason.
     maxBytes: 6_610_000
   }
 ];
@@ -237,7 +237,7 @@ for (const agent of AGENTS) {
         // dynamic `import()` is parsed — it still appears in `metafile.inputs`, so
         // the isolation half of this check always saw it — and then dropped from the
         // output. `@cloudflare/computer/git` lazy-loads its bundled isomorphic-git
-        // exactly that way, and wiring it into the coder moved the real deploy by
+        // exactly that way, and wiring it into cf-coder moved the real deploy by
         // ~800 KiB while this script reported no change at all. A ceiling that
         // cannot see the largest thing anyone has added to a bundle is not a
         // ceiling.

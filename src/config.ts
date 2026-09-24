@@ -81,7 +81,7 @@ export const REACTIVE_CONFIG: CoreConfigOverrides = {
 };
 
 /**
- * The coder: long rounds, few subtasks, and a real container underneath.
+ * cf-coder: long rounds, few subtasks, and a real container underneath.
  *
  * Every budget here is larger than reactive's except `maxSubtasks`, and that
  * asymmetry is the point. A coding round is slow — a container boot, an install,
@@ -99,7 +99,7 @@ export const REACTIVE_CONFIG: CoreConfigOverrides = {
  * one on a subscription credential is what `claude-coder` exists for and needs
  * a whole container to do safely; see `src/agents/claude-coder/agent.ts`.
  */
-export const CODER_CONFIG: CoreConfigOverrides = {
+export const CF_CODER_CONFIG: CoreConfigOverrides = {
   model: MODEL,
   // The deferral allowance, and the coding agents are the only ones that have
   // one. It exists for a specific wait: a pull request is opened, a review is
@@ -117,7 +117,7 @@ export const CODER_CONFIG: CoreConfigOverrides = {
   // *checks* are: every round is charged its turns, the one that waits and each
   // one that wakes to look, and a poll is about two. So a review polled every 30
   // seconds for its full fifteen minutes spends about 60 turns, and `maxTurns` is
-  // twice the coder's working budget to carry one such wait beside the work
+  // twice cf-coder's working budget to carry one such wait beside the work
   // rather than instead of it — which makes turns, not `maxDeferrals`, the bound
   // a long run of short polls meets first.
   //
@@ -142,7 +142,7 @@ export const CODER_CONFIG: CoreConfigOverrides = {
 };
 
 /**
- * The claude-coder agent: the coder's shape, with the *work* done elsewhere.
+ * The claude-coder agent: cf-coder's shape, with the *work* done elsewhere.
  *
  * The parent round loop is Workers AI like every other agent here. What is
  * different is that its subtasks do not run core's tool loop at all: each one is
@@ -163,7 +163,7 @@ export const CODER_CONFIG: CoreConfigOverrides = {
  * start, and nothing here rations it: a task that cannot get a container is the
  * signal, and `npm run cf -- containers` is what shows it.
  *
- * Inheriting the coder's number rather than restating it is what keeps a value
+ * Inheriting cf-coder's number rather than restating it is what keeps a value
  * this consequential from being written down twice.
  *
  * **The model pair is inverted against {@link MODEL}, and only here.** The parent
@@ -178,7 +178,7 @@ export const CODER_CONFIG: CoreConfigOverrides = {
  * `ModelConfig.reasoningEffort` has no level above it.
  */
 export const CLAUDE_CODER_CONFIG: CoreConfigOverrides = {
-  ...CODER_CONFIG,
+  ...CF_CODER_CONFIG,
   model: {
     ...MODEL,
     chatModelId: "@cf/zai-org/glm-5.3",

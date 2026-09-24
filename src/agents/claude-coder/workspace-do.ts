@@ -24,7 +24,7 @@ import {
  * The claude-coder's workspace, bound as `CLAUDE_CODER_WORKSPACE`.
  *
  * Everything a workspace does is in `@dynamicagents/plugins/computer`,
- * shared with the coder. Two things are this agent's own, and both exist so that the container
+ * shared with cf-coder. Two things are this agent's own, and both exist so that the container
  * never holds an Anthropic credential — see `./claude-code.ts`:
  *
  * 1. `egress: { mode: "http-gateway" }`, so every outbound request from the
@@ -109,7 +109,7 @@ export class ClaudeCoderWorkspaceDO extends WorkspaceObjectBase {
         mode: "http-gateway",
         gateway: this.#session.egress(this.#credentials)
       },
-      // See the coder's workspace for why the binding is named, not read.
+      // See cf-coder's workspace for why the binding is named, not read.
       git: { tokenBinding: "GITHUB_TOKEN", author: gitIdentity(this.env) }
     };
   }

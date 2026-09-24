@@ -16,7 +16,7 @@ import { ReactiveSubagent } from "./subagent";
  * The reactive agent: the flagship. Round loop, delegation, subagent execution.
  *
  * All of which is `@dynamicagents/core/round`. What is actually *this agent* is the
- * methods below plus `./plugins.ts` and `./soul.ts` — and `../coder/agent.ts`
+ * methods below plus `./plugins.ts` and `./soul.ts` — and `../cf-coder/agent.ts`
  * is the same methods with different answers. If adding
  * a domain to an agent needed more than that, the plugin contract would be
  * wrong.

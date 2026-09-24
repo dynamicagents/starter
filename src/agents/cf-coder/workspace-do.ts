@@ -6,7 +6,7 @@ import { INSTALL_PLAN } from "@/workspace/install-plan";
 import { gitIdentity } from "@/workspace/git-identity";
 
 /**
- * The coder's workspace, bound as `CODER_WORKSPACE`.
+ * cf-coder's workspace, bound as `CF_CODER_WORKSPACE`.
  *
  * Everything this object does lives in `@dynamicagents/plugins/computer`
  * and is shared with `claude-coder`: one Durable Object, one container, one repository, with
@@ -18,11 +18,11 @@ import { gitIdentity } from "@/workspace/git-identity";
  * and a `new_sqlite_classes` entry of its own, or agents share one namespace and
  * one caller's checkout answers for all of them.
  */
-export class CoderWorkspaceDO extends WorkspaceObjectBase {
+export class CfCoderWorkspaceDO extends WorkspaceObjectBase {
   protected workspaceConfig(): WorkspaceObjectConfig {
     return {
-      binding: "CODER_WORKSPACE",
-      label: "coder-workspace",
+      binding: "CF_CODER_WORKSPACE",
+      label: "cf-coder-workspace",
       installPlan: INSTALL_PLAN,
       /**
        * `direct` — the container's own network position, which is the behaviour

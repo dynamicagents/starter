@@ -1,6 +1,6 @@
 # The workspace container, for every agent in this Worker that has one.
 #
-# **One Dockerfile, two images.** `coder` and `claude-coder` both point a
+# **One Dockerfile, two images.** `cf-coder` and `claude-coder` both point a
 # `containers[]` entry here; the second passes a `CLAUDE_CODE_VERSION` build arg
 # (see the block near the end) and gets the CLI, the first does not and stays
 # smaller. Cloudflare builds once per entry, so two entries naming this file are
@@ -135,7 +135,7 @@ RUN if command -v corepack > /dev/null; then \
 # --- Claude Code, for the agent whose subtasks run it -----------------------
 #
 # `image_vars` in wrangler.jsonc is a Docker build arg, so which image gets the
-# CLI is decided per `containers[]` entry rather than per file. The `coder`
+# CLI is decided per `containers[]` entry rather than per file. The `cf-coder`
 # entry passes nothing and this is a no-op; the `claude-coder` entry passes a
 # version.
 #
@@ -167,7 +167,7 @@ RUN if [ -n "$CLAUDE_CODE_VERSION" ]; then \
 # --- The GitHub CLI, for reading a public repository ------------------------
 #
 # Behind its own build arg for the reason Claude Code is: `image_vars` in
-# wrangler.jsonc decides per `containers[]` entry, so the `coder` image passes
+# wrangler.jsonc decides per `containers[]` entry, so the `cf-coder` image passes
 # nothing and stays smaller.
 #
 # **It is unauthenticated, and that is the whole design.** The container holds no

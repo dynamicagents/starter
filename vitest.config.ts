@@ -30,7 +30,7 @@ import { createVcr, recordFromEnv } from "@dynamicagents/core/testing/node";
 // per-origin, so the key the gatekeeper pins is too.
 process.env.A2A_SIGNING_KEY ??= JSON.stringify(TEST_AGENT_PRIVATE_JWK);
 process.env.GATEKEEPER_ORIGINS ??= JSON.stringify([GATEKEEPER_ORIGIN]);
-// The coder's. Never real: nothing in the suite reaches GitHub — the repo tools
+// Both coders'. Never real: nothing in the suite reaches GitHub — the repo tools
 // are tested against an injected `exec`. It exists only so `secrets.required` is
 // satisfied and the pool stops warning.
 //
@@ -106,8 +106,8 @@ export default defineConfig({
             className: "ReactiveSubagent",
             useSQLite: true
           },
-          CODER_SUBAGENT: {
-            className: "CoderSubagent",
+          CF_CODER_SUBAGENT: {
+            className: "CfCoderSubagent",
             useSQLite: true
           },
           CLAUDE_CODER_SUBAGENT: {

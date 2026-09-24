@@ -323,7 +323,7 @@ export const UNANSWERED_COPY =
  * Failure copy every round agent here shares: words for a question nobody
  * answered, and `undefined` for everything else, which `runHandleTask` answers
  * with `copy.taskFailed`. An agent with failures of its own to word handles those
- * first and falls through to this — see `src/agents/coder/workflow.ts`.
+ * first and falls through to this — see `src/agents/cf-coder/workflow.ts`.
  */
 export function failureCopy(kind: TaskFailureKind): string | undefined {
   return kind === "unanswered" ? UNANSWERED_COPY : undefined;

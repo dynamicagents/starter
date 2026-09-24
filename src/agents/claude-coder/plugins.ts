@@ -33,9 +33,9 @@ import { claudeCoder } from "./definition";
 /**
  * The one file you edit to add or remove a capability for this agent.
  *
- * ## Two lists, and the split is sharper here than in the coder
+ * ## Two lists, and the split is sharper here than in cf-coder
  *
- * The coder's parent delegates because a parent that reads files and runs builds
+ * cf-coder's parent delegates because a parent that reads files and runs builds
  * accumulates a session nobody can keep warm. That reason applies here too — and
  * a second one lands on top of it: **the subagent is not running core's loop at
  * all.** A `claude-code` subtask is one `claude -p` session inside the container,
@@ -237,7 +237,7 @@ export const parentPlugins = (host: PluginHost<Env>): AgentPlugin[] => {
       author
     }),
     /**
-     * Episodic memory, which the coder deliberately does without.
+     * Episodic memory, which cf-coder deliberately does without.
      *
      * It earns its place here for a reason specific to this agent: a session is
      * expensive to start and the parent's own context is short, so "we tried

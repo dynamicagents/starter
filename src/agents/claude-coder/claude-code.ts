@@ -16,7 +16,7 @@ export const CREDENTIALS_KEY = "claude-credentials";
  * fail where `gh api repos/…` succeeds.
  *
  * Set here rather than in the image because it is only harmless **behind that
- * gateway**. The Dockerfile is shared with the coder, whose workspace egresses
+ * gateway**. The Dockerfile is shared with cf-coder, whose workspace egresses
  * `direct`: there nothing strips the header, and anything reading `GH_TOKEN` —
  * a repository script, an `npx`'d client — would present this as a credential
  * and get a 401 where it would otherwise have had anonymous access. A session's
@@ -117,8 +117,8 @@ export function claudeCodeConfig(
     /**
      * `restrictToHosts` is deliberately **unset**, which means unrestricted.
      *
-     * Two reasons, and the second is the operational one. First, parity: the
-     * coder's container runs `mode: "direct"` and has always had open egress, so
+     * Two reasons, and the second is the operational one. First, parity:
+     * cf-coder's container runs `mode: "direct"` and has always had open egress, so
      * a restriction here would be a new boundary rather than a preserved one.
      * Second, `http-gateway` intercepts *everything* — so a restriction that
      * forgets a host does not degrade the agent, it stops `npm ci` dead, inside

@@ -79,7 +79,7 @@
   // the plugin rather than at the first tool call, inside a request someone is
   // waiting on.
 
-  // The coder's workspace container, running `computerd` (see Dockerfile).
+  // Each coder's workspace container, running `computerd` (see Dockerfile).
   // Requires a PAID Workers plan.
   //
   // `class_name` is the Durable Object that *owns* the container, one-to-one:
@@ -154,7 +154,7 @@
   // unset, an entry with `max_instances` above one starts at a 10% step.
   "containers": [
     {
-      "class_name": "CoderWorkspaceDO",
+      "class_name": "CfCoderWorkspaceDO",
       "image": "./Dockerfile",
       "instance_type": { "vcpu": 2, "memory_mib": 6144, "disk_mb": 8000 },
       "max_instances": 5,
@@ -184,7 +184,7 @@
   // There is deliberately **no R2 bucket here**, and it is worth saying why,
   // because a `BACKUP_BUCKET` binding looks like an obvious thing to add.
   //
-  // The coder used to snapshot its container's `/workspace` to R2 between tasks
+  // cf-coder used to snapshot its container's `/workspace` to R2 between tasks
   // so a follow-up skipped the clone and the install. It never worked once in
   // production: `@cloudflare/sandbox` mounts that archive **inside the
   // container** over s3fs, so it needs R2 S3-API credentials
@@ -231,7 +231,7 @@
     "bindings": [
       { "class_name": "ReactiveAgent", "name": "ReactiveAgent" },
       { "class_name": "ProactiveAgent", "name": "ProactiveAgent" },
-      { "class_name": "CoderAgent", "name": "CoderAgent" },
+      { "class_name": "CfCoderAgent", "name": "CfCoderAgent" },
       { "class_name": "ClaudeCoderAgent", "name": "ClaudeCoderAgent" },
 
       // Not agents — the workspaces. One object per caller per repository,
@@ -244,7 +244,7 @@
       // Durable Object namespace is keyed by class name: one class would put
       // both agents' checkouts in one namespace, and a caller working on the
       // same repository through both would get one container for both.
-      { "class_name": "CoderWorkspaceDO", "name": "CODER_WORKSPACE" },
+      { "class_name": "CfCoderWorkspaceDO", "name": "CF_CODER_WORKSPACE" },
       {
         "class_name": "ClaudeCoderWorkspaceDO",
         "name": "CLAUDE_CODER_WORKSPACE"
@@ -312,9 +312,16 @@
       "new_sqlite_classes": ["Artifacts"]
     },
     {
+      // The `cf-coder` agent and its workspace start empty: `deleted_classes`
+      // drops every object the deleted pair stored, sessions and checkouts alike.
+      "tag": "v7",
+      "new_sqlite_classes": ["CfCoderAgent", "CfCoderWorkspaceDO"],
+      "deleted_classes": ["CoderAgent", "CoderWorkspaceDO"]
+    },
+    {
       // The arc-player agent's objects, and the facets beneath them. See v4 for
       // why the class leaving the code is not enough.
-      "tag": "v7",
+      "tag": "v8",
       "deleted_classes": ["ArcPlayerAgent"]
     }
   ],
@@ -335,9 +342,9 @@
       "class_name": "NotifyTaskWorkflow"
     },
     {
-      "binding": "CODER_WORKFLOW",
-      "name": "coder",
-      "class_name": "CoderWorkflow"
+      "binding": "CF_CODER_WORKFLOW",
+      "name": "cf-coder",
+      "class_name": "CfCoderWorkflow"
     },
     {
       "binding": "CLAUDE_CODER_WORKFLOW",
@@ -356,7 +363,7 @@
   // Worker reaches Workers AI through the `AI` binding above, which Cloudflare
   // authenticates for the Worker — there is no key to store, rotate or leak, and
   // no AI Gateway token either. See `.env.example`, and `CREDENTIAL_COPY` in
-  // `src/agents/coder/workflow.ts` for what an operator is told when the path
+  // `src/agents/cf-coder/workflow.ts` for what an operator is told when the path
   // refuses a request anyway.
   "secrets": {
     "required": [

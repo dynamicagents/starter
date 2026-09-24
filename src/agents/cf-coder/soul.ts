@@ -1,5 +1,5 @@
 /**
- * The coder agent's soul — its frozen identity and operating rules.
+ * The cf-coder agent's soul — its frozen identity and operating rules.
  *
  * Deliberately shorter and less prescriptive than the other agents' souls: it
  * states the goal, the boundaries, and the bar for "done", and leaves the method

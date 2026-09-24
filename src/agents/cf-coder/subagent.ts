@@ -1,20 +1,20 @@
 import type { AgentPlugin, CoreConfigOverrides } from "@dynamicagents/core";
 import type { PluginHost } from "@dynamicagents/core/host";
 import { RecipeSubagentHost } from "@dynamicagents/core/round";
-import { CODER_CONFIG } from "@/config";
-import { coder } from "./definition";
+import { CF_CODER_CONFIG } from "@/config";
+import { cfCoder } from "./definition";
 import { subagentPlugins } from "./plugins";
 
 /**
- * The coder agent's subagent facet.
+ * The cf-coder agent's subagent facet.
  *
  * Named and exported by design: the framework resolves a facet by
  * `this.constructor.name`. It needs no wrangler binding — only the export from
  * `src/index.ts` — but it does need a test-only one; see `vitest.config.ts`.
  */
-export class CoderSubagent extends RecipeSubagentHost<Env> {
+export class CfCoderSubagent extends RecipeSubagentHost<Env> {
   protected agentConfig(): CoreConfigOverrides {
-    return { ...CODER_CONFIG, agentName: coder.tenant };
+    return { ...CF_CODER_CONFIG, agentName: cfCoder.tenant };
   }
 
   /**

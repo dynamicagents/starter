@@ -5,6 +5,10 @@ import { createAgentRuntime } from "@dynamicagents/core";
 import type { PluginHost } from "@dynamicagents/core/host";
 import type { RecipeExecutionRequest } from "@dynamicagents/core/subtasks";
 import { makeDoHelpers } from "@dynamicagents/core/testing";
+import {
+  ARTIFACTS_OBJECT_NAME,
+  SESSION_TRANSCRIPT_KIND
+} from "@dynamicagents/core/artifacts";
 import type { ClaudeCoderWorkspaceDO } from "@/index";
 import { openWorkspace } from "@dynamicagents/plugins/computer";
 import {
@@ -358,10 +362,12 @@ describe("a session's notes reach the gatekeeper while it works", () => {
 
   it("arms the channel on a chunk that never reaches the base class", async () => {
     await withCapturedChannel(async (instance, posted) => {
+      // A task of its own, because this spec settles its transcript.
+      const taskId = crypto.randomUUID();
       // Fails on the wiring guard, which is fine: arming happens before every
       // early return, because a chunk that refuses still must not leave a
       // previous turn's channel behind it.
-      await instance.executeChunk(request(), 0, {}, undefined, {
+      await instance.executeChunk({ ...request(), taskId }, 0, {}, undefined, {
         push,
         ordinal: 3
       });
@@ -372,11 +378,24 @@ describe("a session's notes reach the gatekeeper while it works", () => {
         }
       ).postProgress({ key: "claude:0", text: "reading the tree" });
 
-      // The label is what tells a reader in a busy thread which branch is
-      // talking — the ordinal comes from the parent's row, not from here.
-      expect(posted).toEqual([
-        { text: "[claude-code 3] reading the tree", key: "claude:0" }
-      ]);
+      // The link, not the note. This chunk never reaches the base, where the
+      // `selfOrigin` argument is read, so the origin has to come from arming.
+      const artifacts = env.ARTIFACTS.get(
+        env.ARTIFACTS.idFromName(ARTIFACTS_OBJECT_NAME)
+      );
+      const token = await artifacts.tokenFor(SESSION_TRANSCRIPT_KIND, taskId);
+      const link = `${new URL(push.jku).origin}/a/${token}`;
+      expect(posted).toEqual([{ text: link, key: "claude:0" }]);
+
+      // The label is what tells a reader which branch is talking — the ordinal
+      // comes from the parent's row, not from here. Settled first so the event
+      // stream ends and the body can be read.
+      await artifacts.settle(token!, "completed");
+      const body = await (
+        await artifacts.fetch(new Request(`${link}/events`))
+      ).text();
+      expect(body).toContain('"label":"claude-code 3"');
+      expect(body).toContain('"text":"reading the tree"');
     });
   });
 

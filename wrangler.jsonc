@@ -313,8 +313,8 @@
       "new_sqlite_classes": ["Artifacts"]
     },
     {
-      // Fresh classes for the `cf-coder` tenant, and the old pair freed as v4
-      // frees `Sandbox`: none of their sessions or checkouts carry over.
+      // The `cf-coder` agent and its workspace start empty: `deleted_classes`
+      // drops every object the deleted pair stored, sessions and checkouts alike.
       "tag": "v7",
       "new_sqlite_classes": ["CfCoderAgent", "CfCoderWorkspaceDO"],
       "deleted_classes": ["CoderAgent", "CoderWorkspaceDO"]

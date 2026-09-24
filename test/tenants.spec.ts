@@ -14,7 +14,7 @@ import {
 import worker from "@/index";
 
 /**
- * Five agents, one Worker, one endpoint.
+ * Several agents, one Worker, one endpoint.
  *
  * This is the file that pins the architecture the rest of the repo assumes.
  * Every assertion here is about a fact that is *only* true because the agents

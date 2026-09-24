@@ -114,7 +114,7 @@ export class CoderWorkflow extends WorkflowEntrypoint<Env, HandleTaskParams> {
         return CREDENTIAL_COPY[kind];
       },
       signingKey: this.env.A2A_SIGNING_KEY,
-      // Names this agent in the abandoned-task log line. Five agents share this
+      // Names this agent in the abandoned-task log line. Every agent shares this
       // Worker and therefore one log stream.
       label: "coder"
     });

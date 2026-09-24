@@ -150,7 +150,8 @@
     {
       "class_name": "CoderWorkspaceDO",
       "image": "./Dockerfile",
-      "instance_type": "standard-3",
+      // Sized as `ClaudeCoderWorkspaceDO`'s, below, which says why.
+      "instance_type": { "vcpu": 2, "memory_mib": 6144, "disk_mb": 8000 },
       "max_instances": 5,
       "rollout_step_percentage": 100
     },
@@ -169,7 +170,10 @@
         "GH_VERSION": "2.101.0",
         "GH_SHA256": "9bca2d1c16825f109907a23307628a2f0698fbf99662b73a5cf0b020293072b8"
       },
-      "instance_type": "standard-3",
+      // Memory and disk are billed as provisioned, CPU as used, so memory is
+      // what to trim. Observed peaks: ~5 GiB memory, ~4 GB disk. More vCPU is
+      // not free: the platform floor is 3 GiB per vCPU.
+      "instance_type": { "vcpu": 2, "memory_mib": 6144, "disk_mb": 8000 },
       "max_instances": 15,
       "rollout_step_percentage": 100
     }

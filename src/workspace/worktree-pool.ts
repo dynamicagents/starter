@@ -96,21 +96,25 @@ export function subtaskBranch(ctx: {
 }
 
 /**
- * Whether a branch is one this agent's subtasks make, and so one `continue` may
- * name. Anything else is a branch nobody here committed on — the default branch
- * above all.
+ * Whether `continue` may name a branch: any git would accept as one — a subtask's
+ * own, or a pull request's head branch somebody else pushed.
+ *
+ * Checked before a worktree is claimed, so a name git would refuse costs a
+ * sentence rather than a clone. Which branch it must not be — a repository's
+ * default — is only known once its remote is fetched, so the placing script in
+ * `./subtask-workspace.ts` refuses that one.
  */
-export function isSubtaskBranch(branch: string): boolean {
-  // The task component is the only free one, so it carries git's own rules for
-  // a ref component: no leading or trailing dot, no `..`, no `.lock` ending, and
-  // none of the characters git or `/repo` refuse.
-  const task = /^claude-coder\/([A-Za-z0-9._-]+)\/\d+$/.exec(branch)?.[1];
+export function isBranchName(branch: string): boolean {
+  // git's own rules for a branch name, and `@` besides: git accepts it, but
+  // `checkout @` reads it as HEAD, so a continue would stay where it is.
   return (
-    task !== undefined &&
-    !task.startsWith(".") &&
-    !task.endsWith(".") &&
-    !task.endsWith(".lock") &&
-    !task.includes("..")
+    branch !== "" &&
+    branch !== "HEAD" &&
+    branch !== "@" &&
+    !/[\x00-\x20\x7f~^:?*[\\]|\.\.|@\{|\/\/|^[-/]|[/.]$/.test(branch) &&
+    branch
+      .split("/")
+      .every((part) => !part.startsWith(".") && !part.endsWith(".lock"))
   );
 }
 

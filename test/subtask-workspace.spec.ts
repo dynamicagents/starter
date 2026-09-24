@@ -490,12 +490,31 @@ describe("handing a worktree to the next subtask", () => {
     expect(pool.rows()[0]?.branch).toBeUndefined();
   });
 
-  it("refuses a `continue` that is not a branch a subtask made", async () => {
-    const { subtasks } = harness({ selected: "acme/api", checkout: CHECKOUT });
+  it("adopts a pull request's branch no subtask made", async () => {
+    const { subtasks, placed } = harness({
+      selected: "acme/api",
+      checkout: CHECKOUT,
+      remote: ["."]
+    });
+
+    await subtasks.resolve({ ...ctx, continue: "feature/artifacts" });
+    expect(placed[0]).toMatchObject({
+      WORKTREE_BRANCH: "feature/artifacts",
+      WORKTREE_MODE: "adopt"
+    });
+  });
+
+  it("refuses a `continue` that is not a branch name, before claiming a worktree", async () => {
+    const { subtasks, calls, pool } = harness({
+      selected: "acme/api",
+      checkout: CHECKOUT
+    });
 
     await expect(
-      subtasks.resolve({ ...ctx, continue: "main" })
-    ).rejects.toThrow(/not a branch a writing subtask made/);
+      subtasks.resolve({ ...ctx, continue: "main..next" })
+    ).rejects.toThrow(/not a branch name/);
+    expect(calls).toEqual([]);
+    expect(pool.rows()).toEqual([]);
   });
 
   it("frees a worktree that never got onto its new branch", async () => {

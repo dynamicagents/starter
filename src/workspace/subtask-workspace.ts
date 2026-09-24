@@ -6,7 +6,7 @@ import type { ActiveCheckout, ActiveRepo } from "./active-repo";
 import { SCRATCH_REPO } from "./scratch";
 import {
   claim,
-  isSubtaskBranch,
+  isBranchName,
   parseWorktreeRepo,
   worktreeRepo,
   type PoolRepo,
@@ -216,7 +216,12 @@ EOF`,
  *   before: that was pushed, or released, or it would not have been free.
  * - `continue` keeps the branch this worktree already holds, and only a
  *   repository that lacks it — a submodule added since — starts one at its base.
- * - `adopt` takes the branch from the remote where it is there.
+ * - `adopt` takes the branch from the remote where it is there — a subtask's
+ *   pushed branch, or the head of a pull request somebody else opened.
+ *
+ * `continue` and `adopt` refuse a repository's default branch, read from the
+ * `origin/HEAD` the fetch before this wrote: a session's commits there could
+ * only reach a pull request under another name, and `/repo` refuses the push.
  *
  * `-f` and `clean -x` because nothing uncommitted in a worktree is kept, and
  * `-e node_modules` because a dependency tree is a mount point `clean` cannot
@@ -226,6 +231,9 @@ EOF`,
 const PUT_ON_BRANCH = `tab="$(printf '\\t')"
 while IFS="$tab" read -r path base; do
   [ -n "$path" ] || continue
+  if [ "$WORKTREE_MODE" != new ] && [ "$(git -C "$path" symbolic-ref --short -q refs/remotes/origin/HEAD 2>/dev/null)" = "origin/$WORKTREE_BRANCH" ]; then
+    echo "$WORKTREE_BRANCH is the default branch of the repository at $path — work goes on a branch a pull request proposes, never onto the one it is proposed against" >&2; exit 1
+  fi
   if [ "$base" = "@pinned" ]; then
     base="$(git rev-parse "HEAD:$path")" || { echo "the superproject records no commit for $path" >&2; exit 1; }
   fi
@@ -686,12 +694,12 @@ export function subtaskWorkspaces(config: {
             "`repo_clone` again before delegating"
         );
       }
-      if (ctx.continue !== undefined && !isSubtaskBranch(ctx.continue)) {
+      if (ctx.continue !== undefined && !isBranchName(ctx.continue)) {
         throw new Error(
           `claude-coder: \`continue\` names ${JSON.stringify(ctx.continue)}, which is ` +
-            "not a branch a writing subtask made. Pass the branch an earlier " +
-            "subtask's report named — `claude-coder/<task>/<n>` — or leave it out " +
-            "to start a new one."
+            "not a branch name. Pass the branch to add to — the one an earlier " +
+            "subtask's report named, or a pull request's head branch — or leave " +
+            "it out to start a new one."
         );
       }
 

@@ -732,7 +732,7 @@ describe("the branch a writing session is told about", () => {
       continues: true
     });
 
-    expect(brief).toMatch(/already holds earlier work on this task/);
+    expect(brief).toMatch(/already holds earlier work:/);
   });
 
   /** A reading session's copy is deleted, so asking it to commit wastes it. */

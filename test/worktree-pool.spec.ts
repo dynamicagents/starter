@@ -9,7 +9,7 @@ import {
   reconcileWorktrees,
   idleWorktrees,
   isFree,
-  isSubtaskBranch,
+  isBranchName,
   parseWorktreeRepo,
   sqlPoolStore,
   subtaskBranch,
@@ -58,29 +58,40 @@ describe("addressing a worktree", () => {
   });
 
   /**
-   * `/repo` refuses a branch that is not a plain name, and `continue` may name
-   * nothing but these — the default branch above all.
+   * `continue` names a branch a subtask made or one somebody pushed for a pull
+   * request, so any branch git takes is accepted here; the default branch is
+   * refused once the remote is read — see `subtask-workspace.spec.ts`.
    */
-  it("derives branches `/repo` accepts, and lets `continue` name only those", () => {
+  it("derives a branch name, and lets `continue` name any branch git accepts", () => {
     const branch = subtaskBranch({ taskId: "task-a", subtaskId: 3 });
     expect(branch).toBe("claude-coder/task-a/3");
-    expect(isSubtaskBranch(branch)).toBe(true);
+    for (const name of [branch, "feature/artifacts", "tiago/fix-1", "a.b/c"]) {
+      expect(isBranchName(name)).toBe(true);
+    }
     for (const other of [
-      "main",
-      "next",
-      "claude-coder/task-a",
-      "claude-coder/../main/1",
-      "claude-coder/t/1.lock",
-      "feature/claude-coder/t/1",
-      // Characters and components git refuses in a ref.
-      "claude-coder/t:bad/1",
-      "claude-coder/t^bad/1",
-      "claude-coder/t~1/1",
-      "claude-coder/.t/1",
-      "claude-coder/t./1",
-      "claude-coder/t.lock/1"
+      "",
+      "HEAD",
+      "@",
+      "-f",
+      "/main",
+      "main/",
+      "a//b",
+      "main.",
+      "a..b",
+      "a@{1}",
+      "a.lock",
+      "a/.hidden",
+      "a b",
+      "a\nb",
+      "a:b",
+      "a^b",
+      "a~1",
+      "a?b",
+      "a*b",
+      "a[b",
+      "a\\b"
     ]) {
-      expect(isSubtaskBranch(other)).toBe(false);
+      expect(isBranchName(other), other).toBe(false);
     }
   });
 });

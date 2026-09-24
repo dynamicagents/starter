@@ -13,7 +13,7 @@ import { parseWorktreeRepo } from "./worktree-pool";
 /**
  * The two things an agent with a workspace owes it, beyond the object itself.
  *
- * Both were written once in `coder/agent.ts` and would otherwise be copied into
+ * Both were written once in `cf-coder/agent.ts` and would otherwise be copied into
  * every sibling — and both are the kind of code that is subtly wrong in a copy:
  * one is a cleanup that must not throw away the expensive thing, the other is a
  * sweep whose whole job is to decide nothing.

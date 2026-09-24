@@ -29,7 +29,7 @@ export const hostManifest: AgentManifest = {
     "the deployment rather than any one agent — call GetExtendedAgentCard with " +
     "a tenant id to fetch an agent's own card. Tenants: `reactive` (delegating " +
     "round loop), `proactive` (decides per message whether to answer), " +
-    "`arc-player` (plays ARC-AGI-3 games), `coder` (implements changes in a " +
+    "`arc-player` (plays ARC-AGI-3 games), `cf-coder` (implements changes in a " +
     "git repository and opens pull requests), `claude-coder` (the same, for " +
     "larger changes, working several independent strands at once).",
   version: "0.1.0",

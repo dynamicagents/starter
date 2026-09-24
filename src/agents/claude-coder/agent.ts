@@ -26,7 +26,7 @@ import { ClaudeCoderSubagent } from "./subagent";
 const LABEL = "claude-coder";
 
 /**
- * The claude-coder agent — the coder's sibling, with a different engine.
+ * The claude-coder agent — cf-coder's sibling, with a different engine.
  *
  * The parent is an ordinary Dynamic Agents round agent on Workers AI: it clones,
  * reviews diffs, commits, pushes and opens pull requests, and it has no shell,
@@ -40,7 +40,7 @@ const LABEL = "claude-coder";
  * answers through the sanctioned client. The harness is the unlock — so the way
  * to reach Opus on a subscription is to run the client, and the way to do that
  * safely is to keep the credential on this side of the container boundary. The
- * overrides below are all lifecycle, exactly as in `../coder/agent.ts`.
+ * overrides below are all lifecycle, exactly as in `../cf-coder/agent.ts`.
  */
 export class ClaudeCoderAgent extends RoundAgentBase<Env> {
   protected agentConfig(): CoreConfigOverrides {
@@ -49,7 +49,7 @@ export class ClaudeCoderAgent extends RoundAgentBase<Env> {
 
   /**
    * The **parent's** list, which is not the subagent's — see `plugins.ts`. The
-   * asymmetry is starker here than in the coder: the subagent's list is one
+   * asymmetry is starker here than in cf-coder: the subagent's list is one
    * entry, because a Claude Code session brings its own tools.
    */
   protected agentPlugins(host: PluginHost<Env>): AgentPlugin[] {
@@ -80,7 +80,7 @@ export class ClaudeCoderAgent extends RoundAgentBase<Env> {
     await super.onStart();
     const existing = await this.listSchedules({ type: "cron" });
     if (!existing.some((s) => s.callback === "reclaimIdleWorkspaces")) {
-      // Sunday 03:00 UTC — an hour after the coder's, which is an hour after
+      // Sunday 03:00 UTC — an hour after cf-coder's, which is an hour after
       // core's, so no two sweeps contend for the same instance.
       await this.schedule("0 3 * * 0", "reclaimIdleWorkspaces", {});
     }
@@ -137,8 +137,8 @@ export class ClaudeCoderAgent extends RoundAgentBase<Env> {
    * Discard a cancelled task's half-finished edits — without discarding the
    * workspace.
    *
-   * The reasoning is on `discardWorkingTree`. It matters more here than for the
-   * coder: a cancelled Claude Code session is stopped mid-turn with `SIGTERM`
+   * The reasoning is on `discardWorkingTree`. It matters more here than for
+   * cf-coder: a cancelled Claude Code session is stopped mid-turn with `SIGTERM`
    * (see `subagent.ts`), so the tree it leaves is whatever it had reached, and
    * the checkout outlives the task.
    *

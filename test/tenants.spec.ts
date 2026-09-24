@@ -26,7 +26,7 @@ const TENANTS = [
   "reactive",
   "proactive",
   "arc-player",
-  "coder",
+  "cf-coder",
   "claude-coder"
 ] as const;
 

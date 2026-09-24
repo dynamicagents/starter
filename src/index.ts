@@ -5,7 +5,7 @@ import { hostManifest } from "./host-manifest";
 import { reactive } from "./agents/reactive/definition";
 import { proactive } from "./agents/proactive/definition";
 import { arcPlayer } from "./agents/arc-player/definition";
-import { coder } from "./agents/coder/definition";
+import { cfCoder } from "./agents/cf-coder/definition";
 import { claudeCoder } from "./agents/claude-coder/definition";
 
 // Durable Objects and Workflows must be exported from the Worker entry so the
@@ -21,9 +21,9 @@ export { ArcPlayerAgent } from "./agents/arc-player/agent";
 export { ArcPlayerSubagent } from "./agents/arc-player/subagent";
 export { ArcHandleTaskWorkflow } from "./agents/arc-player/workflow";
 
-export { CoderAgent } from "./agents/coder/agent";
-export { CoderSubagent } from "./agents/coder/subagent";
-export { CoderWorkflow } from "./agents/coder/workflow";
+export { CfCoderAgent } from "./agents/cf-coder/agent";
+export { CfCoderSubagent } from "./agents/cf-coder/subagent";
+export { CfCoderWorkflow } from "./agents/cf-coder/workflow";
 
 // The workspaces: a Durable Object holding one repository's filesystem in
 // SQLite, paired with the container that mounts it. One class per agent that has
@@ -31,7 +31,7 @@ export { CoderWorkflow } from "./agents/coder/workflow";
 // agents' checkouts in one namespace. Both are thin subclasses of the base in
 // `@dynamicagents/plugins/computer`; `verify:isolation` keeps each out of
 // the bundles that do not install it.
-export { CoderWorkspaceDO } from "./agents/coder/workspace-do";
+export { CfCoderWorkspaceDO } from "./agents/cf-coder/workspace-do";
 export { ClaudeCoderWorkspaceDO } from "./agents/claude-coder/workspace-do";
 
 // Not one of our classes, and **not optional**. `CloudflareContainerBackend`
@@ -78,7 +78,7 @@ export { ClaudeCoderWorkflow } from "./agents/claude-coder/workflow";
  */
 const a2a = createA2AWorker<Env>({
   manifest: hostManifest,
-  agents: [reactive, proactive, arcPlayer, coder, claudeCoder]
+  agents: [reactive, proactive, arcPlayer, cfCoder, claudeCoder]
 });
 
 export default {

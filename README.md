@@ -60,7 +60,7 @@ Register each agent with your gatekeeper using the **same endpoint** and its own
 | `https://<your-worker>/a2a` | `reactive`     |
 | `https://<your-worker>/a2a` | `proactive`    |
 | `https://<your-worker>/a2a` | `arc-player`   |
-| `https://<your-worker>/a2a` | `coder`        |
+| `https://<your-worker>/a2a` | `cf-coder`     |
 | `https://<your-worker>/a2a` | `claude-coder` |
 
 `/a2a` is core's default, not a requirement — see [Where the endpoints
@@ -101,7 +101,7 @@ export const reactive = defineAgent({
 // src/index.ts — mounted
 createA2AWorker<Env>({
   manifest: hostManifest,
-  agents: [reactive, proactive, arcPlayer, coder, claudeCoder]
+  agents: [reactive, proactive, arcPlayer, cfCoder, claudeCoder]
 });
 ```
 
@@ -202,7 +202,7 @@ request body, and a token minted for one agent would work against any sibling.
 | [`reactive/`](src/agents/reactive/)         | Round loop, delegation, subagent execution                              | The flagship                                                                                     |
 | [`proactive/`](src/agents/proactive/)       | Sees every message, decides whether each is for it, answers in one turn | **The second consumer** — the only thing proving core isn't shaped around reactive's assumptions |
 | [`arc-player/`](src/agents/arc-player/)     | Plays ARC-AGI-3 games                                                   | Proves a domain plugin composes without touching anything shared                                 |
-| [`coder/`](src/agents/coder/)               | Clones a repo into a Linux sandbox, changes it, opens a pull request    | Proves a plugin can own a Durable Object and a container without core knowing                    |
+| [`cf-coder/`](src/agents/cf-coder/)         | Clones a repo into a Linux sandbox, changes it, opens a pull request    | Proves a plugin can own a Durable Object and a container without core knowing                    |
 | [`claude-coder/`](src/agents/claude-coder/) | The same, but each subtask is a Claude Code session in the container    | **Proves a subtask need not be a model loop at all** — `executeChunk` is overridden outright     |
 
 Reactive, arc-player and both coders are all `RoundAgentBase` from
@@ -224,7 +224,7 @@ A **container**. Everything else about them — the round loop, the durable Subt
 rows, the model pair — is what every other agent here runs.
 
 The two differ in exactly one place, and it is one level below the agent: what a
-subtask _is_. A `coder` subtask is a Dynamic Agents subagent running core's tool loop
+subtask _is_. A `cf-coder` subtask is a Dynamic Agents subagent running core's tool loop
 inside the container. A `claude-coder` subtask is one `claude -p` session — its
 own loop, its own tools, its own context management — which is why that agent
 overrides `executeChunk` instead of configuring a recipe. Their workspace Durable
@@ -245,7 +245,7 @@ Anthropic says one's 5-hour or weekly bucket is spent.
 Every agent's own round loop, both coders included, runs on Workers AI through
 the `AI` binding. **There is no model credential in this deployment**: the
 binding is authenticated by the platform, so there is nothing to store, nothing
-to rotate, and the coder's container has never seen one. An AI Gateway `401` means
+to rotate, and cf-coder's container has never seen one. An AI Gateway `401` means
 Authenticated Gateway is switched on for the AI Gateway named by `aiGatewayId` —
 switch it off, because the binding does not send a token.
 [`.env.example`](.env.example) is the full list of what a deployment does need.
@@ -315,7 +315,7 @@ Two consequences worth knowing before you debug something surprising:
   leaves the abandoned edits exactly where they were.
 
 Delegated subtasks reach the parent's workspace through a `resolveRuntime` hook —
-`code()`'s for the coder, the `claude-code` plugin's for claude-coder. It runs on
+`code()`'s for cf-coder, the `claude-code` plugin's for claude-coder. It runs on
 the **parent** and puts the workspace name into the runtime state the subagent
 receives. That indirection is required, not stylistic: core gives a subagent
 execution a `callerKey` thunk that **throws**, so a facet cannot derive the name
@@ -532,7 +532,7 @@ src/
     reactive/           ← definition, plugins, soul, manifest, the `general` plugin
     proactive/          ← its own loop + workflow, plus the same set
     arc-player/         ← definition, plugins, soul, manifest, thin subclasses
-    coder/              ← the same set, plus the `code` subtask type
+    cf-coder/           ← the same set, plus the `code` subtask type
     claude-coder/       ← the same set, plus a subagent that drives the CLI
 test/
 scripts/

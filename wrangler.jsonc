@@ -98,7 +98,8 @@
   // full `tsc` runs; it is recorded at 28 s in `src/workspace/install-plan.ts`
   // and was observed taking 3-5 minutes here.
   //
-  // standard-3 is 2 vCPU, 8 GiB, 16 GB disk. Two things want the second core:
+  // Both entries run a custom 2 vCPU, 6 GiB, 8 GB disk. Two things want the
+  // second core:
   //
   // 1. **A reading subtask shares the parent's container.** Several run at once
   //    against one checkout — that is the point of not giving them one each — and
@@ -111,6 +112,11 @@
   // *active usage* — so on CPU-bound work a second core costs the same vCPU-
   // seconds over less wall-clock, and the memory-seconds fall with the duration.
   // Verify that against `npm run cf -- containers` rather than trusting it.
+  //
+  // Memory is what to trim, because it bills for the whole run. Observed peaks
+  // are ~5 GiB and ~4 GB of disk, so 6 GiB is thin headroom: a workspace killed
+  // for memory means raise `memory_mib` first. More cores are not free either —
+  // custom types need at least 3 GiB per vCPU.
   //
   // **Two entries, one Dockerfile.** Cloudflare builds once per entry, so naming
   // the same file twice produces two images — and `image_vars` is a Docker build
@@ -150,7 +156,6 @@
     {
       "class_name": "CoderWorkspaceDO",
       "image": "./Dockerfile",
-      // Sized as `ClaudeCoderWorkspaceDO`'s, below, which says why.
       "instance_type": { "vcpu": 2, "memory_mib": 6144, "disk_mb": 8000 },
       "max_instances": 5,
       "rollout_step_percentage": 100
@@ -170,9 +175,6 @@
         "GH_VERSION": "2.101.0",
         "GH_SHA256": "9bca2d1c16825f109907a23307628a2f0698fbf99662b73a5cf0b020293072b8"
       },
-      // Memory and disk are billed as provisioned, CPU as used, so memory is
-      // what to trim. Observed peaks: ~5 GiB memory, ~4 GB disk. More vCPU is
-      // not free: the platform floor is 3 GiB per vCPU.
       "instance_type": { "vcpu": 2, "memory_mib": 6144, "disk_mb": 8000 },
       "max_instances": 15,
       "rollout_step_percentage": 100

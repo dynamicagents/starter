@@ -17,11 +17,11 @@ import {
   container,
   parentPlugins,
   subagentPlugins
-} from "@/agents/coder/plugins";
-import { CODER_CONFIG } from "@/config";
+} from "@/agents/cf-coder/plugins";
+import { CF_CODER_CONFIG } from "@/config";
 
 /**
- * The coder's tool surface, pinned.
+ * cf-coder's tool surface, pinned.
  *
  * This agent is the one in this Worker whose parent and subagent install
  * **different** plugin lists: the parent orchestrates and reviews with git, a
@@ -44,15 +44,18 @@ const host = (): PluginHost<Env> =>
     env,
     storage: undefined as unknown as DurableObjectStorage,
     callerKey: () => "test-caller",
-    aiGatewayId: CODER_CONFIG.model.aiGatewayId ?? "default"
+    aiGatewayId: CF_CODER_CONFIG.model.aiGatewayId ?? "default"
   }) as PluginHost<Env>;
 
 const parent = () =>
-  createAgentRuntime({ config: CODER_CONFIG, plugins: parentPlugins(host()) });
+  createAgentRuntime({
+    config: CF_CODER_CONFIG,
+    plugins: parentPlugins(host())
+  });
 
 const subagent = () =>
   createAgentRuntime({
-    config: CODER_CONFIG,
+    config: CF_CODER_CONFIG,
     plugins: subagentPlugins(host())
   });
 

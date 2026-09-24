@@ -8,9 +8,9 @@ import { manifest } from "./manifest";
  * `src/index.ts` mounts the tenant from this, and `./workflow.ts` resolves its DO
  * stub from this, so the two cannot address different Durable Objects.
  */
-export const coder = defineAgent({
-  tenant: "coder",
+export const cfCoder = defineAgent({
+  tenant: "cf-coder",
   manifest,
-  agent: (env: Env) => env.CoderAgent,
-  workflow: (env: Env) => env.CODER_WORKFLOW
+  agent: (env: Env) => env.CfCoderAgent,
+  workflow: (env: Env) => env.CF_CODER_WORKFLOW
 });

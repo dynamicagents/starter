@@ -7,7 +7,7 @@ import type { AgentManifest } from "@dynamicagents/core/a2a";
  * since the well-known path carries the deployment's stub card.
  */
 export const manifest: AgentManifest = {
-  name: "Coder Agent",
+  name: "Cloudflare Coder Agent",
   description:
     "A senior software engineer. Give it a repository and a change to make; it clones into a Linux sandbox, implements the change, runs the project's own tests, pushes a work branch and opens a pull request. Replies with the pull request URL. Never commits to a default branch.",
   version: "0.1.0",

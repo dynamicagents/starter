@@ -1,7 +1,7 @@
 import { env } from "cloudflare:workers";
 import { describe, expect, it } from "vitest";
 import { makeDoHelpers } from "@dynamicagents/core/testing";
-import type { CoderWorkspaceDO } from "@/index";
+import type { CfCoderWorkspaceDO } from "@/index";
 
 /**
  * The credentialed git operations, and the one thing about them that can be
@@ -21,8 +21,8 @@ import type { CoderWorkspaceDO } from "@/index";
  * caller is left matching on a string.
  */
 
-const { freshStub: freshWorkspace } = makeDoHelpers<CoderWorkspaceDO>(
-  env.CODER_WORKSPACE
+const { freshStub: freshWorkspace } = makeDoHelpers<CfCoderWorkspaceDO>(
+  env.CF_CODER_WORKSPACE
 );
 
 /**

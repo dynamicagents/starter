@@ -93,9 +93,9 @@ describe("the parent's surface", () => {
   });
 
   /**
-   * Asserted here as well as in `coder-surface.spec.ts`, because this agent's
+   * Asserted here as well as in `cf-coder-surface.spec.ts`, because this agent's
    * `parentPlugins` is its own list: a review tool dropped from it would leave
-   * this agent unable to answer a review while the coder's spec still passed.
+   * this agent unable to answer a review while cf-coder's spec still passed.
    */
   it("can find out whether a review has landed, read it, and answer it", async () => {
     const names = await toolNames();
@@ -148,9 +148,9 @@ describe("the parent's surface", () => {
 
 describe("what the main agent asks a person before doing", () => {
   it("holds nothing at all", async () => {
-    // Over this agent's own `parentPlugins`, which is a separate list from the
-    // coder's — so a rule added on one side is caught whichever side it lands on.
-    // Nothing here is gated; `test/coder-surface.spec.ts` says why.
+    // Over this agent's own `parentPlugins`, which is a separate list from
+    // cf-coder's — so a rule added on one side is caught whichever side it lands on.
+    // Nothing here is gated; `test/cf-coder-surface.spec.ts` says why.
     const surface = await parent().mainAgentSurface({
       session: { getCompactions: async () => [] } as never
     });
@@ -1000,7 +1000,7 @@ describe("who a session commits as", () => {
  * Where `gh`'s placeholder token lives, which is the whole of its safety.
  *
  * It is only harmless behind the sessions' egress gateway, which strips it. In
- * the image it would also reach the coder's container, whose egress is `direct`,
+ * the image it would also reach cf-coder's container, whose egress is `direct`,
  * and be presented to GitHub as a credential by anything that reads `GH_TOKEN`.
  */
 describe("gh's placeholder token", () => {

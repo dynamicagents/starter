@@ -48,7 +48,7 @@ export const DEPENDENCY_TREE_NOTE =
  * The container settings every path into a workspace shares.
  *
  * Exported and shared because a partial copy of this has already caused an
- * outage. The coder's cancellation path used to rebuild its own — without
+ * outage. cf-coder's cancellation path used to rebuild its own — without
  * `shell: "bash"` — so a cancelled task's cleanup ran under a different shell
  * than every other command in the same container. One definition is what stops
  * that, and now it stops it wherever a workspace is reached rather than at each

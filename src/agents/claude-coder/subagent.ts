@@ -666,8 +666,8 @@ export class ClaudeCoderSubagent extends RecipeSubagentHost<Env> {
      *
      * A session's chunk is the whole session, so a chunk boundary is the wrong
      * clock for a note: what it reports is bounded by the drain window, not by
-     * when the session had something to say. `postProgress` labels and posts
-     * each note as the line is parsed, so the thread keeps pace.
+     * when the session had something to say. `postProgress` files each note on
+     * the Task's transcript as the line is parsed, so the link keeps pace.
      *
      * The checkpoint is only safe **because** of that, and the drain enforces
      * the pairing — see `DrainOptions` in `@dynamicagents/plugins/claude-code`,

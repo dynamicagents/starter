@@ -179,9 +179,8 @@ describe("a subtask's notes reach the thread as one link", () => {
           }
         });
 
-      // The origin is the fourth argument and nothing else supplies it. Without
-      // one there is no link to build, and core posts the note verbatim — the
-      // path every other spec in this repo takes, and not the one under test.
+      // The link is built on the origin in `PUSH.jku`. Without one there is no
+      // link to build, and core posts the note verbatim instead.
       await instance.executeChunk(request(), 0, {}, AGENT_ORIGIN, {
         push: PUSH,
         ordinal: ORDINAL

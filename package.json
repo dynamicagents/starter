@@ -2,7 +2,7 @@
   "name": "starter",
   "version": "0.1.0",
   "private": true,
-  "description": "A working, deployable Dynamic Agent on Cloudflare Workers. Five example agents mounted in one Worker, on @dynamicagents/core and @dynamicagents/plugins.",
+  "description": "A working, deployable Dynamic Agent on Cloudflare Workers. Example agents mounted in one Worker, on @dynamicagents/core and @dynamicagents/plugins.",
   "license": "Apache-2.0",
   "author": "Dynamic Agents",
   "homepage": "https://github.com/dynamicagents/starter#readme",

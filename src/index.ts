@@ -4,22 +4,18 @@ import { Artifacts, handleArtifactRoute } from "@dynamicagents/core/artifacts";
 import { hostManifest } from "./host-manifest";
 import { reactive } from "./agents/reactive/definition";
 import { proactive } from "./agents/proactive/definition";
-import { arcPlayer } from "./agents/arc-player/definition";
 import { cfCoder } from "./agents/cf-coder/definition";
 import { claudeCoder } from "./agents/claude-coder/definition";
 
 // Durable Objects and Workflows must be exported from the Worker entry so the
-// runtime can resolve them by class name. `ReactiveSubagent` / `ArcPlayerSubagent`
-// are **facets**: they need no wrangler binding and no `new_sqlite_classes` entry,
-// only this export, so `ctx.exports` can find them.
+// runtime can resolve them by class name. The `*Subagent` classes are **facets**:
+// they need no wrangler binding and no `new_sqlite_classes` entry, only this
+// export, so `ctx.exports` can find them.
 export { ReactiveAgent } from "./agents/reactive/agent";
 export { ReactiveSubagent } from "./agents/reactive/subagent";
 export { HandleTaskWorkflow } from "./agents/reactive/workflow";
 export { ProactiveAgent } from "./agents/proactive/agent";
 export { NotifyTaskWorkflow } from "./agents/proactive/workflow";
-export { ArcPlayerAgent } from "./agents/arc-player/agent";
-export { ArcPlayerSubagent } from "./agents/arc-player/subagent";
-export { ArcHandleTaskWorkflow } from "./agents/arc-player/workflow";
 
 export { CfCoderAgent } from "./agents/cf-coder/agent";
 export { CfCoderSubagent } from "./agents/cf-coder/subagent";
@@ -78,7 +74,7 @@ export { ClaudeCoderWorkflow } from "./agents/claude-coder/workflow";
  */
 const a2a = createA2AWorker<Env>({
   manifest: hostManifest,
-  agents: [reactive, proactive, arcPlayer, cfCoder, claudeCoder]
+  agents: [reactive, proactive, cfCoder, claudeCoder]
 });
 
 export default {

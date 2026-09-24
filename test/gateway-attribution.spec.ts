@@ -8,7 +8,6 @@ import { sessionMessage, type ModelPair } from "@dynamicagents/core/agent";
 import { mockModel } from "@dynamicagents/core/testing";
 import { reactive } from "@/agents/reactive/definition";
 import { proactive } from "@/agents/proactive/definition";
-import { arcPlayer } from "@/agents/arc-player/definition";
 import { cfCoder } from "@/agents/cf-coder/definition";
 import { claudeCoder } from "@/agents/claude-coder/definition";
 import { plugins as proactivePlugins } from "@/agents/proactive/plugins";
@@ -32,7 +31,7 @@ const hostOf = (instance: unknown) =>
   (instance as { pluginHost(): PluginHost<Env> }).pluginHost();
 
 describe("the name each agent's calls are logged under", () => {
-  it.each([reactive, proactive, arcPlayer, cfCoder, claudeCoder])(
+  it.each([reactive, proactive, cfCoder, claudeCoder])(
     "is $tenant's tenant",
     async (definition) => {
       const stub = definition.resolveAgent(env, {
@@ -54,7 +53,6 @@ describe("the name each agent's calls are logged under", () => {
    */
   it.each([
     ["REACTIVE_SUBAGENT", reactive.tenant],
-    ["ARC_PLAYER_SUBAGENT", arcPlayer.tenant],
     ["CF_CODER_SUBAGENT", cfCoder.tenant],
     ["CLAUDE_CODER_SUBAGENT", claudeCoder.tenant]
   ])("is the parent's tenant on %s", async (binding, tenant) => {

@@ -6,7 +6,7 @@
 # smaller. Cloudflare builds once per entry, so two entries naming this file are
 # two images.
 #
-# The agents without a workspace — reactive, proactive, arc-player — never touch
+# The agents without a workspace — reactive, proactive — never touch
 # one. Cloudflare builds this on `wrangler deploy` from the `containers` block in
 # wrangler.jsonc, always for linux/amd64: wrangler passes `--platform` itself and
 # rejects any other value, so never set one here.

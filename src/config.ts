@@ -81,20 +81,6 @@ export const REACTIVE_CONFIG: CoreConfigOverrides = {
 };
 
 /**
- * The arc-player: reactive's loop, but every task is one long game.
- *
- * Higher wall clock and turn ceilings because a play legitimately runs for tens
- * of minutes, and `maxSubtasks` is low because the useful fan-out is one subtask
- * per game named, not eight.
- */
-export const ARC_PLAYER_CONFIG: CoreConfigOverrides = {
-  ...REACTIVE_CONFIG,
-  mainAgentLimits: { maxTurns: 40, maxWallMs: 2 * 60 * 60_000 },
-  subagentLimits: { maxTurns: 60, maxWallMs: 60 * 60_000 },
-  maxSubtasks: 4
-};
-
-/**
  * cf-coder: long rounds, few subtasks, and a real container underneath.
  *
  * Every budget here is larger than reactive's except `maxSubtasks`, and that

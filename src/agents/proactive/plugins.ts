@@ -9,10 +9,10 @@ import type { PluginHost } from "@dynamicagents/core/host";
  * The one file you edit to add or remove a capability for the proactive agent.
  *
  * Its own file, not shared with the reactive agent's, and that separation is what
- * the CI isolation check measures: nothing imported here reaches for `/arc-agi`,
- * so nothing arc-shaped can appear in this agent's module graph. A single shared
- * plugin list would put every plugin in every agent and make the guarantee
- * unmeasurable.
+ * the CI isolation check measures: nothing imported here reaches for a plugin
+ * this agent does not install, so none can appear in its module graph. A single
+ * shared plugin list would put every plugin in every agent and make the
+ * guarantee unmeasurable.
  *
  * Note what it does **not** install: `/workspace`. This agent never delegates, so
  * no subagent execution ever needs a durable file store — and `@cloudflare/shell`

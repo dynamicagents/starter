@@ -120,6 +120,11 @@ export default defineConfig({
   ],
   test: {
     include: ["test/**/*.spec.ts"],
+    // The Think spike is a Worker of its own — a different `main`, different
+    // Durable Objects, a different migration tag — so it boots from
+    // `wrangler.spike.jsonc` under `vitest.spike.config.ts` and cannot run in
+    // this pool, where none of its bindings exist.
+    exclude: ["test/spike/**"],
     // Node realm. Last chance to flush a cassette; each is already written when
     // its test releases it, so this is only a safety net.
     globalSetup: ["@dynamicagents/core/testing/vcr-global-setup"]

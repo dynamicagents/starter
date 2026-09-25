@@ -1,0 +1,61 @@
+/**
+ * The Think migration spike: its own Worker, its own Durable Objects, and
+ * nothing shared with the deployment this repo ships.
+ *
+ * Separate from `wrangler.jsonc` on purpose. The spike replaces the round loop,
+ * the subtask tables and the Workflow with Think's own machinery, so it cannot
+ * live beside the agents that still use them — and its Durable Object classes
+ * must never land in a migration tag of the real deployment, where a tag is
+ * applied once and for ever.
+ *
+ * https://developers.cloudflare.com/workers/wrangler/configuration/
+ */
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "da-think-spike",
+  "main": "src/spike/worker.ts",
+  "compatibility_date": "2026-07-06",
+  "compatibility_flags": ["nodejs_compat"],
+  "workers_dev": true,
+  "observability": { "enabled": true },
+
+  // Every agent reaches Workers AI through this binding, which the platform
+  // authenticates. The spike runs the rule-based model instead whenever
+  // `SPIKE_FAKE_MODEL` is set, which is always on the deployed copy.
+  "ai": { "binding": "AI" },
+
+  "durable_objects": {
+    "bindings": [
+      { "class_name": "SpikeReactive", "name": "SpikeReactive" },
+      // Core's own class, re-exported unchanged. Required rather than optional:
+      // every sub-agent note is filed on the task's transcript, so the agent
+      // object refuses to start without it.
+      { "class_name": "Artifacts", "name": "ARTIFACTS" }
+    ]
+  },
+  // `SpikeGeneral` is deliberately absent. It is a facet created beneath the
+  // agent that dispatched it, so it needs no binding and no class here — only
+  // the export from the Worker entry, so `ctx.exports` can resolve it by name.
+  "migrations": [
+    {
+      "tag": "v1",
+      "new_sqlite_classes": ["SpikeReactive", "Artifacts"]
+    }
+  ],
+
+  "vars": {
+    // The deployed spike takes no real traffic and runs no real model.
+    "SPIKE_FAKE_MODEL": "1"
+  },
+
+  "secrets": {
+    "required": [
+      "A2A_SIGNING_KEY",
+      "GATEKEEPER_ORIGINS",
+      // Gates `/spike/debug/*`. Unset, every debug route 404s — which is the
+      // right default for a Worker on the public internet whose debug routes
+      // read and write task state.
+      "SPIKE_DEBUG_TOKEN"
+    ]
+  }
+}

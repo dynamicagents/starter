@@ -57,17 +57,16 @@ in a JWT claim, so renaming one is a re-registration, not a refactor.
 `saveTask` returns whether the write applied, and `markWorking` returns
 `"ok" | "canceled"`. Read those. Calling `getTask` first and acting second reopens
 a window in which a cancel lands and the gatekeeper still gets a `completed`
-callback — and that is exactly how this repo's proactive agent drifted from its
-sibling. `test/proactive/workflow.spec.ts` pins both.
+callback. Core's round workflow reads them, and its specs pin both; a workflow
+written here has to do the same.
 
 **2. `verify:isolation` is the check that survives a refactor.**
 This Worker deploys as one bundle containing every agent, so grepping `dist/`
 proves nothing. Each agent's entry is bundled alone and esbuild's **metafile** —
 the module list, not a string search — is checked for plugins that agent does not
-install, plus `@dynamicagents/core/dist/round/` for the agent that does not delegate.
+install.
 
-It has caught two real leaks: a shared base class living in one agent's directory,
-and (after the core split) it is what holds proactive at ~1.5 MiB instead of ~2.5.
+It has caught a real leak: a shared base class living in one agent's directory.
 
 ---
 

@@ -181,7 +181,7 @@ describe("a round that may wait", () => {
 
   it("describes the wait only to a round that has one", () => {
     expect(contract(true)).toContain(CHECK_BACK_TOOL_NAME);
-    // The agents without an allowance — reactive, proactive — and
+    // The agent without an allowance — reactive — and
     // any coding round that has spent one. A contract naming a call the round is
     // not handed is a contract inviting a rejected call.
     expect(contract(false)).not.toContain(CHECK_BACK_TOOL_NAME);

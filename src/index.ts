@@ -3,7 +3,6 @@ import { Artifacts, handleArtifactRoute } from "@dynamicagents/core/artifacts";
 
 import { hostManifest } from "./host-manifest";
 import { reactive } from "./agents/reactive/definition";
-import { proactive } from "./agents/proactive/definition";
 import { cfCoder } from "./agents/cf-coder/definition";
 import { claudeCoder } from "./agents/claude-coder/definition";
 
@@ -14,8 +13,6 @@ import { claudeCoder } from "./agents/claude-coder/definition";
 export { ReactiveAgent } from "./agents/reactive/agent";
 export { ReactiveSubagent } from "./agents/reactive/subagent";
 export { HandleTaskWorkflow } from "./agents/reactive/workflow";
-export { ProactiveAgent } from "./agents/proactive/agent";
-export { NotifyTaskWorkflow } from "./agents/proactive/workflow";
 
 export { CfCoderAgent } from "./agents/cf-coder/agent";
 export { CfCoderSubagent } from "./agents/cf-coder/subagent";
@@ -74,7 +71,7 @@ export { ClaudeCoderWorkflow } from "./agents/claude-coder/workflow";
  */
 const a2a = createA2AWorker<Env>({
   manifest: hostManifest,
-  agents: [reactive, proactive, cfCoder, claudeCoder]
+  agents: [reactive, cfCoder, claudeCoder]
 });
 
 export default {

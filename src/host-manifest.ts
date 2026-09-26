@@ -27,8 +27,8 @@ export const hostManifest: AgentManifest = {
   description:
     "Hosts several Dynamic Agents behind one A2A endpoint. This card describes " +
     "the deployment rather than any one agent — call GetExtendedAgentCard with " +
-    "a tenant id to fetch an agent's own card. Tenants: `reactive` (delegating " +
-    "round loop), `cf-coder` (implements changes in a git repository and opens " +
+    "a tenant id to fetch an agent's own card. Tenants: `reactive` (a " +
+    "delegating assistant), `cf-coder` (implements changes in a git repository and opens " +
     "pull requests), `claude-coder` (the same, for larger changes, working " +
     "several independent strands at once).",
   version: "0.1.0",

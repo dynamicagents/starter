@@ -30,7 +30,7 @@
 # `scripts/verify-container-env.mjs` holds it to the installed version.
 #
 # Add to this file deliberately. Every layer is image size, image size is
-# container cold start, and cold start is already the slow part of a round.
+# container cold start, and cold start is already the slow part of a task.
 
 # A single layer over `scratch` holding one file: the 126 MB SEA binary at
 # /usr/local/bin/computerd. Nothing else is in this image, so it is a staging
@@ -62,7 +62,7 @@ FROM docker.io/debian:stable-slim
 #               these are the mount helper and its runtime, not the library
 #               itself. Straight from the upstream recipe; keep them together.
 # ripgrep    — reading an unfamiliar repo is the first thing the agent does, and
-#               `grep -r` across node_modules is how a round runs out of time.
+#               `grep -r` across node_modules is how a turn runs out of time.
 #               It matters more here than it did on a real disk: reads go
 #               through FUSE.
 # xxd        — the model reaches for it unprompted to inspect trailing bytes of a
@@ -77,7 +77,7 @@ FROM docker.io/debian:stable-slim
 # python3       but one transitive dependency that does turns an install into
 #               "gyp ERR! find Python", and that is not a failure the agent can
 #               route around: fixing it means an operator rebuilding and
-#               redeploying this image. ~150 MB to delete a class of dead round.
+#               redeploying this image. ~150 MB to delete a class of dead run.
 # git        — the whole delivery path is clone → commit → push.
 #
 # Node 24, not the reference's 22. Every Dynamic Agents repo pins 24 in `.nvmrc` and
@@ -132,7 +132,7 @@ RUN if command -v corepack > /dev/null; then \
       echo "corepack is not bundled with this Node build — skipping pnpm/yarn shims"; \
     fi
 
-# --- Claude Code, for the agent whose subtasks run it -----------------------
+# --- Claude Code, for the agent whose sub-agents run it ---------------------
 #
 # `image_vars` in wrangler.jsonc is a Docker build arg, so which image gets the
 # CLI is decided per `containers[]` entry rather than per file. The `cf-coder`
@@ -214,7 +214,7 @@ RUN if [ -n "$GH_VERSION" ]; then \
       echo "no GH_VERSION build arg: this image has no GitHub CLI"; \
     fi
 
-# Fail the BUILD, not round three, if the base image stops delivering the
+# Fail the BUILD, not a task, if the base image stops delivering the
 # toolchain. npm ignores `engines` unless a repo opts in, so nothing downstream
 # would tell you.
 RUN node -e "const m=Number(process.versions.node.split('.')[0]); if (m < 24) { console.error('this image needs Node >= 24, PATH resolves to ' + process.execPath + ' at ' + process.versions.node); process.exit(1); }" \
@@ -223,7 +223,7 @@ RUN node -e "const m=Number(process.versions.node.split('.')[0]); if (m < 24) { 
   && git --version \
   && rg --version | head -n1 \
 # The workspace object shells out to this to trust the interception CA, so a
-# base image that stopped shipping it must fail here rather than at round three.
+# base image that stopped shipping it must fail here rather than in a task.
   && command -v update-ca-certificates \
 # The workspace object bind-mounts container disk over node_modules with these;
 # `@dynamicagents/plugins/computer` carries why.
@@ -231,8 +231,8 @@ RUN node -e "const m=Number(process.versions.node.split('.')[0]); if (m < 24) { 
   && test -x /usr/local/bin/computerd
 
 # Everything below exists because tool output lands in a model's context window.
-# `sb_exec` truncates to a byte budget, so every byte spent on an ANSI colour
-# code or an npm progress bar is a byte not spent on the error message.
+# `bash` truncates to a character budget, so every one spent on an ANSI colour
+# code or an npm progress bar is one not spent on the error message.
 #
 # **The COMPUTER_VAR_ prefix is what makes any of it reach a command**, and its
 # absence fails silently. A command spawned by the workspace inherits PATH, HOME,
@@ -292,7 +292,7 @@ ENV COMPUTER_VAR_CI=1 \
 # This is what makes the workspace object's CA install reach the clients that
 # matter. Node ships its own root list and ignores the system one, so
 # `update-ca-certificates` alone leaves `npm ci`, `claude -p` and every
-# `sb_exec node …` failing on an intercepted connection exactly as if nothing
+# `bash` running `node …` failing on an intercepted connection exactly as if nothing
 # had been installed — measured, not assumed.
 #
 # The alternative is `NODE_EXTRA_CA_CERTS`, which cannot be set from here: the

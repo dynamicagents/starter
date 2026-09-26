@@ -1,233 +1,198 @@
 import { describe, it, expect } from "vitest";
 import { env } from "cloudflare:workers";
-import {
-  createAgentRuntime,
-  MAX_TOOL_CALL_MS,
-  TOOL_CALL_GRACE_MS,
-  validateRecipe
-} from "@dynamicagents/core";
-import type { PluginHost } from "@dynamicagents/core/host";
-import {
-  SANDBOX_FAMILY,
-  type ComputerConfig
-} from "@dynamicagents/plugins/computer";
-import { REPO_FAMILY } from "@dynamicagents/plugins/repo";
-import { BROWSER_FAMILY } from "@dynamicagents/plugins/browser";
-import {
-  container,
-  parentPlugins,
-  subagentPlugins
-} from "@/agents/cf-coder/plugins";
-import { CF_CODER_CONFIG } from "@/config";
+import { runInDurableObject } from "cloudflare:test";
+import type { TurnConfig, TurnContext } from "@cloudflare/think";
+import type { ComputerConfig } from "@dynamicagents/plugins/computer";
+import type { ContextConfig } from "agents/context";
+import { CODE } from "@/agents/cf-coder/code";
+import { container } from "@/agents/cf-coder/plugins";
 
 /**
  * cf-coder's tool surface, pinned.
  *
- * This agent is the one in this Worker whose parent and subagent install
- * **different** plugin lists: the parent orchestrates and reviews with git, a
- * browser and read-only eyes on the container, and every edit is delegated to a
- * subagent that holds the shell. That split is enforced by two things a
- * typechecker cannot see — an allowlist of tool *names* passed to
- * `restrictMainAgentTools`, and the fact that `validateRecipe` runs on the
- * **parent** and silently drops any family the parent did not register.
- *
- * Both fail quietly. A renamed tool leaves the parent missing one it thinks it
- * has; a plugin "tidied away" from the parent because the parent never calls it
- * deletes that family from every recipe the subagent runs. Neither breaks a
- * build, and both surface as a confused model mid-task. So they are asserted
- * here, on the assembled runtime, rather than trusted.
+ * This agent's parent and its sub-agent install **different** plugin lists: the
+ * parent orchestrates and reviews with git, a browser and read-only eyes on the
+ * container, and every edit is delegated to a sub-agent that holds the shell.
+ * That split is held by things a typechecker cannot see — an allowlist of tool
+ * *names* passed to `restrictTools`, the `activeTools` a turn runs with, and
+ * Think's own `bash` switched off — and each fails quietly: a renamed tool
+ * leaves the parent missing one it thinks it has, or holding one it must not.
+ * So they are asserted here, on the real classes.
  */
 
-/** A host in the shape the plugin lists take, over the test Worker's env. */
-const host = (): PluginHost<Env> =>
-  ({
-    env,
-    storage: undefined as unknown as DurableObjectStorage,
-    callerKey: () => "test-caller",
-    aiGatewayId: CF_CODER_CONFIG.model.aiGatewayId ?? "default"
-  }) as PluginHost<Env>;
+interface Surface {
+  getTools(): Record<string, unknown>;
+  getActions(): Record<string, unknown>;
+  configureContext(): ContextConfig[];
+  beforeTurn(ctx: TurnContext): Promise<TurnConfig | void>;
+  workspaceBash: boolean;
+}
 
-const parent = () =>
-  createAgentRuntime({
-    config: CF_CODER_CONFIG,
-    plugins: parentPlugins(host())
-  });
+const onParent = <T>(read: (agent: Surface) => T | Promise<T>) => {
+  const ns = env.CfCoder as unknown as DurableObjectNamespace;
+  return runInDurableObject(
+    ns.get(ns.idFromName(`cf-coder-surface:${crypto.randomUUID()}`)),
+    (instance) => read(instance as unknown as Surface)
+  );
+};
 
-const subagent = () =>
-  createAgentRuntime({
-    config: CF_CODER_CONFIG,
-    plugins: subagentPlugins(host())
-  });
+const onChild = <T>(read: (agent: Surface) => T | Promise<T>) => {
+  const ns = (env as unknown as Record<string, DurableObjectNamespace>)
+    .CF_CODER_CODE!;
+  return runInDurableObject(
+    ns.get(ns.idFromName(`cf-coder-surface:${crypto.randomUUID()}`)),
+    (instance) => read(instance as unknown as Surface)
+  );
+};
 
-const toolNames = async (runtime: ReturnType<typeof parent>) =>
-  Object.keys(
-    await runtime.mainAgentTools({
-      session: { getCompactions: async () => [] } as never
-    })
-  ).sort();
-
-describe("the main agent's tools", () => {
+describe("the parent's tools", () => {
   /**
    * The exact list, not a subset check. A `toContain` here would pass just as
-   * happily if `sb_exec` reappeared, which is the single thing this split
-   * exists to prevent.
+   * happily if `bash` reappeared, which is the single thing this split exists
+   * to prevent.
    */
-  it("is git, a browser, and read-only access to the workspace", async () => {
-    expect(await toolNames(parent())).toEqual([
+  it("is git, a scratchpad, a browser, grep, and its sub-agent", async () => {
+    const tools = await onParent((agent) =>
+      Object.keys(agent.getTools()).sort()
+    );
+    expect(tools).toEqual([
+      "ask_user",
       "browser_extract",
       "browser_links",
       "browser_markdown",
       "browser_scrape",
+      "check_back",
+      "code",
+      "grep",
       "repo_clone",
       "repo_commit",
       "repo_diff",
       "repo_fetch",
-      // The ones that read and write the forge's own state, answering a review
-      // included. They are the parent's for the same reason the rest of git is:
-      // the subagent holds the shell and must not also speak for this agent in
-      // public.
+      // The ones that read the forge's own state. They are the parent's for the
+      // same reason the rest of git is: the sub-agent holds the shell and must
+      // not also speak for this agent in public.
       "repo_issue_view",
       "repo_open_pr",
-      "repo_pr_comment",
       "repo_pr_review_status",
-      "repo_pr_thread_reply",
       "repo_pr_threads",
       "repo_pr_view",
       "repo_push",
       "repo_status",
-      "sb_exists",
-      "sb_ls",
-      "sb_read",
-      // The parent's other way to answer "where does this task happen" — a
-      // scratchpad rather than a checkout. It sits with the parent because it is
-      // a workspace *selection*: a subagent holding it could re-point the
-      // workspace mid-run. It brings no shell with it; see the case below.
-      "scratch_open"
+      // A workspace *selection*: a sub-agent holding it could re-point the
+      // workspace mid-run. It brings no shell with it.
+      "scratch_open",
+      "search_history"
     ]);
   });
 
+  it("answers a review through actions, which a recovered turn never repeats", async () => {
+    const actions = await onParent((agent) =>
+      Object.keys(agent.getActions()).sort()
+    );
+    expect(actions).toEqual(["repo_pr_comment", "repo_pr_thread_reply"]);
+  });
+
   it("has no way to run a command, write a file, or edit one", async () => {
-    const names = await toolNames(parent());
-    for (const forbidden of ["sb_exec", "sb_write", "sb_edit"]) {
-      expect(names).not.toContain(forbidden);
+    const { bash, active } = await onParent(async (agent) => {
+      const think = ["read", "write", "edit", "delete", "list", "find", "grep"];
+      const tools = Object.fromEntries(
+        [...think, ...Object.keys(agent.getTools())].map((name) => [name, {}])
+      );
+      const turn = await agent.beforeTurn({ tools } as unknown as TurnContext);
+      return { bash: agent.workspaceBash, active: turn?.activeTools ?? [] };
+    });
+
+    expect(bash).toBe(false);
+    for (const forbidden of ["bash", "write", "edit", "delete"]) {
+      expect(active).not.toContain(forbidden);
+    }
+    for (const kept of ["read", "list", "find", "grep", "code"]) {
+      expect(active).toContain(kept);
     }
   });
 
   /**
-   * The plugin's own capability block advertises its whole surface. Left in
-   * place it would tell the parent it has a shell, and a model told that spends
-   * a turn discovering otherwise — then reaches for the obvious workaround,
-   * which is doing the work itself.
+   * The computer plugin's own block advertises its whole surface. Left in place
+   * it would tell the parent it has a shell, and a model told that spends a
+   * step discovering otherwise — then reaches for the obvious workaround, which
+   * is doing the work itself.
    */
-  it("is not told about the tools it no longer has", () => {
-    const capabilities = parent().renderCapabilities();
-    expect(capabilities).not.toContain("sb_exec");
-    expect(capabilities).toContain("sb_read");
+  it("is told it can read the workspace, and not that it has a shell", async () => {
+    const text = await onParent(async (agent) => {
+      const blocks = agent.configureContext();
+      const texts = await Promise.all(
+        blocks.map(
+          async (block) =>
+            (await (
+              block.provider as { get?: () => Promise<unknown> }
+            )?.get?.()) ?? ""
+        )
+      );
+      return texts.join("\n");
+    });
+    expect(text).toContain(
+      "You can read the workspace the `code` sub-agents work in"
+    );
+    expect(text).not.toMatch(/`bash`/);
   });
 });
 
-describe("the subagent's tools", () => {
-  it("registers the shell and the browser, and no git", () => {
-    const families = [...subagent().policy.knownToolFamilies].sort();
-    expect(families).toEqual([BROWSER_FAMILY, SANDBOX_FAMILY].sort());
-    expect(families).not.toContain(REPO_FAMILY);
-  });
-
-  /**
-   * `RecipeSubagentBase` re-checks `types.validateParams(request.type, …)` on
-   * its inbound request, so a subagent whose registry has never heard of `code`
-   * fails every execution with `unknown subtask type: code` — before a single
-   * model call, and with nothing in the transcript to explain it.
-   */
-  it("knows the subtask type it is asked to execute", () => {
-    expect(subagent().types.keys).toEqual(["code"]);
+describe("the sub-agent's tools", () => {
+  it("is the shell, the editor and the browser, and no git", async () => {
+    const tools = await onChild((agent) =>
+      Object.keys(agent.getTools()).sort()
+    );
+    expect(tools).toEqual([
+      "bash",
+      "browser_extract",
+      "browser_links",
+      "browser_markdown",
+      "browser_scrape",
+      "edit",
+      "grep"
+    ]);
   });
 });
 
-describe("the recipe the parent hands down", () => {
-  /**
-   * The load-bearing one. `validateRecipe` runs on the parent
-   * (`round/agent.ts`) and drops families the *parent* did not register, so the
-   * parent must install `sandbox` and `browser` even though it uses almost
-   * nothing from them. Deleting either from `parentPlugins` as "unused" would
-   * take it away from the subagent instead.
-   */
-  it("survives validation on the parent with both families intact", () => {
-    const runtime = parent();
-    const validated = validateRecipe(
-      runtime.types.resolveRecipe("code"),
-      runtime.policy
-    );
-
-    expect(validated.toolFamilies.sort()).toEqual(
-      [SANDBOX_FAMILY, BROWSER_FAMILY].sort()
-    );
-  });
-
-  it("does not lend the subagent the parent's git tools", () => {
-    const runtime = parent();
-    const validated = validateRecipe(
-      runtime.types.resolveRecipe("code"),
-      runtime.policy
-    );
-
-    // The parent registers `repo` and uses all six of its tools. The recipe
-    // must still not name that family: a subagent sharing the parent's checkout
-    // must not also share its ability to rewrite the history.
-    expect(runtime.policy.knownToolFamilies).toContain(REPO_FAMILY);
-    expect(validated.toolFamilies).not.toContain(REPO_FAMILY);
-  });
-});
-
-describe("the verification rule the subagent runs under", () => {
+describe("the verification rule the sub-agent runs under", () => {
   /**
    * A production run edited a README, ran `prettier --check` on that one file,
    * and reported the change verified — nothing was installed and the project's
    * own gate never ran. The old wording asked for "the project's own tests and
    * linters", a standard with no command attached.
-   *
-   * The install half of that is now a mechanism rather than a sentence — the
-   * host runs it and `sb_exec` gates on it. The gate half is still prose, so it
-   * is still pinned here.
    */
   it("names the gate as commands, not as a goal", () => {
-    const soul = subagent().types.resolveRecipe("code").soul;
-
-    // No longer "run npm ci": the host installs before the subagent starts, so
-    // the soul's job changed from issuing that command to explaining what to do
-    // when it is still running. Asserting the old string would now pin prose
-    // that describes a rule the mechanism enforces.
-    expect(soul).toContain("Dependencies are installed for you");
-    expect(soul).toContain("npm run check");
-    expect(soul).toContain("npm test");
+    expect(CODE.soul).toContain("Dependencies are installed for you");
+    expect(CODE.soul).toContain("npm run check");
+    expect(CODE.soul).toContain("npm test");
+    expect(CODE.soul).not.toContain("sb_exec");
   });
 });
 
 /**
- * The container settings, which two call sites have to agree on.
+ * The container settings, which every call site has to agree on.
  *
- * `agent.ts`'s cancel path used to build its own `ComputerConfig` with only
- * `binding` and `workspaceName`, so a cancellation's `git reset` ran under a
- * different shell than every other command in the same container — `withShell`
- * passes a command through *unwrapped* when no shell is set. It is one exported
- * function now, and this is what stops it being two again.
+ * A path that builds its own `ComputerConfig` with only `binding` and
+ * `workspaceName` runs its commands under a different shell than every other
+ * command in the same container — a cancellation's `git reset` once did. It is
+ * one exported function, and this is what stops it being two.
  */
 describe("the container config", () => {
   it("carries the settings every path depends on", () => {
     const config = container(env, () => "caller|owner/repo");
 
     // `bash`, not the image's dash: a model writing shell writes bash, and a
-    // subagent once lost two minutes to `${PIPESTATUS[0]}` failing under dash.
+    // sub-agent once lost two minutes to `${PIPESTATUS[0]}` failing under dash.
     expect(config.shell).toBe("bash");
     expect(config.cwd).toBe("/workspace");
     expect(config.workspaceName()).toBe("caller|owner/repo");
-    // Why the pair must stay under the call's signal: see COMMAND_TIMEOUT_MS in
-    // src/workspace/container.ts.
+    // The gate and the command share one tool call, which has to end inside
+    // the turn it runs in: see COMMAND_TIMEOUT_MS in src/workspace/container.ts.
     expect(config.installGateMs).toBeGreaterThan(0);
     expect(config.timeoutMs).toBeGreaterThan(0);
     expect(
       (config.installGateMs ?? Infinity) + (config.timeoutMs ?? Infinity)
-    ).toBeLessThan(MAX_TOOL_CALL_MS - TOOL_CALL_GRACE_MS);
+    ).toBeLessThan(15 * 60_000);
   });
 
   it("is the same shape whichever name it is given", () => {
@@ -241,20 +206,5 @@ describe("the container config", () => {
       ...rest
     }: ComputerConfig) => rest;
     expect(shape(a)).toEqual(shape(b));
-  });
-});
-
-describe("what the main agent asks a person before doing", () => {
-  it("holds nothing at all", async () => {
-    // `repo_open_pr` was the only gated call in this Worker, and a pull request
-    // was judged not worth stopping for: it is the point of the work, it lands on
-    // a branch, and it is reviewable after the fact. So nothing here waits on a
-    // person — pinned, because a rule added by accident stops a round that should
-    // not wait, and only this notices.
-    const surface = await parent().mainAgentSurface({
-      session: { getCompactions: async () => [] } as never
-    });
-
-    expect(Object.keys(surface.toolApproval)).toEqual([]);
   });
 });

@@ -1,12 +1,11 @@
-import type { PluginHost } from "@dynamicagents/core/host";
-import { computerExec } from "@dynamicagents/plugins/computer";
-import { activeRepo } from "./active-repo";
-import { workspaceContainer } from "./container";
 import {
+  workspaceExec,
   workspaceName,
   WORKSPACE_DIR,
   type WorkspaceObjectBase
-} from "@dynamicagents/plugins/computer";
+} from "@dynamicagents/plugins/workspace";
+import { activeRepo } from "./active-repo";
+import { workspaceContainer } from "./container";
 import { SCRATCH_DIR, SCRATCH_REPO } from "./scratch";
 import { parseWorktreeRepo } from "./worktree-pool";
 
@@ -86,7 +85,7 @@ export async function discardWorkingTree(config: {
   try {
     // The same settings the tools run under — `shell: "bash"` above all, which
     // a partial copy of this config used to drop.
-    const exec = computerExec(
+    const exec = workspaceExec(
       workspaceContainer(config.binding, () => config.name)
     );
     // The path the checkout is actually at, as the workspace recorded it and
@@ -151,28 +150,21 @@ export async function discardWorkingTree(config: {
  *
  * The agent decides nothing. It knows which names it handed out; the workspace
  * knows when it was last touched, which is the only clock worth reading — the
- * agent names a workspace once and then the subagent facet uses it for the rest
- * of the task, traffic the agent never sees.
+ * agent names a workspace once and then a sub-agent uses it for the rest of its
+ * run, traffic the agent never sees.
  */
 export async function sweepIdleWorkspaces(config: {
-  host: PluginHost<Env>;
+  /** The agent's own storage, which holds the names it handed out. */
+  storage: DurableObjectStorage;
+  callerKey: string;
   binding: WorkspaceNamespace;
   label: string;
   /** Told each name this sweep retired, for a host keeping state about it. */
   onReclaimed?: (repo: string) => void;
 }): Promise<void> {
-  let callerKey: string;
-  try {
-    callerKey = config.host.callerKey();
-  } catch {
-    // A scheduled wake-up on an instance that has never served a turn. There is
-    // nothing to sweep, because nothing was ever handed out.
-    return;
-  }
-
-  const repos = activeRepo(config.host);
+  const repos = activeRepo(config.storage);
   for (const repo of repos.seen()) {
-    const name = workspaceName(callerKey, repo);
+    const name = workspaceName(config.callerKey, repo);
     try {
       const result = await config.binding
         .get(config.binding.idFromName(name))

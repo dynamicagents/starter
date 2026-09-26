@@ -2,7 +2,7 @@ import {
   IDLE_RECLAIM_MS,
   workspaceName,
   type WorkspaceObjectBase
-} from "@dynamicagents/plugins/computer";
+} from "@dynamicagents/plugins/workspace";
 import type { RepoConfig, RepoWorktrees } from "@dynamicagents/plugins/repo";
 import type { ActiveRepo } from "./active-repo";
 import { selectedRepo } from "./subtask-workspace";
@@ -17,11 +17,11 @@ import {
 } from "./worktree-pool";
 
 /**
- * The parent's way into the worktrees its writing subtasks committed in.
+ * The parent's way into the worktrees its writing sessions committed in.
  *
  * A switch is `ActiveRepo.set` with the worktree's sentinel, and that is the
- * whole mechanism: every tool the parent has — `/repo`, the read-only sandbox
- * tools, a reading subtask — resolves its workspace from that one selection on
+ * whole mechanism: every tool the parent has — `/repo`, the read-only file
+ * tools, a reading session — resolves its workspace from that one selection on
  * each call, the way `scratch_open` already moves them all at once. So no tool
  * learns what a worktree is, and a worktree's checkout sits at the same path the
  * parent's own does.
@@ -77,7 +77,7 @@ function repoState(repo: PoolRepo): string {
 
 function summary(worktree: Worktree): string {
   if (worktree.live) {
-    return `subtask ${worktree.live.subtaskId} is working in it`;
+    return "a session is working in it";
   }
   const changed = worktree.repos.filter((repo) => repo.tip !== repo.base);
   if (changed.length === 0) return "no commits";
@@ -112,7 +112,7 @@ export function worktreeSwitch(config: {
       if (!repo) return noRepo;
       const rows = config.pool.all(repo).filter((row) => row.branch);
       if (rows.length === 0) {
-        return `No worktree holds a branch for ${repo}. Each writing subtask gets one when it is delegated.`;
+        return `No worktree holds a branch for ${repo}. Each writing session gets one when it is delegated.`;
       }
       const here = current()?.row?.slot;
       return [
@@ -147,7 +147,7 @@ export function worktreeSwitch(config: {
 
       // Claimed, and not yet cloned onto: there is nothing to switch into.
       if (row.dir === undefined) {
-        return `The worktree for \`${branch}\` is still being prepared${row.live ? ` for subtask ${row.live.subtaskId}` : ""}; try again once its session has started.`;
+        return `The worktree for \`${branch}\` is still being prepared; try again once its session has started.`;
       }
 
       const sentinel = worktreeRepo(repo, row.slot);
@@ -156,7 +156,7 @@ export function worktreeSwitch(config: {
       );
       if (!(await stub.checkoutDir())) {
         // Its storage is gone, so the row describes nothing; the slot is free
-        // for the next subtask to clone into again.
+        // for the next session to clone into again.
         config.pool.put({
           repo,
           slot: row.slot,
@@ -176,7 +176,7 @@ export function worktreeSwitch(config: {
         ...(row.live
           ? [
               "",
-              `**Subtask ${row.live.subtaskId} is still working here.** Read what you like, but nothing can be committed or pushed until it finishes.`
+              "**A session is still working here.** Read what you like, but nothing can be committed or pushed until its report arrives."
             ]
           : []),
         "",
@@ -197,7 +197,7 @@ export function worktreeSwitch(config: {
       const row = holderOf(config.pool, repo, branch);
       if (!row) return `No worktree holds \`${branch}\`.`;
       if (row.live) {
-        return `Subtask ${row.live.subtaskId} is working in that worktree. Release it once the subtask finishes.`;
+        return "A session is working in that worktree. Release it once its report arrives.";
       }
       const unpushed = row.repos.some(
         (entry) => entry.tip !== entry.base && entry.tip !== entry.pushed
@@ -207,7 +207,7 @@ export function worktreeSwitch(config: {
       const wasHere = current()?.row?.slot === row.slot;
       if (wasHere) config.active.set(repo);
       return [
-        `Released the worktree that held \`${branch}\`; the next writing subtask may reset it.`,
+        `Released the worktree that held \`${branch}\`; the next writing session may reset it.`,
         ...(unpushed
           ? ["Commits in it that were never pushed are gone when that happens."]
           : []),
@@ -220,12 +220,12 @@ export function worktreeSwitch(config: {
       if (!here?.row) return undefined;
       const { row } = here;
       if (row.live) {
-        return `Subtask ${row.live.subtaskId} is still working in this worktree, so nothing in it can be committed or pushed until it finishes.`;
+        return "A session is still working in this worktree, so nothing in it can be committed or pushed until its report arrives.";
       }
       const entry = repoAt(row, dir);
       if (tool === "repo_commit") {
         // A commit the map cannot see moves the tip; until a push says where it
-        // went, the worktree is held rather than handed to the next subtask.
+        // went, the worktree is held rather than handed to the next session.
         if (entry) {
           config.pool.put({
             ...row,

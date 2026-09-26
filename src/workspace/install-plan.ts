@@ -1,7 +1,7 @@
 import {
   DEFAULT_INSTALL_PLAN,
   type InstallPlan
-} from "@dynamicagents/plugins/computer";
+} from "@dynamicagents/plugins/workspace";
 
 /**
  * How **this deployment** installs dependencies — the one file to edit when a
@@ -12,9 +12,9 @@ import {
  * hard-coded `npm ci` would get wrong for most of them.
  *
  * Runs on every checkout, and again for every new container: the tree lives on
- * the container's disk, so it goes with the container. It runs *outside* a round
- * because `npm ci` measured 225 s on slack-gatekeeper, and a chunk step is killed
- * at ten minutes — after which Workflows retries the chunk and installs again.
+ * the container's disk, so it goes with the container. It runs *outside* a turn
+ * because `npm ci` measured 225 s on slack-gatekeeper, and a turn is cut after
+ * at most fifteen minutes, losing the tool call in flight.
  *
  * Overrides are keyed `owner/repo`, exactly as the clone URL spells it, and
  * replace the whole command:
@@ -34,6 +34,6 @@ export const INSTALL_PLAN: InstallPlan = {
   ...DEFAULT_INSTALL_PLAN,
   overrides: {},
   // Above the measured 225 s, with room for a much larger repository. Bounds the
-  // command, not the round.
+  // command, not the turn.
   timeoutMs: 20 * 60_000
 };

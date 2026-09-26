@@ -40,17 +40,18 @@ const plugin = (name) => `@dynamicagents/plugins/dist/${name}/`;
  *
  * ## What every agent carries whatever it imports
  *
- * The `agents` SDK composes its own `Lifecycle` into the `Agent` base class, with
- * a scheduler, a task runner, dynamic-agent routing and WebSocket handling
- * installed on it — so **every** entry that extends `Agent` carries all of them,
- * used or not. Measured at 372 KiB of `agents` in `reactive`'s agent entry, which
- * imports neither `/alarm` nor `/job` and cannot shed any of it. That share moves
- * with the SDK, so a bump of it moves every ceiling here at once, and that is not
- * a leak: `forbidden` is the check that would catch one.
+ * Every agent and sub-agent extends Think, and `@cloudflare/think` imports
+ * eagerly: just-bash, two model providers, the MCP client, yaml and the chat
+ * SDK, on top of the `agents` SDK's own `Lifecycle`. So each entry below
+ * carries all of it, used or not — about 1.7 MB gzipped for one agent, which is
+ * why these ceilings are what they are. Each entry is built on its own, so
+ * Think is counted once per entry. That share moves with Think and `agents`, so
+ * a bump of either moves every ceiling here at once, and that is not a leak:
+ * `forbidden` is the check that would catch one.
  *
- * An agent that owns a workspace additionally carries `core/dist/alarm` (7 KiB)
- * and `core/dist/job` (13 KiB) — and *only* such an agent, which is the
- * isolation this file exists to assert still holding.
+ * An agent that owns a workspace additionally carries `core/dist/alarm` and
+ * `core/dist/job` — and *only* such an agent, which is the isolation this file
+ * exists to assert still holding.
  *
  * Every ceiling below is its measurement plus the ~8% headroom this file runs
  * with.
@@ -60,27 +61,27 @@ const AGENTS = [
     name: "reactive",
     entries: [
       "src/agents/reactive/agent.ts",
-      "src/agents/reactive/workflow.ts",
-      "src/agents/reactive/subagent.ts"
+      "src/agents/reactive/children.ts"
     ],
-    forbidden: [plugin("computer"), plugin("repo"), "@cloudflare/computer"],
-    // Re-baselined when `splitting` was turned on above, not because this agent
-    // grew: the old number simply never counted the chunks it reaches through a
-    // dynamic `import()`. Measured 3687 KiB the first time it was weighed
-    // honestly, against a 3613 KiB ceiling it had been quietly over. ~8% over
-    // that measurement, the headroom every entry here runs with.
-    //
-    // Measured 4427 KiB. The agent that shows the SDK's share cleanly — see
-    // "What every agent carries" above — since it imports neither `/alarm` nor
-    // `/job` and still carries the scheduler.
-    maxBytes: 4_900_000
+    // Every container-side plugin, and the container client itself: this agent's
+    // files are Think's own workspace, in its SQLite.
+    forbidden: [
+      plugin("computer"),
+      plugin("workspace"),
+      plugin("repo"),
+      plugin("scratch"),
+      plugin("claude-code"),
+      "@cloudflare/computer"
+    ],
+    // Measured 9127 KiB, and nearly all of it is Think: see "What every
+    // agent carries" above.
+    maxBytes: 10_100_000
   },
   {
     name: "cf-coder",
     entries: [
       "src/agents/cf-coder/agent.ts",
-      "src/agents/cf-coder/workflow.ts",
-      "src/agents/cf-coder/subagent.ts",
+      "src/agents/cf-coder/children.ts",
       // The workspace object is a deployed class of this agent's too, and
       // omitting it left the one assertion below that names `/claude-code`
       // unable to fail: the shared base arrives in this graph anyway (via
@@ -88,86 +89,36 @@ const AGENTS = [
       // added only there was neither leak-checked nor size-counted.
       "src/agents/cf-coder/workspace-do.ts"
     ],
-    // No recall — and no `/workspace`, which is the one worth stating: the
-    // computer plugin is this agent's filesystem, and having both would hand the
-    // model two unrelated ones with no way to tell from a path which it is
-    // addressing.
-    //
-    // `/claude-code` is the newest entry and the one doing the most work. Both
-    // coders share one workspace base, from
-    // `@dynamicagents/plugins/computer`, and the whole point of that base
-    // is that it knows nothing about Claude Code: the egress policy arrives
-    // through a config seam, and only `claude-coder`'s subclass fills it in. If
-    // this ever fails, the shared base has grown an import that belongs in a
-    // subclass — which would also put an Anthropic credential path in an agent
-    // that has no business with one.
-    forbidden: [
-      plugin("recall"),
-      plugin("workspace"),
-      plugin("claude-code"),
-      "@cloudflare/shell"
-    ],
-    // Higher than its siblings because it is the only agent carrying a container
-    // client and a second model provider — but still a real ceiling, ~8% over
-    // the measured size, the same headroom the others run with. Raise it
-    // deliberately, with the dependency bump that caused it, never to make a red
-    // build go green.
-    //
-    // Moved 4300 → 5450 KB in two steps, both deliberate and worth separating:
-    //   +111 KiB  turning on `splitting` — weight this agent already carried
-    //             through dynamic imports and this script could not see.
-    //   +608 KiB  `@cloudflare/computer/git` in the workspace DO, which bundles
-    //             isomorphic-git so that clone, fetch and push run on this side
-    //             of the container boundary and the forge token never crosses
-    //             it. Bought knowingly: it is the cost of the credential never
-    //             being readable by a shell the model controls.
-    // Measured 4918 KiB after both.
-    //
-    // Raised when `workspace-do.ts` was added to `entries` above. That moved the
-    // *measurement*, not the agent: the deployed bytes are unchanged and the
-    // check simply stopped being blind to one of its classes. Measured 5185 KiB
-    // after, which the old 5322 KiB ceiling left only 2.6% of headroom over —
-    // too tight for the ~8% every other entry here runs with, so it would have
-    // gone red on the next dependency bump for no real reason.
-    //
-    // Measured 6075 KiB. A workspace agent, so it also carries `/alarm` and
-    // `/job`; see "What every agent carries" above for the rest.
-    //
-    // The last 99 KiB of that is the container client growing wherever it is
-    // embedded — a bigger sync engine and a newer capnweb. It is the whole of
-    // the difference, and `forbidden` stayed clean through it, which is the
-    // check that would have caught a leak instead.
-    maxBytes: 6_720_000
+    // Both coders share one workspace base, from
+    // `@dynamicagents/plugins/workspace`, and the whole point of that base is
+    // that it knows nothing about Claude Code: the egress policy arrives through
+    // a config seam, and only `claude-coder`'s subclass fills it in. If this ever
+    // fails, the shared base has grown an import that belongs in a subclass —
+    // which would also put an Anthropic credential path in an agent that has no
+    // business with one.
+    forbidden: [plugin("claude-code")],
+    // Measured 10907 KiB. Over reactive's by the container client and
+    // `@cloudflare/computer/git`, which bundles isomorphic-git so that clone,
+    // fetch and push run on this side of the container boundary and the forge
+    // token never crosses it. A workspace agent, so it also carries `/alarm`
+    // and `/job`.
+    maxBytes: 12_070_000
   },
   {
     name: "claude-coder",
     entries: [
       "src/agents/claude-coder/agent.ts",
-      "src/agents/claude-coder/workflow.ts",
-      "src/agents/claude-coder/subagent.ts",
+      "src/agents/claude-coder/children.ts",
       // Included for the reason cf-coder's is, and more sharply: this subclass
       // is where the credential-egress gateway is wired, so it is the single
       // file this check most needs to be watching.
       "src/agents/claude-coder/workspace-do.ts"
     ],
-    // cf-coder's list, minus `recall` — this agent installs it, for the reason
-    // in its `plugins.ts`. No `/workspace` for the same reason as cf-coder: the
-    // computer plugin is this agent's filesystem and two would be ambiguous.
-    //
-    // Nothing here forbids `/claude-code`, obviously — this is the one agent
-    // that installs it, and cf-coder's entry above is the other half of that
-    // pair.
-    forbidden: [plugin("workspace"), "@cloudflare/shell"],
-    // Sized like cf-coder's, which is the right comparison: same container
-    // client, same isomorphic-git, same round loop. What it adds over cf-coder
-    // is `/recall` and `/claude-code`, and what it drops is nothing.
-    // Re-baseline against a measurement, never to make a red build green.
-    //
-    // Measured 5976 KiB, and sized with the same ~8% headroom as the rest: the
-    // tighter margin cf-coder's comment above describes is what sends a build
-    // red on the next bump for no real reason. It carries the same 99 KiB of
-    // container client cf-coder does, for the same reason.
-    maxBytes: 6_610_000
+    // Nothing to forbid: this agent installs every plugin in this repo, and
+    // cf-coder's entry above is the other half of the `/claude-code` pair.
+    forbidden: [],
+    // Measured 11033 KiB: cf-coder's, plus `/claude-code`.
+    maxBytes: 12_210_000
   }
 ];
 
@@ -232,7 +183,7 @@ for (const agent of AGENTS) {
         external: EXTERNAL,
         // Required, not cosmetic. The Agents SDK resolves a facet through
         // `ctx.exports[this.constructor.name]`, so a build that minifies class
-        // identifiers turns `ReactiveSubagent` into `_a` and the lookup fails at
+        // identifiers turns `ReactiveGeneral` into `_a` and the lookup fails at
         // runtime. Keeping names here also keeps this measurement honest against the
         // real deploy, which does the same.
         keepNames: true,
@@ -290,7 +241,7 @@ if (leakFailed) {
       "imports a plugin and `@dynamicagents/plugins` has no root barrel, so this is " +
       "almost always one agent importing another agent's module — follow the " +
       "`via` lines. Anything genuinely shared between agents belongs in " +
-      "src/workspace/, src/config.ts or src/round-policy.ts, never in a sibling's directory."
+      "src/workspace/, src/config.ts, src/copy.ts or src/model.ts, never in a sibling's directory."
   );
 }
 if (sizeFailed) {

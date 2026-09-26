@@ -47,7 +47,7 @@ export default tseslint.config(
               message:
                 "An agent must not reach into another agent's modules — that is what puts their " +
                 "plugins in its bundle. Anything genuinely shared belongs in src/config.ts or " +
-                "src/round-policy.ts. Use a relative path for this agent's own modules."
+                "src/copy.ts. Use a relative path for this agent's own modules."
             }
           ]
         }

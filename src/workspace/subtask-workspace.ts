@@ -1,7 +1,8 @@
 import {
+  sessionAdvisory,
   workspaceName,
   type WorkspaceObjectBase
-} from "@dynamicagents/plugins/computer";
+} from "@dynamicagents/plugins/workspace";
 import type { ActiveCheckout, ActiveRepo } from "./active-repo";
 import { SCRATCH_REPO } from "./scratch";
 import {
@@ -15,14 +16,14 @@ import {
 } from "./worktree-pool";
 
 /**
- * Where a writing subtask works, and what becomes of it afterwards.
+ * Where a Claude Code session works, and what becomes of it afterwards.
  *
- * `@dynamicagents/plugins/claude-code` owns *that* a writing subtask needs a
+ * `@dynamicagents/plugins/claude-code` owns *that* a writing session needs a
  * workspace no other live session shares, and why. What is here is the half a
  * plugin cannot have: **which Durable Object, how it comes to hold the right
- * checkout on the right branch, and what is kept when the subtask ends.** It
- * reaches the plugin through its `subtaskWorkspace`, `releaseSubtaskWorkspace`
- * and `abortSubtaskWorkspace` seams.
+ * checkout on the right branch, and what is kept when the session ends.** The
+ * sub-agents' `prepare` and `settle` in `src/agents/claude-coder/children.ts`
+ * are what call it.
  *
  * The workspace is a worktree from `./worktree-pool.ts`, and it is **kept**: the
  * branch and its commits stay in it for the parent to switch into — see
@@ -43,7 +44,7 @@ export function selectedRepo(selected: string | undefined): string | undefined {
   return selected.startsWith("<") ? undefined : selected;
 }
 
-/** One submodule a writing subtask's clone carries, as `.gitmodules` declares it. */
+/** One submodule a writing session's clone carries, as `.gitmodules` declares it. */
 export interface Submodule {
   path: string;
   url: string;
@@ -159,7 +160,7 @@ export function submoduleCloneUrl(sub: Submodule, parentUrl: string): string {
   if (parsed?.protocol !== "https:" || parsed.hostname !== host) {
     throw new Error(
       `claude-coder: the submodule at ${sub.path} is cloned from ${sub.url}, and ` +
-        `a writing subtask clones only over https from ${host}, where the ` +
+        `a writing session clones only over https from ${host}, where the ` +
         "parent's checkout came from"
     );
   }
@@ -216,7 +217,7 @@ EOF`,
  *   before: that was pushed, or released, or it would not have been free.
  * - `continue` keeps the branch this worktree already holds, and only a
  *   repository that lacks it — a submodule added since — starts one at its base.
- * - `adopt` takes the branch from the remote where it is there — a subtask's
+ * - `adopt` takes the branch from the remote where it is there — a session's
  *   pushed branch, or the head of a pull request somebody else opened.
  *
  * `continue` and `adopt` refuse a repository's default branch, read from the
@@ -270,7 +271,7 @@ done <<EOF
 $WORKTREE_PATHS
 EOF`;
 
-/** Put each listed repository back where the subtask started it. */
+/** Put each listed repository back where the run started it. */
 const RESET_TO_START = `tab="$(printf '\\t')"
 while IFS="$tab" read -r path start; do
   [ -n "$path" ] || continue
@@ -286,12 +287,12 @@ const KEEP_WAIT_SECONDS = 30;
 /** The commit {@link KEEP_INTERRUPTED} makes, as a person reading the log sees it. */
 const WIP_MESSAGE =
   "WIP: interrupted session\n\n" +
-  "What the session had not committed when its subtask failed, committed by the " +
+  "What the session had not committed when its run failed, committed by the " +
   "host so it is not lost. It may be half-finished: check it before building on it.";
 
 /**
- * What the delegating model reads about a failed subtask's kept work — core
- * appends it to the failure.
+ * What the delegating model reads about a failed run's kept work, appended to
+ * the message that reports the run's end.
  */
 export function keptWorkNote(branch: string, wip: boolean): string {
   return (
@@ -384,27 +385,51 @@ function parsePlaced(out: string): Placed[] {
     });
 }
 
+/** One sub-agent run, as the pool knows it. */
+export interface RunRef {
+  taskId: string;
+  runId: string;
+}
+
+/** Where a session runs, as its `prepare` hands it to the sub-agent. */
+export interface SessionPlace {
+  workspaceName: string;
+  /** The checkout, as the workspace recorded it. */
+  dir: string;
+  /** A writing session's branch, when it works in a worktree of its own. */
+  branch?: string;
+  /** Whether that branch already holds earlier work. */
+  continues?: boolean;
+}
+
 export interface SubtaskWorkspaces {
-  /** Claim a worktree, put it on the subtask's branch, and answer its name. */
-  resolve(ctx: {
-    taskId: string;
-    subtaskId: number;
-    continue?: string;
-  }): Promise<string>;
-  /** The subtask is over: record where it left each repository and free it. */
-  release(ctx: { taskId: string; subtaskId: number }): Promise<void>;
-  /** The subtask was cut short: stop it and discard what it committed. */
-  abort(ctx: { taskId: string; subtaskId: number }): Promise<void>;
   /**
-   * The Workflow gave up on the subtask: stop it and keep what it did, answering
-   * where — or nothing, when it did nothing.
+   * Claim a worktree, put it on the run's branch, and answer where it is. A
+   * scratchpad is the parent's own, and answers that.
    */
-  fail(ctx: { taskId: string; subtaskId: number }): Promise<string | undefined>;
+  resolve(ctx: RunRef & { continue?: string }): Promise<SessionPlace>;
+  /** A reading session: the parent's own checkout, read in a throwaway copy. */
+  reading(): Promise<SessionPlace>;
+  /** The run is over: record where it left each repository and free it. */
+  release(ctx: RunRef): Promise<void>;
+  /** The run was canceled: stop it and discard what it committed. */
+  abort(ctx: RunRef): Promise<void>;
+  /**
+   * The run failed: stop it and keep what it did, answering where — or nothing,
+   * when it did nothing.
+   */
+  fail(ctx: RunRef): Promise<string | undefined>;
+  /**
+   * Free every worktree still claimed for a task that has ended. A claim whose
+   * run never started — the turn was cut between the two — has no `settle` to
+   * free it, and a claim left live is passed over for good.
+   */
+  releaseTask(taskId: string): Promise<void>;
 }
 
 export function subtaskWorkspaces(config: {
   binding: DurableObjectNamespace<WorkspaceObjectBase>;
-  /** The verified caller. Resolves on the parent, throws on a facet. */
+  /** The verified caller. */
   callerKey: () => string;
   /**
    * Run a command in a named workspace's container.
@@ -418,8 +443,8 @@ export function subtaskWorkspaces(config: {
     options: { cwd: string; env?: Record<string, string> },
     workspace: string
   ) => Promise<{ success: boolean; stdout: string; stderr: string }>;
-  /** Stop a subtask's session in a workspace, before its commits are discarded. */
-  stopSession: (workspace: string, subtaskId: number) => Promise<void>;
+  /** Stop a run's session in a workspace, before its commits are discarded. */
+  stopSession: (workspace: string, runId: string) => Promise<void>;
   active: ActiveRepo;
   pool: PoolStore;
   label: string;
@@ -434,23 +459,43 @@ export function subtaskWorkspaces(config: {
   const stubFor = (name: string) =>
     config.binding.get(config.binding.idFromName(name));
   /**
-   * The row a subtask holds, whichever pool it is in: the parent may have moved to
-   * another repository since the subtask was resolved.
+   * The row a run holds, whichever pool it is in: the parent may have moved to
+   * another repository since the run was resolved.
    */
-  const liveRow = (ctx: { taskId: string; subtaskId: number }) =>
+  const liveRow = (ctx: RunRef) =>
     config.pool
       .every()
       .find(
-        (row) =>
-          row.live?.taskId === ctx.taskId &&
-          row.live.subtaskId === ctx.subtaskId
+        (row) => row.live?.taskId === ctx.taskId && row.live.runId === ctx.runId
       );
+
+  /**
+   * The checkout a workspace recorded, or the sentence that refuses a session
+   * with nothing to work on.
+   *
+   * The advisories are worth the extra RPC here: a refusal that names only the
+   * ordering mistake is the wrong sentence for a workspace that is full, or
+   * whose install broke, and neither is "you forgot to clone". Only on the way
+   * to refusing, so a workspace with a checkout costs one RPC.
+   */
+  const checkoutIn = async (name: string): Promise<string> => {
+    const stub = stubFor(name);
+    const dir = await stub.checkoutDir();
+    if (dir) return dir;
+    const note = sessionAdvisory(await stub.advisories());
+    throw new Error(
+      "claude-coder: there is no checkout in this workspace yet, so there is " +
+        "nothing to work on. Clone a repository with `repo_clone`, or open a " +
+        "scratchpad with `scratch_open`, before delegating." +
+        (note ? `\n\n${note}` : "")
+    );
+  };
 
   /**
    * Put a claimed worktree on its branch, in the superproject and every
    * submodule, and record where each repository started.
    *
-   * **Every step runs again on a retry and is idempotent**, because `ready` is
+   * **Every step runs again on a repeat and is idempotent**, because `ready` is
    * only set once the last one finished: a first attempt that cloned and then
    * failed at a submodule is completed, not mistaken for a finished one.
    */
@@ -511,9 +556,9 @@ export function subtaskWorkspaces(config: {
       // is all that is left.
       if (mode === "continue") mode = "adopt";
     }
-    // Straight after the clone, so a retry that fails later finds a recorded
+    // Straight after the clone, so a repeat that fails later finds a recorded
     // checkout and does not clone over it — and before the install, for the
-    // reason `noteCheckout` gives in `@dynamicagents/plugins/computer`.
+    // reason `noteCheckout` gives in `@dynamicagents/plugins/workspace`.
     await stub.noteCheckout({
       dir: checkout.dir,
       kind: "repo",
@@ -663,21 +708,23 @@ export function subtaskWorkspaces(config: {
     return ready;
   }
 
-  return {
-    async resolve(ctx): Promise<string> {
+  const api: SubtaskWorkspaces = {
+    async resolve(ctx): Promise<SessionPlace> {
       /**
        * A scratchpad is the parent's, and shared.
        *
        * There is nothing to clone — a scratchpad has no remote — so the isolation
        * this whole module provides has no mechanism here, and the honest answer is
        * the workspace the parent already opened. The consequence is a real limit:
-       * writing subtasks in a scratchpad share one tree, so fan-out there is the
-       * model's judgement rather than the platform's guarantee.
+       * writing sessions in a scratchpad share one tree, so fan-out there is the
+       * model's judgement rather than the platform's guarantee. With no branch of
+       * its own, a session there keeps what it leaves in the tree.
        */
       const selected = config.active.get();
       const repo = selectedRepo(selected);
       if (repo === undefined) {
-        return workspaceName(config.callerKey(), selected);
+        const name = workspaceName(config.callerKey(), selected);
+        return { workspaceName: name, dir: await checkoutIn(name) };
       }
 
       // What the parent cloned, which is the only honest thing to clone: the url
@@ -687,7 +734,7 @@ export function subtaskWorkspaces(config: {
       const checkout = config.active.checkout();
       if (!checkout) {
         throw new Error(
-          "claude-coder: there is no recorded checkout for a writing subtask to " +
+          "claude-coder: there is no recorded checkout for a writing session to " +
             "clone. `repo_clone` records one only when it leaves a clean tree on " +
             "a named branch — if its last answer was a refusal (uncommitted " +
             "changes, another repository at that path), deal with that and run " +
@@ -698,19 +745,31 @@ export function subtaskWorkspaces(config: {
         throw new Error(
           `claude-coder: \`continue\` names ${JSON.stringify(ctx.continue)}, which is ` +
             "not a branch name. Pass the branch to add to — the one an earlier " +
-            "subtask's report named, or a pull request's head branch — or leave " +
+            "session's report named, or a pull request's head branch — or leave " +
             "it out to start a new one."
         );
       }
 
       const claimed = claim(config.pool, repo, ctx, now());
       const name = nameOf(claimed);
-      if (!claimed.ready) await prepare(claimed, checkout, name);
+      const ready = claimed.ready
+        ? claimed
+        : await prepare(claimed, checkout, name);
       // `note`, not `set`: this enrols the worktree in the sweep's candidate list
       // without routing the parent's own tools to it. A workspace the sweep cannot
       // see falls back to its own seven-day alarm with no backstop.
-      config.active.note(worktreeRepo(claimed.repo, claimed.slot));
-      return name;
+      config.active.note(worktreeRepo(ready.repo, ready.slot));
+      return {
+        workspaceName: name,
+        dir: ready.dir ?? checkout.dir,
+        branch: ready.branch as string,
+        continues: ctx.continue !== undefined
+      };
+    },
+
+    async reading(): Promise<SessionPlace> {
+      const name = workspaceName(config.callerKey(), config.active.get());
+      return { workspaceName: name, dir: await checkoutIn(name) };
     },
 
     async release(ctx): Promise<void> {
@@ -767,10 +826,10 @@ export function subtaskWorkspaces(config: {
       const row = liveRow(ctx);
       if (!row) return;
       const name = nameOf(row);
-      // Stopped first: core runs this before it tears the facet down, and a
-      // session still running would commit on top of the reset.
+      // Stopped first: a session still running would commit on top of the
+      // reset.
       try {
-        await config.stopSession(name, ctx.subtaskId);
+        await config.stopSession(name, ctx.runId);
       } catch (err) {
         console.warn(`[${config.label}] could not stop a session to abort it`, {
           slot: row.slot,
@@ -796,7 +855,7 @@ export function subtaskWorkspaces(config: {
         // holds the worktree on them, which is the right side to err on for a
         // worktree that may still carry the commits this meant to discard.
         console.warn(
-          `[${config.label}] could not discard an aborted subtask's commits`,
+          `[${config.label}] could not discard a canceled session's commits`,
           {
             slot: row.slot,
             stderr: reset.stderr.trim().slice(0, 500)
@@ -810,12 +869,9 @@ export function subtaskWorkspaces(config: {
        *
        * `stopSession` above delivers `SIGTERM` and returns; Claude Code then
        * aborts its turn, kills its process tree and runs its `SessionEnd` hooks,
-       * so a session can still commit for a moment after the reset ran. The
-       * facet's own cancellation waits that out — `ClaudeCoderSubagent.abortRun`
-       * awaits the drain before resetting — but this path runs in the parent, a
-       * Durable Object away from the promise that would say when the drain
-       * unwound, and it is reached precisely when there is no drain left to
-       * await: a chunk whose isolate was evicted or whose branch failed.
+       * so a session can still commit for a moment after the reset ran. This
+       * runs in the parent, a Durable Object away from the drain that would say
+       * when the session unwound, and a sub-agent's cancel does not wait for it.
        *
        * So the reset is not ordered against the session, and what that would
        * cost is `release` reading a tip a moment later and recording a commit
@@ -825,7 +881,7 @@ export function subtaskWorkspaces(config: {
        * no row and records nothing.
        *
        * Files written after the reset are a smaller matter and are left: the
-       * next subtask to claim this slot is prepared with `checkout -f` and
+       * next session to claim this slot is prepared with `checkout -f` and
        * `clean -ffdx` before it runs, which is where an unordered write ends.
        */
       const { live: _live, mode: _mode, ready: _ready, ...rest } = row;
@@ -837,15 +893,15 @@ export function subtaskWorkspaces(config: {
     },
 
     /**
-     * Keep what a failed subtask did, where a `continue` will find it.
+     * Keep what a failed run did, where a `continue` will find it.
      *
-     * The opposite of {@link abort}, and on purpose: a step that ran out of
-     * retries says nothing about the session, and the ones lost that way were
-     * healthy. So nothing is reset, and what the session had not committed is
-     * committed for it — a `continue` places the worktree with `checkout -f` and
-     * `clean`, and a worktree whose tips never moved from their base is free,
-     * so an uncommitted edit would otherwise go with the next subtask to claim
-     * the slot.
+     * The opposite of {@link abort}, and on purpose: a run that failed — its
+     * container went, its recovery gave up — says nothing about the session's
+     * work, and the ones lost that way were healthy. So nothing is reset, and
+     * what the session had not committed is committed for it — a `continue`
+     * places the worktree with `checkout -f` and `clean`, and a worktree whose
+     * tips never moved from their base is free, so an uncommitted edit would
+     * otherwise go with the next session to claim the slot.
      *
      * The row stays live: `release` runs next on the same path, reads the tips
      * this left, and holds the worktree on them.
@@ -855,7 +911,7 @@ export function subtaskWorkspaces(config: {
       if (!row) return undefined;
       const name = nameOf(row);
       try {
-        await config.stopSession(name, ctx.subtaskId);
+        await config.stopSession(name, ctx.runId);
       } catch (err) {
         console.warn(
           `[${config.label}] could not stop a session to keep its work`,
@@ -908,6 +964,16 @@ export function subtaskWorkspaces(config: {
         row.branch,
         moved.some((repo) => heads.get(repo.path)?.wip)
       );
+    },
+
+    async releaseTask(taskId): Promise<void> {
+      const stranded = config.pool
+        .every()
+        .filter((row) => row.live?.taskId === taskId);
+      for (const row of stranded) {
+        await api.release({ taskId, runId: (row.live as RunRef).runId });
+      }
     }
   };
+  return api;
 }

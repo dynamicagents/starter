@@ -1,10 +1,5 @@
 import type { AgentPlugin } from "@dynamicagents/core";
 import { browser } from "@dynamicagents/plugins/browser";
-import { recall } from "@dynamicagents/plugins/recall";
-import { workspace } from "@dynamicagents/plugins/workspace";
-import { RECALL } from "@/config";
-import type { PluginHost } from "@dynamicagents/core/host";
-import { general } from "./general";
 
 /**
  * The one file you edit to add or remove a capability for this agent.
@@ -17,34 +12,12 @@ import { general } from "./general";
  * Each agent in this Worker has its own copy of this file, which is what keeps
  * one agent's plugins out of another's graph. There is deliberately no shared
  * one: a single list would put every plugin in every agent.
+ *
+ * The agent and its `general` sub-agent install the same list. Files are
+ * Think's own workspace, in each object's SQLite, so there is nothing to
+ * install for them.
  */
-
-export const plugins = (host: PluginHost<Env>): AgentPlugin[] => [
-  // The catch-all, first: order here is the order the delegating model is shown
-  // the types, and it should read the general case before the specialized ones.
-  general(),
-
+export const plugins = (env: Env): AgentPlugin<Env>[] => [
   // Read web pages. Requires the `BROWSER` binding and a paid Workers plan.
-  browser({ binding: host.env.BROWSER }),
-
-  // The durable file store behind every subagent execution's workspace, plus
-  // tools over it. At most one installed plugin may back a workspace; drop this
-  // and core falls back to an in-memory one, so `runtime.workspaceBacking` is
-  // always defined and the SubagentRuntime never needs a null check.
-  workspace(),
-
-  // Episodic memory: the messages each compaction folds away are embedded into
-  // Vectorize and searchable afterwards. Wired to the session through
-  // `runtime.onMessagesDisplaced` — see `agent.ts`.
-  recall({
-    ai: host.env.AI,
-    index: host.env.VECTORIZE,
-    namespace: host.callerKey,
-    // The host's *resolved* AI Gateway id, so embedding calls are correlated with
-    // chat calls. Spread the rest: enumerating each field silently drops any
-    // option the plugin adds later.
-    aiGatewayId: host.aiGatewayId,
-    agentName: host.agentName,
-    ...RECALL
-  })
+  browser({ binding: env.BROWSER })
 ];

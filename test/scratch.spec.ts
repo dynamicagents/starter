@@ -2,12 +2,10 @@ import { describe, expect, it } from "vitest";
 import { env } from "cloudflare:workers";
 import { makeDoHelpers } from "@dynamicagents/core/testing";
 import type { CfCoderWorkspaceDO } from "@/index";
-import { openWorkspace } from "@dynamicagents/plugins/computer";
-import { createAgentRuntime } from "@dynamicagents/core";
+import type { PluginContext } from "@dynamicagents/core";
+import { openWorkspace, workspaceName } from "@dynamicagents/plugins/workspace";
 import { SCRATCH_OPEN_TOOL } from "@dynamicagents/plugins/scratch";
-import { CF_CODER_CONFIG } from "@/config";
 import type { ActiveCheckout, ActiveRepo } from "@/workspace/active-repo";
-import { workspaceName } from "@dynamicagents/plugins/computer";
 import { hostScratch, SCRATCH_DIR, SCRATCH_REPO } from "@/workspace/scratch";
 
 /**
@@ -68,22 +66,28 @@ function fakeExec() {
 
 const AUTHOR = { name: "da-coder", email: "coder@example.test" };
 
-/** Build the plugin and call its one tool, as the runtime would. */
+/** What an agent hands its plugins, enough of it for this one. */
+const CONTEXT = {
+  env,
+  storage: undefined as unknown as DurableObjectStorage,
+  agentName: "caller",
+  callerKey: () => "caller",
+  workspace: () => {
+    throw new Error("the scratch plugin reads no Think workspace");
+  },
+  runtime: () => undefined
+} as unknown as PluginContext<Env>;
+
+/** Build the plugin and call its one tool, as a turn would. */
 async function open(
   config: Parameters<typeof hostScratch>[0]
 ): Promise<string> {
-  const runtime = createAgentRuntime({
-    config: CF_CODER_CONFIG,
-    plugins: [hostScratch(config)]
-  });
-  const tools = await runtime.mainAgentTools({
-    session: { getCompactions: async () => [] } as never
-  });
+  const tools = hostScratch(config).tools!(CONTEXT);
   const execute = tools[SCRATCH_OPEN_TOOL]!.execute as (
     input: unknown,
     options: unknown
   ) => Promise<string>;
-  return String(await execute({}, {}));
+  return String(await execute({}, { toolCallId: "call-1", messages: [] }));
 }
 
 /** A workspace with a scratchpad on disk, as `git init` would leave it. */

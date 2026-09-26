@@ -6,9 +6,8 @@
 // Subcommands (preferred — they build the request + a readable digest for you):
 //   verify                     GET /accounts/{id}/tokens/verify
 //   logs   [flags]             historical Worker logs (Observability telemetry)
-//   wf     [name [instance]]   Workflows: list defs / list instances / one instance
 //   ai     [flags | <logId>]   AI Gateway calls: digest, or one call's prompt + reply
-//                              --task/--agent/--phase/--channel/--event select by
+//                              --task/--agent/--phase/--subagent/--event select by
 //                              what core tags each call with; --all totals every match
 //   fields [--worker <name>]   discover available log fields for a dataset
 //   containers [name]          container apps: image, version, rollout progress
@@ -34,20 +33,14 @@
 // Examples:
 //   npm run cf -- verify
 //   npm run cf -- logs --since 2h --level error
-//   npm run cf -- logs --worker da-starter --grep HandleTaskWorkflow
+//   npm run cf -- logs --worker da-starter --grep "[agent]"
 //   npm run cf -- logs --worker da-starter --app --since 30m
-//   npm run cf -- wf handle-task
-//   npm run cf -- wf handle-task 27to4pc4w7eo0psa59o
 //   npm run cf -- ai --since 2h
 //   npm run cf -- ai --task <taskId> --all
-//   npm run cf -- ai --agent reactive --phase round --since 1d
+//   npm run cf -- ai --agent reactive --phase turn --since 1d
 //   npm run cf -- ai 01KY4PSY6T1HBA7A2V22NKCFZC
 //   npm run cf -- containers
-//   npm run cf -- GET workflows -q per_page=50
-//
-// `npm run cf -- wf` with no name lists the workflows this Worker actually has
-// deployed. That query is the authority; a list written here would be a second
-// copy of `wrangler.jsonc` that nothing checks.
+//   npm run cf -- GET workers/scripts
 import fs from "node:fs";
 
 const ENV_FILE = ".cf.env";
@@ -71,13 +64,10 @@ const USAGE = `cf.mjs — Cloudflare API proxy (credentials from ${ENV_FILE})
   logs [--since 1h] [--worker <name>]    historical Worker logs, as a digest
        [--level error] [--grep <text>]
        [--app] [--limit 100] [--json|--raw]
-  wf                                     list workflow definitions
-  wf <name>                              list recent instances of a workflow
-  wf <name> <instanceId> [--json]        one instance, per-step pass/fail
   ai [--since 2h] [--model <m>]          AI Gateway calls, as a digest
      [--task <id>] [--agent <name>]      …selected by what core tags a call with
-     [--phase <p>] [--channel <id>]
-     [--event <taskId:r1|taskId:s1>]
+     [--phase <turn|subagent|compaction>]
+     [--subagent <class>] [--event <taskId>]
      [--limit 20] [--all] [--json|--raw] --all totals every match, not a page
   ai <logId> [--full] [--max N]          one call: prompt + reply (bodies)
   fields [--worker <name>]               list available log fields
@@ -330,72 +320,6 @@ async function cmdLogs(args) {
     );
 }
 
-async function cmdWf(args) {
-  const { flags, pos } = parseFlags(args, { bool: ["--json", "--raw"] });
-  const [name, instance] = pos;
-
-  if (!name) {
-    const { res, text } = await request("GET", acct("workflows"));
-    ensureOk(res, text);
-    if (flags.json || flags.raw)
-      return void printBody(text, { raw: flags.raw });
-    const defs = parseJson(text)?.result ?? [];
-    for (const w of defs)
-      out(`- ${w.name}  | class: ${w.class_name}  | script: ${w.script_name}`);
-    return;
-  }
-
-  if (!instance) {
-    const { res, text } = await request(
-      "GET",
-      acct(`workflows/${name}/instances`)
-    );
-    ensureOk(res, text);
-    if (flags.json || flags.raw)
-      return void printBody(text, { raw: flags.raw });
-    const arr = parseJson(text)?.result ?? [];
-    if (!Array.isArray(arr) || arr.length === 0)
-      return void out("no instances");
-    for (const i of arr)
-      out(
-        `${i.id}  ${(i.status ?? "?").padEnd(10)}  ${i.created_on ?? i.created ?? ""}`
-      );
-    return;
-  }
-
-  const { res, text } = await request(
-    "GET",
-    acct(`workflows/${name}/instances/${instance}`)
-  );
-  ensureOk(res, text);
-  if (flags.json || flags.raw) return void printBody(text, { raw: flags.raw });
-  const r = parseJson(text)?.result;
-  if (!r) return void printBody(text);
-  out(
-    `status: ${r.status}  success: ${r.success}  error: ${r.error ?? "null"}`
-  );
-  // A task that failed still finishes its instance cleanly — every step `ok`,
-  // `success: true` — because a typed turn failure is a value the loop delivers
-  // rather than a throw. So `status`, `success` and `error` agree on "fine" for a
-  // run the user saw fail, and the verdict the workflow returns is the only place
-  // that distinction is recorded. It arrives here as the instance's `output`.
-  if (r.output !== undefined && r.output !== null)
-    out(
-      `verdict: ${typeof r.output === "object" ? JSON.stringify(r.output) : r.output}`
-    );
-  out(
-    `queued ${r.queued ?? "?"} · start ${r.start ?? "?"} · end ${r.end ?? "?"}`
-  );
-  out(`steps (${r.step_count ?? r.steps?.length ?? 0}):`);
-  for (const s of r.steps ?? []) {
-    const errs = (s.attempts ?? []).filter((a) => a.error).map((a) => a.error);
-    out(
-      `  - ${(s.name ?? s.type ?? "?").padEnd(16)} ${s.success ? "ok" : "ERROR"}` +
-        (errs.length ? ` ${JSON.stringify(errs)}` : "")
-    );
-  }
-}
-
 async function cmdFields(args) {
   const { flags } = parseFlags(args, {
     bool: ["--raw"],
@@ -453,8 +377,8 @@ function messageText(msg) {
 }
 
 // `cf ai` flags that match one of the AI Gateway metadata keys core stamps on
-// every model call — see `gatewayLogFields` in `@dynamicagents/core/agent`.
-const AI_METADATA_FLAGS = ["task", "agent", "phase", "channel"];
+// every model call — see `gatewayLogFields` in `@dynamicagents/core/model`.
+const AI_METADATA_FLAGS = ["task", "agent", "phase", "subagent"];
 
 // Past this many matches `--all` refuses rather than paging for minutes.
 const AI_ALL_MAX = 2000;
@@ -468,7 +392,7 @@ const AI_ALL_MAX = 2000;
  *
  * `metadata.value` matches a value under *any* key, which is why the metadata
  * flags need no key filter beside them: an agent name, a phase, a task id and a
- * channel id do not collide. Metadata values compare as strings — `"0"` matches
+ * sub-agent class do not collide. Metadata values compare as strings — `"0"` matches
  * a stored `0` and the number `0` matches nothing.
  */
 function aiFilters(flags) {
@@ -616,7 +540,15 @@ async function cmdAi(args) {
     const io = `${l.tokens_in ?? 0}→${l.tokens_out ?? 0}`.padEnd(11);
     const c = `$${(l.cost ?? 0).toFixed(5)}`.padEnd(9);
     const st = l.success ? (l.cached ? "cached" : "ok") : "FAIL";
-    const where = [l.metadata?.agent, l.metadata?.phase, namedEventId(l)]
+    // The task is in the metadata as well as the event id, and there it reads
+    // as itself: a task id is a UUID, which `namedEventId` takes for one AI
+    // Gateway made up.
+    const where = [
+      l.metadata?.agent,
+      l.metadata?.phase,
+      l.metadata?.subAgent,
+      l.metadata?.taskId ?? namedEventId(l)
+    ]
       .filter(Boolean)
       .join(" ");
     out(
@@ -912,8 +844,6 @@ if (!cmd || cmd === "help" || cmd === "--help" || cmd === "-h") {
   if (!res.ok) process.exit(1);
 } else if (cmd === "logs") {
   await cmdLogs(argv.slice(1));
-} else if (cmd === "wf") {
-  await cmdWf(argv.slice(1));
 } else if (cmd === "ai") {
   await cmdAi(argv.slice(1));
 } else if (cmd === "fields") {

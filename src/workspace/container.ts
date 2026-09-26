@@ -1,48 +1,58 @@
-import { MAX_TOOL_CALL_MS, TOOL_CALL_GRACE_MS } from "@dynamicagents/core";
 import type { ComputerConfig } from "@dynamicagents/plugins/computer";
 import {
   WORKSPACE_DIR,
   type WorkspaceObjectBase
-} from "@dynamicagents/plugins/computer";
+} from "@dynamicagents/plugins/workspace";
 
 /**
- * How long `sb_exec` waits on an install in flight before running the command
+ * How long `bash` waits on an install in flight before running the command
  * anyway. See `installGateMs` below for why it is above the plugin's default.
  */
 const INSTALL_GATE_MS = 180_000;
 
 /**
- * What one container command may run for — derived, because the install gate and
- * the command share a single tool call, and core aborts that call's signal
- * `TOOL_CALL_GRACE_MS` short of `MAX_TOOL_CALL_MS` from its start. Core's
- * `MAX_TOOL_CALL_MS` explains what that ceiling protects, and `TOOL_CALL_GRACE_MS`
- * why the signal comes first.
+ * What one container command may run for.
  *
- * Staying under the signal is what keeps the container's own kill the one that
- * lands, and the difference is what the model gets back: the container's kill
- * returns every line the command wrote, while `sb_exec` stopping at the signal
- * returns only that it stopped. The margin covers the Worker-side work around the
- * command — opening the workspace, the gate's last read, starting the process — so
- * the two cannot race at the boundary. It is sized generously rather than measured.
+ * A command runs inside a turn, and Think cuts a turn after roughly three to
+ * fifteen minutes; the tool call in flight at the cut is lost, and the model
+ * gets back only that it was interrupted. The container's own kill returns
+ * every line the command wrote. So the command is bounded well inside a turn,
+ * together with the install gate, which shares the same tool call.
  */
-const COMMAND_TIMEOUT_MS =
-  MAX_TOOL_CALL_MS - TOOL_CALL_GRACE_MS - INSTALL_GATE_MS - 15_000;
+const COMMAND_TIMEOUT_MS = 400_000;
 
 /**
- * What a parent agent has to know about the dependency tree to read a report.
+ * What a read-only parent is told about the workspace, in place of the
+ * `computer` plugin's own block — which describes a shell, a writer and an
+ * editor the parent does not have. A model told it has a shell spends a turn
+ * discovering it does not, and the natural next move, doing the work itself, is
+ * the one thing the split exists to prevent.
  *
- * Here rather than in either agent's `plugins.ts` because both say it and it has
- * to stay one sentence: two copies drift, and the drift is invisible — nothing
- * fails, the model is simply told two different things about the same workspace
- * depending on which agent it is.
+ * Here rather than in either agent's `plugins.ts` because both say it: two
+ * copies drift, and the drift is invisible. What a sub-agent is told about
+ * working in the tree belongs to `@dynamicagents/plugins/computer`.
  *
- * It is about the **parent's** read-only tools. What a subagent is told about
- * working in the tree belongs to `@dynamicagents/plugins/computer`, which owns
- * that domain and states it in its own capability text.
+ * `delegate` is the sentence that differs, naming who does the work.
  */
-export const DEPENDENCY_TREE_NOTE =
-  "`node_modules` lives on the container's disk, not in the workspace, so " +
-  "these tools cannot see inside it. A subagent's shell can.";
+export function parentWorkspaceContext(delegate: string): string {
+  return [
+    `You can read the workspace ${delegate} work in, but not change it: \`read\` a file, \`list\` a directory, \`find\` files by name, and \`grep\` their contents.`,
+    "Use these to check a report against what is actually on disk — read the file it says it changed. You cannot run commands, write, edit or delete; that is what delegation is for.",
+    "`node_modules` lives on the container's disk, not in the workspace, so these tools cannot see inside it. A sub-agent's shell can."
+  ].join("\n");
+}
+
+/**
+ * The tools a read-only parent keeps from its model: Think's own file writers,
+ * over the same checkout its sub-agents work in. Its `activeTools` leave these
+ * out; the computer plugin's own `bash` and `edit` are not installed on it at
+ * all, and Think's `bash` is switched off.
+ */
+export const WORKSPACE_WRITERS: ReadonlySet<string> = new Set([
+  "write",
+  "edit",
+  "delete"
+]);
 
 /**
  * The container settings every path into a workspace shares.
@@ -56,15 +66,13 @@ export const DEPENDENCY_TREE_NOTE =
  *
  * The name is a parameter rather than resolved here: it is one workspace per
  * caller **per repository** (`@cloudflare/computer` pairs one Durable Object
- * with one container, so two repositories cannot share one), and the callers
- * differ in how they reach the caller half — `host.callerKey()` on a plugin
- * list, which throws once a task is cancelled, and `identityKeyOrTask` on the
- * cancellation path.
+ * with one container, so two repositories cannot share one), and which
+ * repository is the caller's to choose, turn by turn.
  *
  * A caller's checkout **outlives the task**, which is why `repo_clone` fetches
  * and resets an existing one rather than assuming an empty directory. Its
  * dependencies do not: they live on the container's disk, and a new container
- * reinstalls — `@dynamicagents/plugins/computer` owns that.
+ * reinstalls — `@dynamicagents/plugins/workspace` owns that.
  */
 export function workspaceContainer(
   binding: DurableObjectNamespace<WorkspaceObjectBase>,
@@ -95,22 +103,20 @@ export function workspaceContainer(
      * remainder. But "usually"
      * is not "always": a model that reaches for `npm` immediately meets a fresh
      * ~85-second `npm ci`, and at 90 seconds the gate would give up a few seconds
-     * short, report "nothing was run — call again in a moment", and spend a turn
-     * on it.
+     * short, report "nothing was run — call again in a moment", and spend a
+     * step on it.
      *
      * Three minutes covers a measured install with room. It is not free: the wait
-     * happens inside the same tool call as the command, so every second of it
-     * comes out of {@link COMMAND_TIMEOUT_MS}.
+     * happens inside the same tool call as the command, and both come out of one
+     * turn; see {@link COMMAND_TIMEOUT_MS}.
      */
     installGateMs: INSTALL_GATE_MS,
     /**
      * Stated rather than defaulted, because it is one side of an invariant held
-     * with core's tool deadline and the computer plugin's install gate. See
-     * {@link COMMAND_TIMEOUT_MS} for why it sits below the call's signal rather
-     * than at `MAX_TOOL_CALL_MS`.
+     * with the turn and the install gate; see {@link COMMAND_TIMEOUT_MS}.
      *
      * Note the other end of the same command: the container-idle window in
-     * `@dynamicagents/plugins/computer` must stay above this, or the idle
+     * `@dynamicagents/plugins/workspace` must stay above this, or the idle
      * sweeper destroys the container out from under a command still running in
      * it. That package's default is the one this agent takes.
      */

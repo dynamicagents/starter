@@ -4,8 +4,8 @@
  * The agents are **tenants** of one deployment, routed by `src/index.ts` on the
  * A2A `params.tenant` — they share one origin, one `/a2a` endpoint, one signed
  * AgentCard, one JWKS and one signing key. What they do *not* share is what is
- * configured below: each gets its own Durable Object class and its own Workflow
- * binding. Blocks are grouped per agent so deleting one is a comment-out rather
+ * configured below: each gets its own Durable Object class. Blocks are grouped
+ * per agent so deleting one is a comment-out rather
  * than a puzzle — see "Delete what you don't want" in the README for the full
  * three-step removal.
  *
@@ -62,7 +62,7 @@
 
   // --- shared: required by core itself -------------------------------------
 
-  // Workers AI backs every agent's tool loop (via AI Gateway). `remote: true`
+  // Workers AI backs every agent's model (via AI Gateway). `remote: true`
   // reflects reality — Workers AI has no local execution mode and always hits
   // remote resources — and suppresses wrangler's per-run warning. In tests the
   // pool-level `remoteBindings: false` (vitest.config.ts) overrides this and
@@ -74,10 +74,9 @@
 
   // --- plugin-required bindings --------------------------------------------
   // A plugin cannot add its own wrangler binding, which is the whole reason it
-  // declares `requires`. Each of these is asserted at DO start by
-  // `createAgentRuntime({ env })`, so a missing one fails with a sentence naming
-  // the plugin rather than at the first tool call, inside a request someone is
-  // waiting on.
+  // declares `requires`. Each of these is asserted when the agent starts, so a
+  // missing one fails with a sentence naming the plugin rather than at the first
+  // tool call, inside a request someone is waiting on.
 
   // Each coder's workspace container, running `computerd` (see Dockerfile).
   // Requires a PAID Workers plan.
@@ -91,9 +90,9 @@
   // default and cannot build a real project.
   //
   // The CPU is the exposure, and it was measured: on standard-1 (1/2 vCPU,
-  // 4 GiB) a one-line README change took 59 minutes, of which 52 were inside
-  // `executeChunk` at **0.0% of Worker CPU** — the Worker was asleep awaiting
-  // this container the whole time.
+  // 4 GiB) a one-line README change took 59 minutes, of which 52 were spent at
+  // **0.0% of Worker CPU** — the Worker was asleep awaiting this container the
+  // whole time.
   // `npm run check` on the target repo is five sequential tools including two
   // full `tsc` runs; it is recorded at 28 s in `src/workspace/install-plan.ts`
   // and was observed taking 3-5 minutes here.
@@ -101,7 +100,7 @@
   // Both entries run a custom 2 vCPU, 6 GiB, 8 GB disk. Two things want the
   // second core:
   //
-  // 1. **A reading subtask shares the parent's container.** Several run at once
+  // 1. **A reading session shares the parent's container.** Several run at once
   //    against one checkout — that is the point of not giving them one each — and
   //    on a single core they contend rather than parallelise.
   // 2. The build itself is what the measurement above is about, and the work is
@@ -126,13 +125,13 @@
   // are rented: an entry bills only for what is running, so raising it costs
   // nothing until there is work to fill it.
   //
-  // **For claude-coder it is what bounds the fan-out.** A writing subtask works in
-  // a worktree of its own while the parent keeps one, so a round of N writers wants
-  // N+1 instances of `ClaudeCoderWorkspaceDO` — `CLAUDE_CODER_CONFIG` in
-  // `src/config.ts` carries why. A reading subtask wants none: it runs in the
-  // parent's container, against the checkout already in it. The cap is per
-  // deployment rather than per task, so the number is that peak multiplied by the
-  // tasks expected to run at once — a full round plus its parent, three times over.
+  // **For claude-coder it is what bounds the fan-out.** A writing session works in
+  // a worktree of its own while the parent keeps one, so N writers at once want
+  // N+1 instances of `ClaudeCoderWorkspaceDO` — `CLAUDE_CODER` in `src/config.ts`
+  // carries why. A reading session wants none: it runs in the parent's container,
+  // against the checkout already in it. The cap is per deployment rather than per
+  // task, so the number is that peak multiplied by the tasks expected to run at
+  // once — a full fan-out plus its parent, three times over.
   //
   // That width is not near a platform limit; it is around 2% of the concurrent
   // memory and vCPU Cloudflare documents per account. What the number guards is
@@ -197,7 +196,7 @@
   // one; container directory snapshots, not a bucket, are the intended fix. See
   // `src/workspace/install-plan.ts`.
 
-  // `@dynamicagents/plugins/browser` — used by reactive.
+  // `@dynamicagents/plugins/browser` — used by every agent.
   // NOTE: requires a PAID Workers plan; Browser Rendering is not on the free
   // tier. `remote: true` is required for Quick Actions under `wrangler dev`.
   "browser": {
@@ -205,38 +204,26 @@
     "remote": true
   },
 
-  // `@dynamicagents/plugins/recall` — used by reactive and claude-coder. Must be a
-  // 1024-dim cosine index to match the `@cf/baai/bge-m3` embedding model.
-  // Vectorize has no local mode, so tests inject a fake index.
-  //   wrangler vectorize create da-starter-recall --dimensions=1024 --metric=cosine
-  "vectorize": [
-    {
-      "binding": "VECTORIZE",
-      "index_name": "da-starter-recall",
-      "remote": true
-    }
-  ],
-
   // --- the agents ----------------------------------------------------------
   // One Durable Object class per agent: each is keyed by the verified caller
-  // (`identity.key`), holding that caller's SQLite-backed Session — continuous
-  // history plus writable memory.
+  // (`identity.key`), holding that caller's tasks and its SQLite-backed Session —
+  // continuous history plus writable memory.
   //
-  // The subagent classes (`ReactiveSubagent` and its siblings) are deliberately
-  // absent. Each is a managed facet created beneath its agent, so it needs no
-  // binding and no `new_sqlite_classes` entry; it only has to be exported from
-  // src/index.ts so `ctx.exports` can resolve it by class name. They DO need a
-  // test-only binding — see the comment in vitest.config.ts.
+  // The sub-agent classes (`ReactiveGeneral` and its siblings) are deliberately
+  // absent. Each is a facet created beneath its agent, so it needs no binding and
+  // no `new_sqlite_classes` entry; it only has to be exported from src/index.ts
+  // so `ctx.exports` can resolve it by class name. They DO need a test-only
+  // binding — see the comment in vitest.config.ts.
   "durable_objects": {
     "bindings": [
-      { "class_name": "ReactiveAgent", "name": "ReactiveAgent" },
-      { "class_name": "CfCoderAgent", "name": "CfCoderAgent" },
-      { "class_name": "ClaudeCoderAgent", "name": "ClaudeCoderAgent" },
+      { "class_name": "Reactive", "name": "Reactive" },
+      { "class_name": "CfCoder", "name": "CfCoder" },
+      { "class_name": "ClaudeCoder", "name": "ClaudeCoder" },
 
       // Not agents — the workspaces. One object per caller per repository,
       // holding that checkout's filesystem in SQLite and owning the container
       // that mounts it. Addressed by `idFromName`, never by the caller alone;
-      // see `workspaceName` in `@dynamicagents/plugins/computer`, which
+      // see `workspaceName` in `@dynamicagents/plugins/workspace`, which
       // both share.
       //
       // Two classes rather than one shared class with two bindings, because a
@@ -249,7 +236,7 @@
         "name": "CLAUDE_CODER_WORKSPACE"
       },
 
-      // Not an agent, and not optional. Core files every subagent note on the
+      // Not an agent, and not optional. Core files every sub-agent note on the
       // Task's transcript and posts a link instead of the note, so an agent
       // Durable Object that starts without this binding throws at `onStart` —
       // core's `@dynamicagents/core/artifacts` owns the reasoning and the
@@ -324,28 +311,14 @@
       // code is not enough.
       "tag": "v9",
       "deleted_classes": ["ProactiveAgent"]
-    }
-  ],
-
-  // Async A2A (accept + notify): the Worker accepts a turn synchronously and
-  // hands generation plus the gatekeeper push-notification callback to a durable
-  // Workflow. The round agents run the same loop over different souls and
-  // plugins, so they share core's workflow body behind an entrypoint each.
-  "workflows": [
-    {
-      "binding": "HANDLE_TASK_WORKFLOW",
-      "name": "handle-task",
-      "class_name": "HandleTaskWorkflow"
     },
     {
-      "binding": "CF_CODER_WORKFLOW",
-      "name": "cf-coder",
-      "class_name": "CfCoderWorkflow"
-    },
-    {
-      "binding": "CLAUDE_CODER_WORKFLOW",
-      "name": "claude-coder",
-      "class_name": "ClaudeCoderWorkflow"
+      // The agents move onto Think under new class names, and start empty:
+      // every task, conversation and memory the old classes held is dropped.
+      // The workspace objects are untouched, so every checkout survives.
+      "tag": "v10",
+      "deleted_classes": ["ReactiveAgent", "CfCoderAgent", "ClaudeCoderAgent"],
+      "new_sqlite_classes": ["Reactive", "CfCoder", "ClaudeCoder"]
     }
   ],
 
@@ -358,9 +331,7 @@
   // **There is no model credential here, for any agent.** Every agent in this
   // Worker reaches Workers AI through the `AI` binding above, which Cloudflare
   // authenticates for the Worker — there is no key to store, rotate or leak, and
-  // no AI Gateway token either. See `.env.example`, and `CREDENTIAL_COPY` in
-  // `src/agents/cf-coder/workflow.ts` for what an operator is told when the path
-  // refuses a request anyway.
+  // no AI Gateway token either. See `.env.example`.
   "secrets": {
     "required": [
       "A2A_SIGNING_KEY",

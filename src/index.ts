@@ -6,23 +6,21 @@ import { reactive } from "./agents/reactive/definition";
 import { cfCoder } from "./agents/cf-coder/definition";
 import { claudeCoder } from "./agents/claude-coder/definition";
 
-// Durable Objects and Workflows must be exported from the Worker entry so the
-// runtime can resolve them by class name. The `*Subagent` classes are **facets**:
-// they need no wrangler binding and no `new_sqlite_classes` entry, only this
-// export, so `ctx.exports` can find them.
-export { ReactiveAgent } from "./agents/reactive/agent";
-export { ReactiveSubagent } from "./agents/reactive/subagent";
-export { HandleTaskWorkflow } from "./agents/reactive/workflow";
+// Durable Objects must be exported from the Worker entry so the runtime can
+// resolve them by class name. The sub-agent classes are **facets**: they need no
+// wrangler binding and no `new_sqlite_classes` entry, only this export, so
+// `ctx.exports` can find them.
+export { Reactive } from "./agents/reactive/agent";
+export { ReactiveGeneral } from "./agents/reactive/children";
 
-export { CfCoderAgent } from "./agents/cf-coder/agent";
-export { CfCoderSubagent } from "./agents/cf-coder/subagent";
-export { CfCoderWorkflow } from "./agents/cf-coder/workflow";
+export { CfCoder } from "./agents/cf-coder/agent";
+export { CfCoderCode } from "./agents/cf-coder/children";
 
 // The workspaces: a Durable Object holding one repository's filesystem in
 // SQLite, paired with the container that mounts it. One class per agent that has
 // one — a namespace is keyed by class name, so a shared class would put both
 // agents' checkouts in one namespace. Both are thin subclasses of the base in
-// `@dynamicagents/plugins/computer`; `verify:isolation` keeps each out of
+// `@dynamicagents/plugins/workspace`; `verify:isolation` keeps each out of
 // the bundles that do not install it.
 export { CfCoderWorkspaceDO } from "./agents/cf-coder/workspace-do";
 export { ClaudeCoderWorkspaceDO } from "./agents/claude-coder/workspace-do";
@@ -40,9 +38,11 @@ export { WorkspaceProxy } from "@cloudflare/computer";
 // beside the binding in wrangler.jsonc.
 export { Artifacts };
 
-export { ClaudeCoderAgent } from "./agents/claude-coder/agent";
-export { ClaudeCoderSubagent } from "./agents/claude-coder/subagent";
-export { ClaudeCoderWorkflow } from "./agents/claude-coder/workflow";
+export { ClaudeCoder } from "./agents/claude-coder/agent";
+export {
+  ClaudeCoderSession,
+  ClaudeCoderReader
+} from "./agents/claude-coder/children";
 
 /**
  * One Worker, every agent below, addressed by A2A `tenant`.
@@ -56,10 +56,8 @@ export { ClaudeCoderWorkflow } from "./agents/claude-coder/workflow";
  * ```
  *
  * Each agent is one `defineAgent` call in its own `definition.ts` — tenant id,
- * card, Durable Object, Workflow. That declaration is what is mounted here *and*
- * what the agent's Workflow resolves its DO stub from, so the two can never
- * address different objects. Adding an agent is one file plus a line below plus
- * its wrangler bindings.
+ * card, Durable Object. Adding an agent is one file plus a line below plus its
+ * wrangler bindings.
  *
  * A tenant rather than a path prefix, and one signing key rather than one per
  * agent, both because the AgentCard lives at a **well-known URI** — RFC 8615

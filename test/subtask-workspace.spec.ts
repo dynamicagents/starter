@@ -74,6 +74,8 @@ function harness(opts: {
   remote?: string[];
   /** Fail the reset an abort runs. */
   resetFails?: boolean;
+  /** Refuse every session at admission. */
+  refuse?: boolean;
   /** What keeping a failed run's work leaves each repository's HEAD at. */
   kept?: Record<string, { head: string; wip?: boolean }>;
   /**
@@ -91,6 +93,7 @@ function harness(opts: {
   const placed: Record<string, string>[] = [];
   const keeps: { cwd: string; env: Record<string, string> }[] = [];
   const stopped: string[] = [];
+  const admitted: string[] = [];
   let current = "";
   const stub = {
     checkoutDir: async () => dirs[current],
@@ -200,6 +203,10 @@ function harness(opts: {
     stopSession: async (workspace, runId) => {
       stopped.push(`${workspace}#${runId}`);
     },
+    admit: async (workspace) => {
+      admitted.push(workspace);
+      if (opts.refuse) throw new Error("no credential can pay for it");
+    },
     active,
     pool,
     label: "test",
@@ -209,7 +216,17 @@ function harness(opts: {
   const heal = () => {
     cloneFails = undefined;
   };
-  return { subtasks, calls, pool, active, placed, keeps, stopped, heal };
+  return {
+    subtasks,
+    calls,
+    pool,
+    active,
+    placed,
+    keeps,
+    stopped,
+    admitted,
+    heal
+  };
 }
 
 const ctx = { taskId: "task-a", runId: "detached:1" };
@@ -269,6 +286,18 @@ describe("preparing a worktree for a writing session", () => {
     // Enrolled for the weekly sweep without routing the parent's tools to it.
     expect(active.noted).toEqual([worktreeRepo("acme/api", 0)]);
     expect(active.get()).toBe("acme/api");
+  });
+
+  it("asks the worktree it claimed before cloning into it", async () => {
+    const { subtasks, calls, admitted } = harness({
+      selected: "acme/api",
+      checkout: CHECKOUT,
+      refuse: true
+    });
+
+    await expect(subtasks.resolve(ctx)).rejects.toThrow(/no credential/);
+    expect(admitted).toEqual([SLOT0]);
+    expect(calls).toEqual([]);
   });
 
   /** A repeated `prepare` for one run must not redo anything. */
@@ -376,6 +405,18 @@ describe("preparing a worktree for a writing session", () => {
       workspaceName: "caller|acme/api",
       dir: "/workspace/api"
     });
+  });
+
+  it("asks the workspace a reading session reads in", async () => {
+    const { subtasks, admitted } = harness({
+      selected: "acme/api",
+      checkout: CHECKOUT,
+      dirs: { "caller|acme/api": "/workspace/api" },
+      refuse: true
+    });
+
+    await expect(subtasks.reading()).rejects.toThrow(/no credential/);
+    expect(admitted).toEqual(["caller|acme/api"]);
   });
 
   it("delegates from the repository's pool while the parent is in one of its worktrees", async () => {

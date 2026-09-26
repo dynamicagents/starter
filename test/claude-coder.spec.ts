@@ -4,6 +4,10 @@ import { runInDurableObject } from "cloudflare:test";
 import type { TurnConfig, TurnContext } from "@cloudflare/think";
 import type { PluginContext } from "@dynamicagents/core";
 import { makeDoHelpers } from "@dynamicagents/core/testing";
+import {
+  credentialPool,
+  type CredentialState
+} from "@dynamicagents/plugins/claude-code";
 import { openWorkspace, workspaceName } from "@dynamicagents/plugins/workspace";
 import type { AgentToolLifecycleResult, AgentToolRunInfo } from "agents";
 import type { ContextConfig } from "agents/context";
@@ -25,8 +29,10 @@ import {
 import { CLAUDE_CODE_SESSION } from "@/config";
 import {
   claudeCodeConfig,
+  CREDENTIALS_KEY,
   GH_TOKEN_PLACEHOLDER
 } from "@/agents/claude-coder/claude-code";
+import { admitSession } from "@/agents/claude-coder/plugins";
 import { activeRepo } from "@/workspace/active-repo";
 import { gitIdentity } from "@/workspace/git-identity";
 import type { SubtaskWorkspaces } from "@/workspace/subtask-workspace";
@@ -327,14 +333,7 @@ describe("a writing session's worktree", () => {
   });
 });
 
-/**
- * The pre-flight, and why it is worth an RPC.
- *
- * An invocation carries an 18.7-27k-token cached prefix before it does
- * anything, so starting a session the egress gateway will refuse pays a container start
- * and that prefix to learn what this answers for free — and reports it as a
- * failed run rather than as a limit with a time on it.
- */
+/** The pre-flight: see `admitSession` in `@/agents/claude-coder/plugins`. */
 describe("the credential pool", () => {
   it("reports a fresh pool as usable", async () => {
     const workspace = freshWorkspace("fresh-pool");
@@ -347,6 +346,38 @@ describe("the credential pool", () => {
       expect(lead.index).toBe(0);
       expect(lead.token).toBe("sk-ant-oat01-test-1");
     }
+  });
+
+  it("admits a session into a workspace whose pool is fresh", async () => {
+    await expect(
+      admitSession(env, `admit-fresh:${crypto.randomUUID()}`)
+    ).resolves.toBeUndefined();
+  });
+
+  it("refuses a session once every credential is spent, saying when one resets", async () => {
+    const name = `admit-spent:${crypto.randomUUID()}`;
+    const resetAt = Date.now() + 60 * 60_000;
+    const binding = env.CLAUDE_CODER_WORKSPACE;
+    await runInDurableObject(
+      binding.get(binding.idFromName(name)),
+      async (_, state) => {
+        const pool = credentialPool({
+          credentials: claudeCodeConfig(env).credentials,
+          store: {
+            read: async () =>
+              (await state.storage.get<CredentialState[]>(CREDENTIALS_KEY)) ??
+              [],
+            write: (states) => state.storage.put(CREDENTIALS_KEY, states)
+          }
+        });
+        let lead = await pool.lead();
+        while (lead.ok) lead = await pool.spend(lead.id, resetAt);
+      }
+    );
+
+    await expect(admitSession(env, name)).rejects.toThrow(
+      new Date(resetAt).toISOString()
+    );
   });
 });
 

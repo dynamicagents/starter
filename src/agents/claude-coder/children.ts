@@ -228,23 +228,6 @@ async function settleReader({
   if (name) await stopSession(parent.env, name, runId);
 }
 
-/** What to say when the whole credential pool is unavailable. */
-function exhausted(retryAt: number | undefined): string {
-  if (retryAt === undefined) {
-    return (
-      "no Anthropic credential in this deployment is usable, and none will " +
-      "recover on its own — every one was rejected, or none is configured. " +
-      "An operator has to mint a fresh `claude setup-token` credential. " +
-      "Nothing was changed in the repository."
-    );
-  }
-  return (
-    "every Anthropic credential in this deployment has reached its " +
-    `subscription limit. The earliest resets at ${new Date(retryAt).toISOString()}. ` +
-    "Nothing was changed in the repository — send this request again after that."
-  );
-}
-
 /** A Claude Code session as a sub-agent; the writer and the reader below. */
 abstract class ClaudeCodeRun extends SubAgent<Env> {
   protected abstract readonly kind: "write" | "read";
@@ -281,13 +264,8 @@ abstract class ClaudeCodeRun extends SubAgent<Env> {
 
   /**
    * The session's prompt. Runs once per run, before the session starts, and a
-   * throw fails the run with its message.
-   *
-   * **Ask before paying for a container start.** An invocation carries an
-   * 18.7-27k-token cached prefix before it does anything, so starting a session
-   * whose first model call the egress gateway will refuse costs that prefix to
-   * learn what one RPC answers for free — and reports it as a failed run rather
-   * than as a limit with a time on it.
+   * throw fails the run with its message. Whether the run can be paid for was
+   * asked in `prepare` — see `admitSession` in `./plugins.ts`.
    *
    * **What is true about the workspace, folded in.** The session starts whatever
    * the workspace's state, and it has no tool that reaches the host, so a fact
@@ -300,10 +278,9 @@ abstract class ClaudeCodeRun extends SubAgent<Env> {
     place: SessionPlace,
     writes: boolean
   ): Promise<string> {
-    const stub = this.#stub(place.workspaceName);
-    const lead = await stub.claudeCredentials();
-    if (!lead.ok) throw new Error(exhausted(lead.retryAt));
-    const note = sessionAdvisory(await stub.advisories());
+    const note = sessionAdvisory(
+      await this.#stub(place.workspaceName).advisories()
+    );
     if (!writes) return sessionBrief(task, note);
     const submodules = await this.#submodules(place);
     await this.#recordStarts(place, [".", ...submodules]);

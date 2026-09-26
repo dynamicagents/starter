@@ -95,7 +95,8 @@ export class ClaudeCoderWorkspaceDO extends WorkspaceObjectBase {
 
   /**
    * Is any credential usable right now, and if not, when? Asked before a
-   * session starts — see `brief` in `./children.ts`, which carries the reason.
+   * session is dispatched — see `admitSession` in `./plugins.ts`, which carries
+   * the reason.
    */
   async claudeCredentials(): Promise<Lead> {
     return await this.#session.credentials(this.#credentials);

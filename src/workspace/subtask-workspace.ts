@@ -445,6 +445,12 @@ export function subtaskWorkspaces(config: {
   ) => Promise<{ success: boolean; stdout: string; stderr: string }>;
   /** Stop a run's session in a workspace, before its commits are discarded. */
   stopSession: (workspace: string, runId: string) => Promise<void>;
+  /**
+   * Refuse a session by throwing, handed the workspace it would run in. Asked
+   * before anything reaches that workspace's container, a writer's clone
+   * included.
+   */
+  admit: (workspace: string) => Promise<void>;
   active: ActiveRepo;
   pool: PoolStore;
   label: string;
@@ -489,6 +495,13 @@ export function subtaskWorkspaces(config: {
         "scratchpad with `scratch_open`, before delegating." +
         (note ? `\n\n${note}` : "")
     );
+  };
+
+  /** A session in a workspace's own checkout: a scratchpad's, or a reader's. */
+  const placeIn = async (name: string): Promise<SessionPlace> => {
+    const dir = await checkoutIn(name);
+    await config.admit(name);
+    return { workspaceName: name, dir };
   };
 
   /**
@@ -723,8 +736,7 @@ export function subtaskWorkspaces(config: {
       const selected = config.active.get();
       const repo = selectedRepo(selected);
       if (repo === undefined) {
-        const name = workspaceName(config.callerKey(), selected);
-        return { workspaceName: name, dir: await checkoutIn(name) };
+        return placeIn(workspaceName(config.callerKey(), selected));
       }
 
       // What the parent cloned, which is the only honest thing to clone: the url
@@ -752,6 +764,7 @@ export function subtaskWorkspaces(config: {
 
       const claimed = claim(config.pool, repo, ctx, now());
       const name = nameOf(claimed);
+      await config.admit(name);
       const ready = claimed.ready
         ? claimed
         : await prepare(claimed, checkout, name);
@@ -768,8 +781,7 @@ export function subtaskWorkspaces(config: {
     },
 
     async reading(): Promise<SessionPlace> {
-      const name = workspaceName(config.callerKey(), config.active.get());
-      return { workspaceName: name, dir: await checkoutIn(name) };
+      return placeIn(workspaceName(config.callerKey(), config.active.get()));
     },
 
     async release(ctx): Promise<void> {

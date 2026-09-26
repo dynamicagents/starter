@@ -66,6 +66,41 @@ export async function stopSession(
   );
 }
 
+/** What to say when the whole credential pool is unavailable. */
+function exhausted(retryAt: number | undefined): string {
+  if (retryAt === undefined) {
+    return (
+      "no Anthropic credential in this deployment is usable, and none will " +
+      "recover on its own — every one was rejected, or none is configured. " +
+      "An operator has to mint a fresh `claude setup-token` credential. " +
+      "Nothing was changed in the repository."
+    );
+  }
+  return (
+    "every Anthropic credential in this deployment has reached its " +
+    `subscription limit. The earliest resets at ${new Date(retryAt).toISOString()}. ` +
+    "Nothing was changed in the repository — send this request again after that."
+  );
+}
+
+/**
+ * Refuse a session the credential pool cannot pay for, before its container
+ * starts — what that saves is on `credentials` in
+ * `@dynamicagents/plugins/claude-code`. From `prepare`, not `brief`: a writer's
+ * worktree is cloned before `brief` runs. The refusal is the tool's answer,
+ * with the reset time in it, and nothing is dispatched.
+ *
+ * Asked of the workspace the session runs in, because each keeps its own pool:
+ * see `./workspace-do.ts`.
+ */
+export async function admitSession(env: Env, workspace: string): Promise<void> {
+  const binding = env.CLAUDE_CODER_WORKSPACE;
+  const lead = await binding
+    .get(binding.idFromName(workspace))
+    .claudeCredentials();
+  if (!lead.ok) throw new Error(exhausted(lead.retryAt));
+}
+
 /**
  * Where a writing session works, and what becomes of it — built from the
  * parent's context, which is what `prepare` and `settle` are handed.
@@ -85,6 +120,7 @@ export function sessionWorkspaces(ctx: PluginContext<Env>): SubtaskWorkspaces {
     exec: (command, options, workspace) =>
       workspaceExec(container(env, () => workspace))(command, options),
     stopSession: (workspace, runId) => stopSession(env, workspace, runId),
+    admit: (workspace) => admitSession(env, workspace),
     active: activeRepo(ctx.storage),
     pool: sqlPoolStore(ctx.storage),
     // The tenant id is where this name lives; `./agent.ts` spells its own log

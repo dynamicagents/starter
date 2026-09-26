@@ -74,6 +74,17 @@ describe("addressing a worktree", () => {
     ]) {
       expect(isBranchName(runBranch({ taskId: "task-a", runId }))).toBe(true);
     }
+    // Replacing what git refuses must not give two runs one branch.
+    const branches = [
+      "detached:call:a",
+      "detached:call/a",
+      "detached:call-a"
+    ].map((runId) => runBranch({ taskId: "task-a", runId }));
+    expect(new Set(branches).size).toBe(branches.length);
+    expect(branches[2]).toBe("claude-coder/task-a/call-a");
+    expect(runBranch({ taskId: "t", runId: "detached::" })).not.toBe(
+      runBranch({ taskId: "t", runId: "detached:/" })
+    );
     for (const name of [branch, "feature/artifacts", "tiago/fix-1", "a.b/c"]) {
       expect(isBranchName(name)).toBe(true);
     }

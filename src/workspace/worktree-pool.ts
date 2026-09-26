@@ -92,15 +92,28 @@ export function parseWorktreeRepo(
  *
  * The run id is core's `detached:<tool call id>`, and `:` is one of the
  * characters git refuses in a branch name, so the run is spelled by its tool
- * call alone. Anything but a letter, a digit, `_` or `-` is replaced, dots
- * included: git refuses `..`, a leading `.` and a `.lock` suffix.
+ * call. One made only of letters, digits, `_` and `-` is used as it is. Any
+ * other has the rest replaced — dots included, since git refuses `..`, a
+ * leading `.` and a `.lock` suffix — and a hash of the whole run id appended,
+ * because the replacement alone would give two runs one branch.
  */
 export function runBranch(ctx: { taskId: string; runId: string }): string {
-  const run = ctx.runId
-    .replace(/^[a-z-]+:/, "")
-    .replace(/[^A-Za-z0-9_-]+/g, "-")
-    .replace(/^-+|-+$/g, "");
-  return `claude-coder/${ctx.taskId}/${run || "run"}`;
+  const call = ctx.runId.replace(/^[a-z-]+:/, "");
+  if (/^[A-Za-z0-9_-]+$/.test(call) && !call.startsWith("-")) {
+    return `claude-coder/${ctx.taskId}/${call}`;
+  }
+  const slug = call.replace(/[^A-Za-z0-9_-]+/g, "-").replace(/^-+|-+$/g, "");
+  return `claude-coder/${ctx.taskId}/${slug ? `${slug}-` : ""}${fnv1a(ctx.runId)}`;
+}
+
+/** FNV-1a, 32-bit, as hex: stable and synchronous, for telling ids apart. */
+function fnv1a(text: string): string {
+  let hash = 0x811c9dc5;
+  for (let i = 0; i < text.length; i++) {
+    hash ^= text.charCodeAt(i);
+    hash = Math.imul(hash, 0x01000193) >>> 0;
+  }
+  return hash.toString(16).padStart(8, "0");
 }
 
 /**

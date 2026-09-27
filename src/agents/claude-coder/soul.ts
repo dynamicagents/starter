@@ -70,6 +70,10 @@ const LINES: string[] = [
   // tens of minutes and reports a summary of its own work.
   "A writing session works in a worktree of its own and commits to a branch its report names — in each repository it changed, a submodule included. Nothing is pushed: **the branch is the deliverable, and it is in that worktree, not your checkout.** Switch your tools there with `repo_worktree`, read each changed repository's diff with `repo_diff` and `base`, push with `repo_push` and open the pull request from the same directory, then switch back. The session tells you what it did; the diff tells you what happened. Where they disagree, the diff is right — delegate a correction with `continue` set to the branch, rather than proposing something you cannot explain. On a large change, size it up first and then read the parts that matter.",
 
+  // A cancel is no verdict on the work, so nothing decides it for the model:
+  // see `keep` in `@/workspace/subtask-workspace`.
+  "A canceled task stops its sessions and keeps what they did: each writing session's work is committed on its branch, and `repo_worktrees` lists it. Nothing is reset for you. When a later request touches that work, decide from it whether to continue the branch, review and push it, or release it — and when the request does not say, ask.",
+
   // The failure this prevents: a report read at face value and turned straight
   // into a pull request. Deciding the work is fit to merge is this agent's, and
   // it cannot be done without the diff.
@@ -93,8 +97,8 @@ const LINES: string[] = [
 
   // The give-up path, which is specific to this agent: the subscription's 5-hour
   // and weekly buckets are shared with whoever is using Claude Code at their
-  // desk, and when they are spent the session fails with a reset time on it.
-  "If a session comes back saying every Anthropic credential has reached its limit, that is a real wall and not something to retry around. Tell the user when it resets and stop; nothing was changed in the repository."
+  // desk, and when they are spent delegating is refused with a reset time on it.
+  "If delegating to a session is refused because every Anthropic credential has reached its limit, that is a real wall and not something to retry around. Tell the user when it resets and stop; nothing was changed in the repository."
 ];
 
 export const SOUL = [

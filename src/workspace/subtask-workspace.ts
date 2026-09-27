@@ -271,27 +271,17 @@ done <<EOF
 $WORKTREE_PATHS
 EOF`;
 
-/** Put each listed repository back where the run started it. */
-const RESET_TO_START = `tab="$(printf '\\t')"
-while IFS="$tab" read -r path start; do
-  [ -n "$path" ] || continue
-  git -C "$path" checkout -f -q -B "$WORKTREE_BRANCH" "$start" || exit 1
-  git -C "$path" clean -ffdxq -e node_modules || exit 1
-done <<EOF
-$WORKTREE_REPOS
-EOF`;
-
 /** See {@link KEEP_INTERRUPTED}. */
 const KEEP_WAIT_SECONDS = 30;
 
 /** The commit {@link KEEP_INTERRUPTED} makes, as a person reading the log sees it. */
 const WIP_MESSAGE =
   "WIP: interrupted session\n\n" +
-  "What the session had not committed when its run failed, committed by the " +
+  "What the session had not committed when its run stopped, committed by the " +
   "host so it is not lost. It may be half-finished: check it before building on it.";
 
 /**
- * What the delegating model reads about a failed run's kept work, appended to
+ * What the delegating model reads about a stopped run's kept work, appended to
  * the message that reports the run's end.
  */
 export function keptWorkNote(branch: string, wip: boolean): string {
@@ -412,13 +402,11 @@ export interface SubtaskWorkspaces {
   reading(): Promise<SessionPlace>;
   /** The run is over: record where it left each repository and free it. */
   release(ctx: RunRef): Promise<void>;
-  /** The run was canceled: stop it and discard what it committed. */
-  abort(ctx: RunRef): Promise<void>;
   /**
-   * The run failed: stop it and keep what it did, answering where — or nothing,
-   * when it did nothing.
+   * The run ended without completing — failed or canceled: stop it and keep
+   * what it did, answering where — or nothing, when it did nothing.
    */
-  fail(ctx: RunRef): Promise<string | undefined>;
+  keep(ctx: RunRef): Promise<string | undefined>;
   /**
    * Free every worktree still claimed for a task that has ended. A claim whose
    * run never started — the turn was cut between the two — has no `settle` to
@@ -443,7 +431,7 @@ export function subtaskWorkspaces(config: {
     options: { cwd: string; env?: Record<string, string> },
     workspace: string
   ) => Promise<{ success: boolean; stdout: string; stderr: string }>;
-  /** Stop a run's session in a workspace, before its commits are discarded. */
+  /** Stop a run's session in a workspace, before what it left is committed. */
   stopSession: (workspace: string, runId: string) => Promise<void>;
   /**
    * Refuse a session by throwing, handed the workspace it would run in. Asked
@@ -834,83 +822,19 @@ export function subtaskWorkspaces(config: {
       });
     },
 
-    async abort(ctx): Promise<void> {
-      const row = liveRow(ctx);
-      if (!row) return;
-      const name = nameOf(row);
-      // Stopped first: a session still running would commit on top of the
-      // reset.
-      try {
-        await config.stopSession(name, ctx.runId);
-      } catch (err) {
-        console.warn(`[${config.label}] could not stop a session to abort it`, {
-          slot: row.slot,
-          err: String(err)
-        });
-      }
-      if (!row.ready || !row.dir || !row.branch) return;
-      const reset = await config.exec(
-        RESET_TO_START,
-        {
-          cwd: row.dir,
-          env: {
-            WORKTREE_BRANCH: row.branch,
-            WORKTREE_REPOS: row.repos
-              .map((repo) => `${repo.path}\t${repo.start}`)
-              .join("\n")
-          }
-        },
-        name
-      );
-      if (!reset.success) {
-        // Left live and left as it is: `release` runs next, reads the tips and
-        // holds the worktree on them, which is the right side to err on for a
-        // worktree that may still carry the commits this meant to discard.
-        console.warn(
-          `[${config.label}] could not discard a canceled session's commits`,
-          {
-            slot: row.slot,
-            stderr: reset.stderr.trim().slice(0, 500)
-          }
-        );
-        return;
-      }
-      /**
-       * Record where the reset put it, and free it here rather than leaving that
-       * to `release`.
-       *
-       * `stopSession` above delivers `SIGTERM` and returns; Claude Code then
-       * aborts its turn, kills its process tree and runs its `SessionEnd` hooks,
-       * so a session can still commit for a moment after the reset ran. This
-       * runs in the parent, a Durable Object away from the drain that would say
-       * when the session unwound, and a sub-agent's cancel does not wait for it.
-       *
-       * So the reset is not ordered against the session, and what that would
-       * cost is `release` reading a tip a moment later and recording a commit
-       * this exists to discard — which `isFree` then reads as work worth
-       * keeping, holding the slot on a branch nobody asked for. Writing `start`
-       * here says what the reset did, and dropping `live` means `release` finds
-       * no row and records nothing.
-       *
-       * Files written after the reset are a smaller matter and are left: the
-       * next session to claim this slot is prepared with `checkout -f` and
-       * `clean -ffdx` before it runs, which is where an unordered write ends.
-       */
-      const { live: _live, mode: _mode, ready: _ready, ...rest } = row;
-      config.pool.put({
-        ...rest,
-        repos: row.repos.map((repo) => ({ ...repo, tip: repo.start })),
-        usedAt: now()
-      });
-    },
-
     /**
-     * Keep what a failed run did, where a `continue` will find it.
+     * Keep what a run that did not complete did, where a `continue` will find
+     * it.
      *
-     * The opposite of {@link abort}, and on purpose: a run that failed — its
-     * container went, its recovery gave up — says nothing about the session's
-     * work, and the ones lost that way were healthy. So nothing is reset, and
-     * what the session had not committed is committed for it — a `continue`
+     * Failed or canceled alike, and nothing is reset for either. A run that
+     * failed — its container went, its recovery gave up — says nothing about
+     * the session's work, and the ones lost that way were healthy. A cancel is
+     * no verdict on the work either: it may be a pause, to add to the task or
+     * pick it up later, and what the session did may have had effects that
+     * redoing it would repeat. What becomes of the branch is the parent's to
+     * decide, from `repo_worktrees`.
+     *
+     * What the session had not committed is committed for it — a `continue`
      * places the worktree with `checkout -f` and `clean`, and a worktree whose
      * tips never moved from their base is free, so an uncommitted edit would
      * otherwise go with the next session to claim the slot.
@@ -918,7 +842,7 @@ export function subtaskWorkspaces(config: {
      * The row stays live: `release` runs next on the same path, reads the tips
      * this left, and holds the worktree on them.
      */
-    async fail(ctx): Promise<string | undefined> {
+    async keep(ctx): Promise<string | undefined> {
       const row = liveRow(ctx);
       if (!row) return undefined;
       const name = nameOf(row);

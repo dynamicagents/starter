@@ -17,7 +17,7 @@ import { copy } from "@/copy";
 import { agentModel } from "@/model";
 import { activeRepo } from "@/workspace/active-repo";
 import { WORKSPACE_WRITERS } from "@/workspace/container";
-import { discardWorkingTree, sweepIdleWorkspaces } from "@/workspace/lifecycle";
+import { sweepIdleWorkspaces } from "@/workspace/lifecycle";
 import {
   forgetWorktree,
   idleWorktrees,
@@ -188,23 +188,6 @@ export class ClaudeCoder extends A2AAgent<Env> {
         });
         return true;
       }
-    });
-  }
-
-  /**
-   * Discard a canceled task's half-finished edits in the checkout the parent's
-   * tools point at — without discarding the workspace. The reasoning is on
-   * `discardWorkingTree`. A writing session's own worktree is its `settle`'s to
-   * reset, and a reading session works in a copy its stop deletes.
-   */
-  protected override async onTaskCanceled(taskId: string): Promise<void> {
-    await super.onTaskCanceled(taskId);
-    const repo = this.#active.get();
-    await discardWorkingTree({
-      binding: this.env.CLAUDE_CODER_WORKSPACE,
-      name: workspaceName(this.callerKey(), repo),
-      repo,
-      label: LABEL
     });
   }
 

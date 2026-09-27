@@ -178,9 +178,9 @@ export async function claimSession(
 }
 
 /**
- * What a writing session leaves, by how its run ended: a canceled run's commits
- * are discarded, a failed one's are kept where a `continue` will find them, and
- * either way the worktree is recorded and freed.
+ * What a writing session leaves: a run that did not complete — failed or
+ * canceled — keeps its work where a `continue` will find it, and every run's
+ * worktree is recorded and freed. See `keep` in `@/workspace/subtask-workspace`.
  */
 export async function settleSession(
   workspaces: SubtaskWorkspaces,
@@ -188,10 +188,8 @@ export async function settleSession(
   ctx: Pick<SubAgentSettleContext<Env>, "taskId" | "runId" | "result">
 ): Promise<void> {
   const run = { taskId: ctx.taskId, runId: ctx.runId };
-  if (ctx.result.status === "aborted") {
-    await workspaces.abort(run);
-  } else if (ctx.result.status !== "completed") {
-    const note = await workspaces.fail(run);
+  if (ctx.result.status !== "completed") {
+    const note = await workspaces.keep(run);
     if (note) keepNote(storage, ctx.taskId, ctx.runId, note);
   }
   await workspaces.release(run);
@@ -317,10 +315,9 @@ abstract class ClaudeCodeRun extends SubAgent<Env> {
    * reach once the drain has unwound; the model calls this after it has.
    *
    * Nothing is discarded for a session stopped from outside: it did not choose
-   * what it left, and whoever stopped it decides. A cancel resets the worktree,
-   * and a failed run keeps it — `fail` in `@/workspace/subtask-workspace`
-   * commits it, and a discard here would race that commit and lose the work it
-   * exists to keep.
+   * what it left, and whoever stopped it decides. `keep` in
+   * `@/workspace/subtask-workspace` commits it, and a discard here would race
+   * that commit and lose the work it exists to keep.
    */
   async #report(
     outcome: SessionOutcome,

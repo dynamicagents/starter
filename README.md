@@ -286,10 +286,12 @@ Two consequences worth knowing before you debug something surprising:
   resets an existing checkout rather than assuming an empty directory — and
   refuses outright if the tree is dirty, because those changes are a previous
   task's work and nobody could recover them once discarded.
-- **A cancelled task resets the working tree rather than destroying the
-  container.** The container holds none of the state but dependencies.
-  Destroying one costs a container start and a reinstall, and leaves the
-  abandoned edits exactly where they were.
+- **A cancelled task leaves its work where it stopped.** A cancel may be a
+  pause — to add to the task, or to pick it up later — and what a run did may
+  have had effects that redoing it would repeat, so nothing is reset for it. A
+  writing session's worktree keeps its work committed on its branch; a
+  checkout keeps its changes. Whether to continue, commit or discard is the
+  agent's call, on the next task.
 
 A sub-agent reaches its workspace through its spec's `prepare`, which runs on the
 **parent**, where the caller and the repository are known, and hands the

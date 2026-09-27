@@ -16,7 +16,7 @@ import { copy } from "@/copy";
 import { agentModel } from "@/model";
 import { activeRepo } from "@/workspace/active-repo";
 import { WORKSPACE_WRITERS } from "@/workspace/container";
-import { discardWorkingTree, sweepIdleWorkspaces } from "@/workspace/lifecycle";
+import { sweepIdleWorkspaces } from "@/workspace/lifecycle";
 import { CfCoderCode } from "./children";
 import { cfCoder } from "./definition";
 import { container, parentPlugins } from "./plugins";
@@ -31,9 +31,8 @@ const LABEL = "cf-coder";
  * A delegating agent like `reactive`: the task, the turn and delegation are
  * `@dynamicagents/core/agent`. What makes it the odd one out is the container
  * underneath — so the members below are mostly lifecycle, not inference: a
- * weekly reclaim sweep for workspaces nothing is calling into, a working-tree
- * reset when a task is canceled, and a parent that can read the checkout but not
- * change it.
+ * weekly reclaim sweep for workspaces nothing is calling into, and a parent that
+ * can read the checkout but not change it.
  */
 export class CfCoder extends A2AAgent<Env> {
   protected readonly copy = copy;
@@ -129,22 +128,5 @@ export class CfCoder extends A2AAgent<Env> {
           })
       }
     };
-  }
-
-  /**
-   * Discard a canceled task's half-finished edits — without discarding the
-   * workspace. The reasoning is on `discardWorkingTree` in
-   * `@/workspace/lifecycle.ts`; all that belongs here is which workspace: the
-   * caller's, for the repository they were working on.
-   */
-  protected override async onTaskCanceled(taskId: string): Promise<void> {
-    await super.onTaskCanceled(taskId);
-    const repo = this.#active.get();
-    await discardWorkingTree({
-      binding: this.env.CF_CODER_WORKSPACE,
-      name: workspaceName(this.callerKey(), repo),
-      repo,
-      label: LABEL
-    });
   }
 }

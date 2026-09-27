@@ -72,8 +72,6 @@ function harness(opts: {
   tipsThrow?: boolean;
   /** Repositories whose remote has the branch being placed. */
   remote?: string[];
-  /** Fail the reset an abort runs. */
-  resetFails?: boolean;
   /** Refuse every session at admission. */
   refuse?: boolean;
   /** What keeping a failed run's work leaves each repository's HEAD at. */
@@ -187,16 +185,6 @@ function harness(opts: {
           .split("\n")
           .map((path) => `${path}\t${opts.tips?.[path] ?? ""}`);
         return { success: true, stdout: rows.join("\n"), stderr: "" };
-      }
-      if (
-        command.includes(
-          'git -C "$path" checkout -f -q -B "$WORKTREE_BRANCH" "$start"'
-        )
-      ) {
-        calls.push(`reset ${env.WORKTREE_REPOS?.replaceAll("\t", "@")}`);
-        if (opts.resetFails) {
-          return { success: false, stdout: "", stderr: "index.lock" };
-        }
       }
       return { success: true, stdout: "", stderr: "" };
     },
@@ -619,98 +607,12 @@ describe("handing a worktree to the next session", () => {
   });
 });
 
-describe("canceling a writing session", () => {
-  it("stops the session, then puts each repository back where it started", async () => {
-    const { subtasks, calls, stopped } = harness({
-      selected: "acme/api",
-      checkout: CHECKOUT
-    });
-    await subtasks.resolve(ctx);
-    calls.length = 0;
-
-    await subtasks.abort(ctx);
-
-    expect(stopped).toEqual([`${SLOT0}#detached:1`]);
-    expect(calls).toEqual([`reset .@${sha("origin/main")}`]);
-  });
-
-  it("stops a session whose worktree never got ready, and resets nothing", async () => {
-    const { subtasks, calls, stopped } = harness({
-      selected: "acme/api",
-      checkout: CHECKOUT,
-      cloneFails: { dir: CHECKOUT.dir, message: "network" }
-    });
-    await expect(subtasks.resolve(ctx)).rejects.toThrow();
-    calls.length = 0;
-
-    await subtasks.abort(ctx);
-
-    expect(stopped).toEqual([`${SLOT0}#detached:1`]);
-    expect(calls).toEqual([]);
-  });
-
-  it("does nothing for a run that holds no worktree", async () => {
-    const { subtasks, stopped } = harness({
-      selected: "acme/api",
-      checkout: CHECKOUT
-    });
-    await subtasks.abort(ctx);
-    await subtasks.release(ctx);
-    expect(stopped).toEqual([]);
-  });
-
-  /**
-   * `stopSession` delivers `SIGTERM` and returns, so a session can still commit
-   * while the reset runs — this path is reached with no drain left to wait on.
-   * The tips here are what such a commit would leave, and none of it may be
-   * recorded as the branch's: the row says where the reset put it.
-   */
-  it("records where the reset left it, not what a session committed after", async () => {
-    const { subtasks, calls, pool } = harness({
-      selected: "acme/api",
-      checkout: CHECKOUT,
-      tips: { ".": "committed-after-the-reset" }
-    });
-    await subtasks.resolve(ctx);
-    calls.length = 0;
-
-    await subtasks.abort(ctx);
-    // Core runs this next on the same path, and it must find nothing to do.
-    await subtasks.release(ctx);
-
-    const [row] = pool.all("acme/api");
-    expect(row?.live).toBeUndefined();
-    expect(row?.repos.map((repo) => repo.tip)).toEqual([sha("origin/main")]);
-    expect(isFree(row!)).toBe(true);
-    // Only the reset — `release` read no tips, because it found no live row.
-    expect(calls).toEqual([`reset .@${sha("origin/main")}`]);
-  });
-
-  /** A reset that failed proves nothing about the tree, so the row is not freed. */
-  it("leaves the worktree held when the reset failed", async () => {
-    const { subtasks, pool } = harness({
-      selected: "acme/api",
-      checkout: CHECKOUT,
-      resetFails: true,
-      tips: { ".": "unpushed" }
-    });
-    await subtasks.resolve(ctx);
-
-    await subtasks.abort(ctx);
-    await subtasks.release(ctx);
-
-    const [row] = pool.all("acme/api");
-    expect(row?.repos.map((repo) => repo.tip)).toEqual(["unpushed"]);
-    expect(isFree(row!)).toBe(false);
-  });
-});
-
 /**
- * A run that failed — its container went, its recovery gave up — which says
- * nothing about the session's work. Every one lost this way was healthy, so its
- * work is kept where a `continue` will find it, and the failure says so.
+ * A run that did not complete — it failed, or its task was canceled — which
+ * says nothing about the session's work, so it is kept where a `continue` will
+ * find it. Why a cancel resets nothing is on `keep`.
  */
-describe("keeping what a failed writing session did", () => {
+describe("keeping what a session that did not complete did", () => {
   const BRANCH = "claude-coder/task-a/1";
 
   it("stops the session and commits what it left, resetting nothing", async () => {
@@ -722,7 +624,7 @@ describe("keeping what a failed writing session did", () => {
     await subtasks.resolve(ctx);
     calls.length = 0;
 
-    const note = await subtasks.fail(ctx);
+    const note = await subtasks.keep(ctx);
 
     expect(stopped).toEqual([`${SLOT0}#detached:1`]);
     expect(calls).toEqual(["keep ."]);
@@ -744,7 +646,7 @@ describe("keeping what a failed writing session did", () => {
     });
     await subtasks.resolve(ctx);
 
-    await subtasks.fail(ctx);
+    await subtasks.keep(ctx);
     // Core runs this next on the same path.
     await subtasks.release(ctx);
 
@@ -768,7 +670,7 @@ describe("keeping what a failed writing session did", () => {
     });
     await subtasks.resolve(ctx);
 
-    const note = await subtasks.fail(ctx);
+    const note = await subtasks.keep(ctx);
 
     expect(note).toContain(`\`${BRANCH}\``);
     expect(note).not.toContain("WIP");
@@ -784,7 +686,7 @@ describe("keeping what a failed writing session did", () => {
 
     // A branch with nothing on it is not worth continuing, and saying it is would
     // send the model to an empty branch.
-    expect(await subtasks.fail(ctx)).toBeUndefined();
+    expect(await subtasks.keep(ctx)).toBeUndefined();
   });
 
   it("stops a session whose worktree never got ready, and keeps nothing", async () => {
@@ -796,7 +698,7 @@ describe("keeping what a failed writing session did", () => {
     await expect(subtasks.resolve(ctx)).rejects.toThrow();
     calls.length = 0;
 
-    expect(await subtasks.fail(ctx)).toBeUndefined();
+    expect(await subtasks.keep(ctx)).toBeUndefined();
     expect(stopped).toEqual([`${SLOT0}#detached:1`]);
     expect(calls).toEqual([]);
   });
@@ -813,7 +715,7 @@ describe("keeping what a failed writing session did", () => {
       });
       await subtasks.resolve(ctx);
 
-      expect(await subtasks.fail(ctx)).toContain(`\`${BRANCH}\``);
+      expect(await subtasks.keep(ctx)).toContain(`\`${BRANCH}\``);
       expect(warn).toHaveBeenCalledWith(
         expect.stringContaining(
           "could not commit what an interrupted session left"
@@ -863,7 +765,7 @@ describe("a worktree of a superproject", () => {
     });
     await subtasks.resolve(ctx);
 
-    expect(await subtasks.fail(ctx)).toContain("WIP commit");
+    expect(await subtasks.keep(ctx)).toContain("WIP commit");
     expect(keeps[0]?.env.WORKTREE_KEEP_PATHS?.split("\n")).toEqual([
       ".",
       "core",

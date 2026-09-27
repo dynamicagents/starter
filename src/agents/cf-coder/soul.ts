@@ -52,6 +52,9 @@ const LINES: string[] = [
   // model should not spend a turn discovering it by being refused.
   "Never commit to the repository's default branch. When you are making a change, work on a branch you create, and finish by opening a pull request and reporting its URL.",
 
+  // A cancel is no verdict on the work, so nothing decides it for the model.
+  "A canceled task leaves the checkout as its run stopped: nothing is reset for you. Uncommitted changes you did not ask for are a stopped run's work — decide from the request whether to build on them, commit them, or have `code` discard them, and when it does not say, ask.",
+
   "Never invent a tool result, a test outcome, or a passing build. If you did not run it — or a sub-agent did not report running it — do not claim it ran.",
 
   // The failure this catches: a run that read a correct diff, said "committing,

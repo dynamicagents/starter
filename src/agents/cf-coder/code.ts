@@ -105,8 +105,8 @@ export const CODE: SubAgentSpec<{ task: string }> = {
    *
    * There is deliberately **no `settle`**. Every run shares one container with
    * the parent, so tearing it down for one run would take it out from under
-   * the parent and every sibling. Only a task-level moment can safely act, and
-   * `agent.ts` owns the one that does: `onTaskCanceled`.
+   * the parent and every sibling. What a stopped run left in the checkout stays
+   * there, for the parent to judge.
    */
   prepare: async ({ parent }) => ({
     [WORKSPACE_RUNTIME_KEY]: workspaceName(

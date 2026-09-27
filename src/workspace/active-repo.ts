@@ -29,7 +29,7 @@
  * is per caller, not per task. Two tasks from one caller cloning different
  * repositories overwrite each other: the later `set()` wins, and from then on the
  * earlier task's own tools (`repo_diff`, the reads, the commit and push that end
- * it) resolve to the *other* task's workspace, cancellation cleanup included.
+ * it) resolve to the *other* task's workspace.
  *
  * A sub-agent is not exposed — it gets its workspace name from its spec's
  * `prepare`, resolved on the parent and pinned for the life of the run. The
@@ -133,8 +133,8 @@ export interface ActiveCheckout {
    *
    * Reused verbatim for a worktree's own clone rather than derived again: each
    * container has its own filesystem, so the same path collides with nothing, and
-   * one spelling of a checkout directory is what keeps `discardWorkingTree`'s
-   * fallback and a worktree's `checkoutDir()` answering about the same place.
+   * it is what lets the parent's tools move into a worktree at the paths they
+   * already use — see `@/workspace/worktrees`.
    */
   dir: string;
   /** The branch the parent is on, so a session starts from the same commit. */

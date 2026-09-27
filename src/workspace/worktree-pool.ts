@@ -26,7 +26,7 @@ export interface PoolRepo {
   baseRef: string;
   /** The same, as a commit. Anything past it is the branch's work. */
   base: string;
-  /** Where the run holding it now started — what a cancellation resets to. */
+  /** Where the run holding it now started — what its kept work is counted from. */
   start: string;
   /** Where the last run left it. Empty when something moved it unseen. */
   tip: string;

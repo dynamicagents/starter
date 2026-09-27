@@ -255,11 +255,8 @@ function recordingPool(resolve?: () => Promise<never>) {
     release: async () => {
       calls.push("release");
     },
-    abort: async () => {
-      calls.push("abort");
-    },
-    fail: async () => {
-      calls.push("fail");
+    keep: async () => {
+      calls.push("keep");
       return "Its work up to that point is kept on `claude-coder/task-1/call_1`.";
     },
     releaseTask: async () => {
@@ -300,9 +297,9 @@ describe("a writing session's worktree", () => {
 
   it.each([
     ["completed", ["release"]],
-    ["aborted", ["abort", "release"]],
-    ["error", ["fail", "release"]],
-    ["interrupted", ["fail", "release"]]
+    ["aborted", ["keep", "release"]],
+    ["error", ["keep", "release"]],
+    ["interrupted", ["keep", "release"]]
   ] as const)("on a run that %s: %j", async (status, expected) => {
     const { pool, calls } = recordingPool();
     await onParent((agent) =>

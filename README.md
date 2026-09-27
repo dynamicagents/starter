@@ -218,10 +218,10 @@ Objects are two thin subclasses of `WorkspaceObjectBase` from
 `@dynamicagents/plugins/computer`, differing only in a
 `WorkspaceObjectConfig`.
 
-That egress policy is the whole reason `claude-coder` exists. An Anthropic
-**subscription** credential is refused for raw Messages API calls on every
-frontier model and accepted from the sanctioned client — so reaching Opus on one
-means running that client, and the client runs in a container that also runs a
+The `http-gateway` egress policy is the whole reason `claude-coder` exists. An
+Anthropic **subscription** credential is refused for raw Messages API calls on
+every frontier model and accepted from the sanctioned client — so reaching Opus on
+one means running that client, and the client runs in a container that also runs a
 cloned repository's `postinstall`. The credential never goes there: the session
 launches with a placeholder, and `{ mode: "http-gateway" }` routes every outbound
 request through a `Fetcher` on the Worker side which swaps the real one in. That
@@ -229,11 +229,12 @@ egress gateway also holds an ordered **pool** of credentials and rotates when
 Anthropic says one's 5-hour or weekly bucket is spent.
 
 Every agent's own round loop, both coders included, runs on Workers AI through
-the `AI` binding. **There is no model credential in this deployment**: the
-binding is authenticated by the platform, so there is nothing to store, nothing
-to rotate, and cf-coder's container has never seen one. An AI Gateway `401` means
-Authenticated Gateway is switched on for the AI Gateway named by `aiGatewayId` —
-switch it off, because the binding does not send a token.
+the `AI` binding. **There is no credential for any agent's own model loop in
+this deployment**: the binding is authenticated by the platform, so there is
+nothing to store, nothing to rotate, and cf-coder's container has never seen
+one. An AI Gateway `401` means Authenticated Gateway is switched on for the AI
+Gateway named by `aiGatewayId` — switch it off, because the binding does not
+send a token.
 [`.env.example`](.env.example) is the full list of what a deployment does need.
 
 The container needs the **Workers Paid** plan and a running Docker daemon on the
@@ -318,10 +319,7 @@ entirely:
 ```ts
 // src/agents/reactive/plugins.ts
 export const plugins = (host: PluginHost): AgentPlugin[] => [
-  general({
-    primaryModelId: host.primaryModelId,
-    fallbackModelId: host.fallbackModelId
-  }),
+  general(),
   browser({ binding: host.env.BROWSER }),
   workspace(),
   recall({
@@ -373,7 +371,7 @@ goes into `deleted_classes` in a new tag. The `migrations` comments in
 ## What runs in CI
 
 ```bash
-npm run check              # wrangler types, prettier, eslint, tsc, comment path refs
+npm run check              # wrangler types, prettier, eslint, tsc, comment path refs, container env
 npm test                   # vitest, inside real workerd
 npm run verify:isolation   # per-agent module graphs + size ceilings
 npx wrangler deploy --dry-run --outdir dist
@@ -438,14 +436,17 @@ cp .cf.env.example .cf.env    # an account-scoped API token + your account id
 npm run cf -- logs --since 2h --level error
 npm run cf -- wf handle-task
 npm run cf -- ai --since 2h
+npm run cf -- containers
 ```
 
-[`scripts/cf.mjs`](scripts/cf.mjs) is a small Cloudflare API proxy for the three questions
-a deploy actually raises: what did it log, did the workflow finish its steps, and what did
-the model get asked. Each subcommand prints a digest rather than the raw envelope — `logs`
-a level-tallied timeline, `wf <name> <instance>` per-step pass/fail, `ai <logId>` the
-prompt and reply as text — with `--json` or `--raw` when you want the body. This Worker's
-workflows are `handle-task`, `cf-coder` and `claude-coder`.
+[`scripts/cf.mjs`](scripts/cf.mjs) is a small Cloudflare API proxy for the questions a
+deploy actually raises: what did it log, did the workflow finish its steps, what did the
+model get asked, and which container image is actually serving. Each subcommand prints a
+digest rather than the raw envelope — `logs` a level-tallied timeline, `wf <name>
+<instance>` per-step pass/fail, `ai <logId>` the prompt and reply as text, `containers`
+which image is actually serving and any rollout still moving — with `--json` or `--raw`
+when you want the body. This Worker's workflows are `handle-task`, `cf-coder` and
+`claude-coder`.
 
 The credentials go in `.cf.env`, not `.env`, because they are not bindings: they
 authenticate **you** to the Cloudflare API, not the Worker to anything. Keeping them in

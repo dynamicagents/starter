@@ -440,10 +440,14 @@ async function cmdWf(args) {
     `queued ${r.queued ?? "?"} · start ${r.start ?? "?"} · end ${r.end ?? "?"}`
   );
   out(`steps (${r.step_count ?? r.steps?.length ?? 0}):`);
+  // A step still running or waiting — a parked task's `waitForEvent` — has
+  // `success: null`, which is neither outcome.
+  const state = (s) =>
+    s.success === true ? "ok" : s.success === false ? "ERROR" : "pending";
   for (const s of r.steps ?? []) {
     const errs = (s.attempts ?? []).filter((a) => a.error).map((a) => a.error);
     out(
-      `  - ${(s.name ?? s.type ?? "?").padEnd(16)} ${s.success ? "ok" : "ERROR"}` +
+      `  - ${(s.name ?? s.type ?? "?").padEnd(16)} ${state(s)}` +
         (errs.length ? ` ${JSON.stringify(errs)}` : "")
     );
   }

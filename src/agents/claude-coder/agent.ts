@@ -134,9 +134,18 @@ export class ClaudeCoder extends StepAgent<Env> {
     };
   }
 
-  /** A job starts with a retry's note, what its role asks, then its input. */
+  /**
+   * A job starts with a retry's note, what its role asks, then its input. Where
+   * a first attempt's work was kept is a writing session's, which a plan can
+   * neither start nor look for.
+   */
   protected override formatStepJobInput(job: StepJob): string {
-    const retry = job.attempt > 1 ? `${RETRY_BRIEF} ${RETRY_WORK}` : undefined;
+    const retry =
+      job.attempt > 1
+        ? job.role === "plan"
+          ? RETRY_BRIEF
+          : `${RETRY_BRIEF} ${RETRY_WORK}`
+        : undefined;
     return [retry, job.role ? ROLE_BRIEFS[job.role] : undefined, job.input]
       .filter((part): part is string => Boolean(part))
       .join("\n\n");

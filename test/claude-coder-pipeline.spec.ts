@@ -11,9 +11,9 @@ import {
   type AgentHarness,
   type CapturedCallback
 } from "@dynamicagents/core/testing";
-import type { TaskResult } from "@dynamicagents/core/workflow";
+import type { StepJob, TaskResult } from "@dynamicagents/core/workflow";
 import { activeToolsFor, PLAN_TOOLS } from "@/agents/claude-coder/roles";
-import { copy, PIPELINE_COPY } from "@/copy";
+import { copy, PIPELINE_COPY, RETRY_BRIEF } from "@/copy";
 import worker, { type TestEnv } from "./worker";
 
 /**
@@ -290,6 +290,24 @@ describe("the plan reads and writes nothing", () => {
     }
     expect(plan).toContain("claude_code_read");
     expect(activeToolsFor("code", names)).toContain("claude_code");
+  });
+
+  it("briefs a plan's retry without a writing session's work", async () => {
+    const briefs = await runInDurableObject(
+      testEnv.ClaudeCoder.get(
+        testEnv.ClaudeCoder.idFromName(`retry:${crypto.randomUUID()}`)
+      ),
+      (instance) => {
+        const format = (role: string) =>
+          (
+            instance as unknown as { formatStepJobInput(job: StepJob): string }
+          ).formatStepJobInput({ input: "x", attempt: 2, role } as StepJob);
+        return { plan: format("plan"), code: format("code") };
+      }
+    );
+    expect(briefs.plan.startsWith(RETRY_BRIEF)).toBe(true);
+    expect(briefs.plan).not.toContain("repo_worktrees");
+    expect(briefs.code).toContain("repo_worktrees");
   });
 
   it("gives each turn the tools its job's role allows", async () => {

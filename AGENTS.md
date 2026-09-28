@@ -7,10 +7,16 @@ foundation) and
 capabilities) into a deployable Worker.
 
 The single most useful thing to know: **almost nothing here is framework.** The
-turn is `@cloudflare/think`'s; the A2A task around it, delegation to sub-agents —
-awaited or in the background — and the Durable Object body are core's. What lives
-here is what core deliberately refuses to ship — the words, the config values,
-which plugins each agent installs, and where each sub-agent works.
+turn is `@cloudflare/think`'s; the A2A task, the workflow that runs its steps,
+the step job, delegation to sub-agents — awaited or in the background — and the
+Durable Object bodies are core's. What lives here is what core deliberately
+refuses to ship — the words, the config values, which steps each tenant's task
+runs, which plugins each agent installs, and where each sub-agent works.
+
+Each tenant is three classes in `src/agents/<tenant>/`: a task host
+(`host.ts`, core's `TaskHost`), which owns the A2A task; a pipeline (`task.ts`,
+core's `TaskWorkflow`), which runs it as steps; and a step agent (`agent.ts`,
+core's `StepAgent`), which runs a step's job. The mechanism is in core's README.
 
 If you find yourself writing durable-execution logic in this repo, that is the
 signal it belongs in core instead. If you find yourself writing the Durable
@@ -27,6 +33,8 @@ adapters for the workspace this Worker deploys; the object itself is
 | ----------------------------------------------------- | --------------------------------------- |
 | what the model is told about a domain                 | the plugin that owns that domain        |
 | what the agent _is_                                   | `src/agents/<tenant>/soul.ts`           |
+| a step in a tenant's pipeline                         | `src/agents/<tenant>/task.ts`           |
+| what a job's role lets the agent do                   | `src/agents/<tenant>/roles.ts`          |
 | a user-facing string, or guidance every soul shares   | `src/copy.ts`                           |
 | which capabilities an agent has                       | `src/agents/<tenant>/plugins.ts`        |
 | a sub-agent: its spec, where it works, what it leaves | `src/agents/<tenant>/children.ts`       |
@@ -59,15 +67,16 @@ Core's task ledger flips a task to `canceled` in one guarded write, and every la
 write — `markWorking`, the settle that would report it done — is refused against
 it and says so. Read those answers. Calling `getTask` first and acting second
 reopens a window in which a cancel lands and the gatekeeper still gets a
-`completed` callback. `A2AAgent` reads them, and core's specs pin both. A hook
-written here — `onTaskCanceled`, `onTaskSettled`, a spec's `settle` — runs after
-the flip and acts on it; it never decides it.
+`completed` callback. Core's task host and step agent read them, and core's
+specs pin both. A hook written here — `onTaskSettled`, a spec's `settle` — runs
+after the flip and acts on it; it never decides it.
 
 **2. `verify:isolation` is the check that survives a refactor.**
 This Worker deploys as one bundle containing every agent, so grepping `dist/`
 proves nothing. Each agent's entry is bundled alone and esbuild's **metafile** —
 the module list, not a string search — is checked for plugins that agent does not
-install.
+install, and each pipeline for an agent class it imports: a pipeline names its
+step agent's binding, never its class.
 
 It has caught a real leak: a shared base class living in one agent's directory.
 

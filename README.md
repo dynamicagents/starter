@@ -191,11 +191,31 @@ request body, and a token minted for one agent would work against any sibling.
 | [`cf-coder/`](src/agents/cf-coder/)         | Clones a repo into a Linux sandbox, changes it, opens a pull request   | Proves a plugin can own a Durable Object and a container without core knowing            |
 | [`claude-coder/`](src/agents/claude-coder/) | The same, but each sub-agent is a Claude Code session in the container | **Proves a sub-agent need not be a model loop at all** — its model is the session itself |
 
-All three are `A2AAgent` from
-[`@dynamicagents/core/agent`](https://github.com/dynamicagents/core), on
-`@cloudflare/think`, and differ in their members. A sub-agent that may run past the
-fifteen minutes a turn can last runs **in the background**: the task stays `working`,
-and its result arrives as a later turn.
+Each is a task host, a pipeline and a step agent, all three from
+[`@dynamicagents/core`](https://github.com/dynamicagents/core): the host owns the A2A
+task, the pipeline runs it as steps, and the step agent — on `@cloudflare/think` —
+runs a step's job. reactive and cf-coder are one-step pipelines. A sub-agent that may
+run past the fifteen minutes a turn can last runs **in the background**: the job stays
+open, and its result arrives as a later turn.
+
+### claude-coder plans before it builds
+
+Its pipeline ([`task.ts`](src/agents/claude-coder/task.ts)) is plan → approve → code,
+both jobs on the caller's own ClaudeCoder, so the plan and the work share its checkout
+and conversation:
+
+1. **The plan** reads — through a Claude Code reading session for anything beyond a
+   quick look — and changes nothing. Its turns can call only the tools
+   [`roles.ts`](src/agents/claude-coder/roles.ts) names: no writing session, commit,
+   push, pull request or file write.
+2. **The approval** is the pipeline's own question. Approve it to have it built;
+   answer in words and it is written again with them, as often as it takes; reject
+   it and the task stops at the plan. A question that needs no change is a plan the
+   caller stops at: the plan is the findings.
+3. **The code step** carries out the approved plan to a pull request.
+
+A step whose job fails runs once more, told it is a retry and where the first
+attempt's work was kept.
 
 ### The two coders need one thing the others do not
 

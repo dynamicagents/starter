@@ -1,11 +1,12 @@
 import type { ThinkModel } from "@cloudflare/think";
 import type { AgentPlugin } from "@dynamicagents/core";
-import { A2AAgent } from "@dynamicagents/core/agent";
+import { StepAgent } from "@dynamicagents/core/agent";
 import type { SubAgentClass } from "@dynamicagents/core/subagent";
+import type { StepJob } from "@dynamicagents/core/workflow";
 import type { ContextConfig } from "agents/context";
 import type { LanguageModel } from "ai";
 import { REACTIVE } from "@/config";
-import { copy } from "@/copy";
+import { RETRY_BRIEF } from "@/copy";
 import { agentModel } from "@/model";
 import { ReactiveGeneral } from "./children";
 import { reactive } from "./definition";
@@ -15,14 +16,13 @@ import { MEMORY, SOUL } from "./soul";
 /**
  * The reactive agent: the flagship.
  *
- * The A2A task, the turn and delegation are `@dynamicagents/core/agent`. What is
- * actually *this agent* is the members below plus `./plugins.ts`, `./soul.ts`
- * and `./children.ts` — and `../cf-coder/agent.ts` is the same members with
- * different answers. If adding a domain to an agent needed more than that, the
- * plugin contract would be wrong.
+ * The job, the turn and delegation are `@dynamicagents/core/agent`, and the A2A
+ * task is `./host.ts`'s. What is actually *this agent* is the members below plus
+ * `./plugins.ts`, `./soul.ts` and `./children.ts` — and `../cf-coder/agent.ts`
+ * is the same members with different answers. If adding a domain to an agent
+ * needed more than that, the plugin contract would be wrong.
  */
-export class Reactive extends A2AAgent<Env> {
-  protected readonly copy = copy;
+export class Reactive extends StepAgent<Env> {
   protected readonly compactAfterTokens = REACTIVE.compactAfterTokens;
   protected readonly keepRecentTokens = REACTIVE.keepRecentTokens;
 
@@ -57,5 +57,10 @@ export class Reactive extends A2AAgent<Env> {
 
   override getSubAgents(): SubAgentClass[] {
     return [ReactiveGeneral];
+  }
+
+  /** A retry is told so, and to carry on from what the first attempt left. */
+  protected override formatStepJobInput(job: StepJob): string {
+    return job.attempt > 1 ? `${RETRY_BRIEF}\n\n${job.input}` : job.input;
   }
 }

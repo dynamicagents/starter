@@ -5,18 +5,18 @@ import type {
   TurnContext
 } from "@cloudflare/think";
 import type { AgentPlugin } from "@dynamicagents/core";
-import { A2AAgent } from "@dynamicagents/core/agent";
+import { StepAgent } from "@dynamicagents/core/agent";
 import type { SubAgentClass } from "@dynamicagents/core/subagent";
+import type { StepJob } from "@dynamicagents/core/workflow";
 import { computerWorkspace } from "@dynamicagents/plugins/computer";
 import { workspaceName } from "@dynamicagents/plugins/workspace";
 import type { AgentToolLifecycleResult, AgentToolRunInfo } from "agents";
 import type { ContextConfig } from "agents/context";
 import type { LanguageModel, ToolSet } from "ai";
 import { CLAUDE_CODER } from "@/config";
-import { copy } from "@/copy";
+import { RETRY_BRIEF } from "@/copy";
 import { agentModel } from "@/model";
 import { activeRepo } from "@/workspace/active-repo";
-import { WORKSPACE_WRITERS } from "@/workspace/container";
 import { sweepIdleWorkspaces } from "@/workspace/lifecycle";
 import {
   forgetWorktree,
@@ -33,7 +33,8 @@ import {
 } from "./children";
 import { claudeCoder } from "./definition";
 import { container, parentPlugins, sessionWorkspaces } from "./plugins";
-import { MEMORY, SOUL } from "./soul";
+import { activeToolsFor } from "./roles";
+import { MEMORY, RETRY_WORK, ROLE_BRIEFS, SOUL } from "./soul";
 
 /** This agent's log prefix and workspace label. */
 const LABEL = "claude-coder";
@@ -52,8 +53,7 @@ const LABEL = "claude-coder";
  * to reach Opus on a subscription is to run the client, and the way to do that
  * safely is to keep the credential on this side of the container boundary.
  */
-export class ClaudeCoder extends A2AAgent<Env> {
-  protected readonly copy = copy;
+export class ClaudeCoder extends StepAgent<Env> {
   protected readonly compactAfterTokens = CLAUDE_CODER.compactAfterTokens;
   protected readonly keepRecentTokens = CLAUDE_CODER.keepRecentTokens;
 
@@ -119,15 +119,27 @@ export class ClaudeCoder extends A2AAgent<Env> {
     return { ...super.getTools(), check_back: this.checkBackTool() };
   }
 
-  /** The turn core configures, minus Think's own file writers. */
+  /**
+   * The turn core configures, minus Think's own file writers — and for a plan,
+   * minus everything that writes: see `./roles.ts`. Core's own list wins where
+   * it sets one: a turn for a job that has ended gets no tools.
+   */
   override async beforeTurn(ctx: TurnContext): Promise<TurnConfig | void> {
     const base = await super.beforeTurn(ctx);
     return {
       ...base,
-      activeTools: Object.keys(ctx.tools).filter(
-        (name) => !WORKSPACE_WRITERS.has(name)
-      )
+      activeTools:
+        base?.activeTools ??
+        activeToolsFor(this.turnStepJob()?.role, Object.keys(ctx.tools))
     };
+  }
+
+  /** A job starts with a retry's note, what its role asks, then its input. */
+  protected override formatStepJobInput(job: StepJob): string {
+    const retry = job.attempt > 1 ? `${RETRY_BRIEF} ${RETRY_WORK}` : undefined;
+    return [retry, job.role ? ROLE_BRIEFS[job.role] : undefined, job.input]
+      .filter((part): part is string => Boolean(part))
+      .join("\n\n");
   }
 
   /** A failed run's report, with where its work was kept — see `./children.ts`. */

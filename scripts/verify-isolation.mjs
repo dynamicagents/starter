@@ -53,6 +53,10 @@ const plugin = (name) => `@dynamicagents/plugins/dist/${name}/`;
  * `core/dist/job` — and *only* such an agent, which is the isolation this file
  * exists to assert still holding.
  *
+ * Each tenant's task host and pipeline are entries too, and each carries the
+ * `agents` SDK on its own: about 1.3 MB apiece, counted once per entry like
+ * Think.
+ *
  * Every ceiling below is its measurement plus the ~8% headroom this file runs
  * with.
  */
@@ -60,6 +64,8 @@ const AGENTS = [
   {
     name: "reactive",
     entries: [
+      "src/agents/reactive/host.ts",
+      "src/agents/reactive/task.ts",
       "src/agents/reactive/agent.ts",
       "src/agents/reactive/children.ts"
     ],
@@ -73,13 +79,15 @@ const AGENTS = [
       plugin("claude-code"),
       "@cloudflare/computer"
     ],
-    // Measured 9127 KiB, and nearly all of it is Think: see "What every
-    // agent carries" above.
-    maxBytes: 10_100_000
+    // Measured 11694 KiB, and nearly all of it is Think and the `agents` SDK:
+    // see "What every agent carries" above.
+    maxBytes: 12_940_000
   },
   {
     name: "cf-coder",
     entries: [
+      "src/agents/cf-coder/host.ts",
+      "src/agents/cf-coder/task.ts",
       "src/agents/cf-coder/agent.ts",
       "src/agents/cf-coder/children.ts",
       // The workspace object is a deployed class of this agent's too, and
@@ -97,16 +105,18 @@ const AGENTS = [
     // which would also put an Anthropic credential path in an agent that has no
     // business with one.
     forbidden: [plugin("claude-code")],
-    // Measured 10907 KiB. Over reactive's by the container client and
+    // Measured 13474 KiB. Over reactive's by the container client and
     // `@cloudflare/computer/git`, which bundles isomorphic-git so that clone,
     // fetch and push run on this side of the container boundary and the forge
     // token never crosses it. A workspace agent, so it also carries `/alarm`
     // and `/job`.
-    maxBytes: 12_070_000
+    maxBytes: 14_910_000
   },
   {
     name: "claude-coder",
     entries: [
+      "src/agents/claude-coder/host.ts",
+      "src/agents/claude-coder/task.ts",
       "src/agents/claude-coder/agent.ts",
       "src/agents/claude-coder/children.ts",
       // Included for the reason cf-coder's is, and more sharply: this subclass
@@ -117,8 +127,8 @@ const AGENTS = [
     // Nothing to forbid: this agent installs every plugin in this repo, and
     // cf-coder's entry above is the other half of the `/claude-code` pair.
     forbidden: [],
-    // Measured 11033 KiB: cf-coder's, plus `/claude-code`.
-    maxBytes: 12_210_000
+    // Measured 13606 KiB: cf-coder's, plus `/claude-code`.
+    maxBytes: 15_050_000
   }
 ];
 
@@ -132,8 +142,16 @@ const AGENTS = [
  */
 const EXTERNAL = ["cloudflare:*", "node:*", ...builtinModules];
 
+/**
+ * An agent class's own modules. A pipeline reaches its step agents by binding
+ * name: one that imported a class would carry that agent's plugins into every
+ * graph it is part of, another tenant's included.
+ */
+const AGENT_CLASS = /^src\/agents\/[^/]+\/(agent|children|workspace-do)\.ts$/;
+
 let leakFailed = false;
 let sizeFailed = false;
+let pipelineFailed = false;
 
 for (const agent of AGENTS) {
   const results = [];
@@ -204,6 +222,18 @@ for (const agent of AGENTS) {
     0
   );
 
+  agent.entries.forEach((entry, i) => {
+    if (!entry.endsWith("/task.ts")) return;
+    const classes = Object.keys(results[i].metafile.inputs).filter((input) =>
+      AGENT_CLASS.test(input)
+    );
+    if (classes.length === 0) return;
+    pipelineFailed = true;
+    console.error(
+      `✗ ${agent.name}: its pipeline imports ${classes.join(", ")}`
+    );
+  });
+
   const leaked = agent.forbidden.filter((needle) =>
     inputs.some((input) => input.includes(needle))
   );
@@ -252,6 +282,12 @@ if (sizeFailed) {
       "commit as whatever grew it."
   );
 }
-if (leakFailed || sizeFailed) process.exit(1);
+if (pipelineFailed) {
+  console.error(
+    "\nA pipeline imported an agent class. Name the step agent's binding in " +
+      "`step.agent` instead: the workflow reaches it by name, never by import."
+  );
+}
+if (leakFailed || sizeFailed || pipelineFailed) process.exit(1);
 
 console.log("\nEach agent's graph carries only the plugins it installs.");

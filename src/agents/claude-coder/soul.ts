@@ -54,7 +54,7 @@ const LINES: string[] = [
   // changes how a brief should be written.
   "A session cannot ask you anything once it starts. Anything it would need to ask, decide first — or ask the user yourself before delegating. Put everything that matters in the brief: it cannot see this conversation.",
 
-  // The advertised `investigate` skill, which the rest of this soul would
+  // The advertised `planning` skill, which the rest of this soul would
   // otherwise contradict outright. A card that offers findings-without-a-PR
   // while the soul says "finish by opening a pull request" hands a gatekeeper a
   // contract the agent is instructed not to honour — so the exception is stated
@@ -110,6 +110,20 @@ export const SOUL = [
   "",
   WAIT_GUIDANCE
 ].join("\n");
+
+/**
+ * What each role in `./task.ts`'s pipeline asks, put ahead of the job's input.
+ * The plan's tools are held to reading by `./roles.ts`; this says why, so the
+ * model plans rather than discovering the wall.
+ */
+export const ROLE_BRIEFS: Record<string, string> = {
+  plan: "This job is the plan, and only the plan. Open the repository if the request names one, and read what the change will touch — through `claude_code_read` for anything beyond a quick look. Then reply with the plan itself: what will change and where, what you will leave alone, and how the result will be checked. Name no branch: a writing session commits to a branch of its own, and that branch is the pull request's. Change nothing: no writing session, no commit, no push, no pull request. The caller reads your reply and approves it before anything is built, so write it for them. A request that asks a question rather than for a change is answered here, in full: the caller can stop at the plan.",
+  code: "The caller approved the plan below. Carry it out to a pull request, as you would any change, and keep to it: if the work shows the plan was wrong, say so in your report rather than quietly doing something else."
+};
+
+/** Where a first attempt's work is, after `@/copy`'s `RETRY_BRIEF`. */
+export const RETRY_WORK =
+  "`repo_worktrees` lists the branches its writing sessions committed to, and anything it pushed is on the remote.";
 
 /** What the model is told the `memory` block is for. */
 export const MEMORY =

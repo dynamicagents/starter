@@ -16,7 +16,7 @@ import type { AgentManifest } from "@dynamicagents/core/a2a";
 export const manifest: AgentManifest = {
   name: "Claude Coder Agent",
   description:
-    "A senior software engineer for substantial changes. Give it a repository and a change to make; it clones into a Linux sandbox, delegates the implementation to long-running coding sessions that each work in an isolated checkout, reviews the branches they push, runs the project's own tests and opens a pull request. Replies with the pull request URL. At its best on work too large to specify step by step, and can investigate several questions or carry several independent strands in parallel. Never commits to a default branch.",
+    "A senior software engineer for substantial changes. Give it a repository and a change to make; it researches the repository and replies with a plan to approve, comment on or reject. Once approved, it delegates the implementation to long-running coding sessions that each work in an isolated checkout, reviews the branches they push, runs the project's own tests and opens a pull request, and replies with its URL. At its best on work too large to specify step by step, and can carry several independent strands in parallel. Never commits to a default branch.",
   version: "0.1.0",
   // `extensions` is a required (repeated) protobuf field in v1.0 — we declare no
   // protocol extensions, so it stays empty.
@@ -28,7 +28,7 @@ export const manifest: AgentManifest = {
       id: "implement-change",
       name: "Implement a substantial change",
       description:
-        "Carry a described change through a repository end to end — implementation, tests, and a pull request — in one pass. Suited to work that spans several files or needs judgement the request cannot fully specify.",
+        "Carry a described change through a repository end to end: a plan you approve, then the implementation, tests and a pull request. Suited to work that spans several files or needs judgement the request cannot fully specify.",
       tags: ["code", "git", "pull-request"],
       examples: [
         "In github.com/acme/api, add rate limiting to the public endpoints, with tests and docs.",
@@ -41,14 +41,14 @@ export const manifest: AgentManifest = {
       securityRequirements: []
     },
     {
-      id: "investigate",
-      name: "Investigate a repository",
+      id: "planning",
+      name: "Research and plan a change",
       description:
-        "Read an unfamiliar codebase and explain how something works, or why it is failing, without changing it. Returns findings rather than a pull request.",
-      tags: ["code", "research"],
+        "Research a repository and reply with a plan, or with findings when the question needs no change, without changing anything. Comment to have it revised, reject it to stop at the plan, or approve it to have it built.",
+      tags: ["code", "research", "planning"],
       examples: [
         "In github.com/acme/api, how does request authentication actually work end to end?",
-        "In github.com/acme/cli, why is the integration suite flaky on CI but not locally?"
+        "In github.com/acme/cli, plan a migration off the deprecated config library; I'll decide after reading it."
       ],
       inputModes: [],
       outputModes: [],

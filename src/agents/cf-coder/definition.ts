@@ -8,5 +8,5 @@ import { manifest } from "./manifest";
 export const cfCoder = defineAgent({
   tenant: "cf-coder",
   manifest,
-  agent: (env: Env) => env.CfCoder
+  agent: (env: Env) => env.CfCoderTasks
 });

@@ -8,5 +8,5 @@ import { manifest } from "./manifest";
 export const reactive = defineAgent({
   tenant: "reactive",
   manifest,
-  agent: (env: Env) => env.Reactive
+  agent: (env: Env) => env.ReactiveTasks
 });

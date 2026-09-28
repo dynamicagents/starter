@@ -6,13 +6,19 @@ import { reactive } from "./agents/reactive/definition";
 import { cfCoder } from "./agents/cf-coder/definition";
 import { claudeCoder } from "./agents/claude-coder/definition";
 
-// Durable Objects must be exported from the Worker entry so the runtime can
-// resolve them by class name. The sub-agent classes are **facets**: they need no
-// wrangler binding and no `new_sqlite_classes` entry, only this export, so
-// `ctx.exports` can find them.
+// Durable Objects and Workflows must be exported from the Worker entry so the
+// runtime can resolve them by class name. Each tenant is a task host, the
+// pipeline it runs each task as, and the step agent the pipeline's steps run
+// on. The sub-agent classes are **facets**: they need no wrangler binding and
+// no `new_sqlite_classes` entry, only this export, so `ctx.exports` can find
+// them.
+export { ReactiveTasks } from "./agents/reactive/host";
+export { ReactiveTask } from "./agents/reactive/task";
 export { Reactive } from "./agents/reactive/agent";
 export { ReactiveGeneral } from "./agents/reactive/children";
 
+export { CfCoderTasks } from "./agents/cf-coder/host";
+export { CfCoderTask } from "./agents/cf-coder/task";
 export { CfCoder } from "./agents/cf-coder/agent";
 export { CfCoderCode } from "./agents/cf-coder/children";
 
@@ -38,6 +44,8 @@ export { WorkspaceProxy } from "@cloudflare/computer";
 // beside the binding in wrangler.jsonc.
 export { Artifacts };
 
+export { ClaudeCoderTasks } from "./agents/claude-coder/host";
+export { ClaudeCoderTask } from "./agents/claude-coder/task";
 export { ClaudeCoder } from "./agents/claude-coder/agent";
 export {
   ClaudeCoderSession,

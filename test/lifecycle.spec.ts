@@ -11,12 +11,13 @@ import { copy } from "@/copy";
 import worker, { type TestEnv } from "./worker";
 
 /**
- * Each agent's A2A lifecycle, driven end to end through core's edge on a
- * scripted model: every scenario goes in as a gatekeeper-signed `SendMessage`
- * and comes out as push callbacks.
+ * Each one-step tenant's A2A lifecycle, driven end to end through core's edge,
+ * its host and its pipeline, on a scripted model: every scenario goes in as a
+ * gatekeeper-signed `SendMessage` and comes out as push callbacks.
  *
  * Core's own suite holds the lifecycle itself. What is checked here is that each
- * agent is wired into it: its plugins start, its souls load, its sub-agent is
+ * agent is wired into it: its host runs its pipeline on it, its plugins start,
+ * its souls load, its retry is briefed, its sub-agent is
  * reachable under the tool name its model is told, and its mode — awaited or
  * in the background — is the one its spec declares.
  *
@@ -26,10 +27,10 @@ import worker, { type TestEnv } from "./worker";
 
 const testEnv = env as unknown as TestEnv;
 
+/** claude-coder's tasks are a pipeline: `./claude-coder-pipeline.spec.ts`. */
 const TENANTS = [
   { tenant: "reactive", background: false },
-  { tenant: "cf-coder", background: true },
-  { tenant: "claude-coder", background: true }
+  { tenant: "cf-coder", background: true }
 ] as const;
 
 function harnessFor(tenant: string, label: string): AgentHarness {
@@ -95,7 +96,19 @@ describe.each(TENANTS)("$tenant", ({ tenant, background }) => {
     expect(terminals(harness, accepted.id)).toHaveLength(1);
   });
 
-  it("fails a turn that errors, in this deployment's words", async () => {
+  it("runs a failed turn once more, briefed as a retry", async () => {
+    const harness = harnessFor(tenant, "flaky");
+    using _ = harness.interceptGatekeeper();
+
+    const accepted = await harness.send("flaky");
+    const done = await harness.waitForTerminal(accepted.id);
+    expect(done.state).toBe("TASK_STATE_COMPLETED");
+    expect(done.text).toBe("recovered");
+    await pause(300);
+    expect(terminals(harness, accepted.id)).toHaveLength(1);
+  });
+
+  it("fails a turn that errors twice, in this deployment's words", async () => {
     const harness = harnessFor(tenant, "boom");
     using _ = harness.interceptGatekeeper();
 

@@ -205,9 +205,11 @@
   },
 
   // --- the agents ----------------------------------------------------------
-  // One Durable Object class per agent: each is keyed by the verified caller
-  // (`identity.key`), holding that caller's tasks and its SQLite-backed Session —
-  // continuous history plus writable memory.
+  // Two Durable Object classes per tenant, each keyed by the verified caller
+  // (`identity.key`): a task host, which holds that caller's A2A tasks, and the
+  // step agent its pipeline runs on, which holds its SQLite-backed Session —
+  // continuous history plus writable memory. A host's binding is named as its
+  // class: `hostBinding` names it, and a workflow reaches the host through it.
   //
   // The sub-agent classes (`ReactiveGeneral` and its siblings) are deliberately
   // absent. Each is a facet created beneath its agent, so it needs no binding and
@@ -216,8 +218,11 @@
   // binding — see the comment in vitest.config.ts.
   "durable_objects": {
     "bindings": [
+      { "class_name": "ReactiveTasks", "name": "ReactiveTasks" },
       { "class_name": "Reactive", "name": "Reactive" },
+      { "class_name": "CfCoderTasks", "name": "CfCoderTasks" },
       { "class_name": "CfCoder", "name": "CfCoder" },
+      { "class_name": "ClaudeCoderTasks", "name": "ClaudeCoderTasks" },
       { "class_name": "ClaudeCoder", "name": "ClaudeCoder" },
 
       // Not agents — the workspaces. One object per caller per repository,
@@ -313,12 +318,43 @@
       "deleted_classes": ["ProactiveAgent"]
     },
     {
-      // The agents move onto Think under new class names, and start empty:
-      // every task, conversation and memory the old classes held is dropped.
-      // The workspace objects are untouched, so every checkout survives.
+      // The agents move onto Think under new class names, behind task hosts,
+      // and start empty: every task, conversation and memory the old classes
+      // held is dropped. The workspace objects are untouched, so every checkout
+      // survives.
       "tag": "v10",
       "deleted_classes": ["ReactiveAgent", "CfCoderAgent", "ClaudeCoderAgent"],
-      "new_sqlite_classes": ["Reactive", "CfCoder", "ClaudeCoder"]
+      "new_sqlite_classes": [
+        "ReactiveTasks",
+        "Reactive",
+        "CfCoderTasks",
+        "CfCoder",
+        "ClaudeCoderTasks",
+        "ClaudeCoder"
+      ]
+    }
+  ],
+
+  // --- workflows --------------------------------------------------------------
+  // Each tenant's pipeline: every task is an instance, its id the task's. The
+  // names differ from the pre-Think Workflows (`handle-task`, `cf-coder`,
+  // `claude-coder`), which the cutover deletes once this deploys: a name reused
+  // would be deleted with them.
+  "workflows": [
+    {
+      "name": "reactive-task",
+      "binding": "REACTIVE_TASK",
+      "class_name": "ReactiveTask"
+    },
+    {
+      "name": "cf-coder-task",
+      "binding": "CF_CODER_TASK",
+      "class_name": "CfCoderTask"
+    },
+    {
+      "name": "claude-coder-task",
+      "binding": "CLAUDE_CODER_TASK",
+      "class_name": "ClaudeCoderTask"
     }
   ],
 

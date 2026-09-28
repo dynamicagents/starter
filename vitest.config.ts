@@ -97,7 +97,8 @@ export default defineConfig({
       miniflare: {
         outboundService: vcr.outboundService,
         // Test-only Durable Object bindings: the scripted agents in
-        // `test/worker.ts`, and every sub-agent class.
+        // `test/worker.ts`, the hosts pointed at them, and every sub-agent
+        // class.
         //
         // In production a sub-agent needs NO binding and NO `new_sqlite_classes`
         // entry — facet storage is created beneath the bound parent agent — but
@@ -108,6 +109,18 @@ export default defineConfig({
           TEST_REACTIVE: { className: "TestReactive", useSQLite: true },
           TEST_CF_CODER: { className: "TestCfCoder", useSQLite: true },
           TEST_CLAUDE_CODER: { className: "TestClaudeCoder", useSQLite: true },
+          TEST_REACTIVE_TASKS: {
+            className: "TestReactiveTasks",
+            useSQLite: true
+          },
+          TEST_CF_CODER_TASKS: {
+            className: "TestCfCoderTasks",
+            useSQLite: true
+          },
+          TEST_CLAUDE_CODER_TASKS: {
+            className: "TestClaudeCoderTasks",
+            useSQLite: true
+          },
           REACTIVE_GENERAL: { className: "ReactiveGeneral", useSQLite: true },
           CF_CODER_CODE: { className: "CfCoderCode", useSQLite: true },
           CLAUDE_CODER_SESSION: {
@@ -126,6 +139,25 @@ export default defineConfig({
           TEST_CLAUDE_CODER_SESSION: {
             className: "TestClaudeCoderSession",
             useSQLite: true
+          },
+          TEST_CLAUDE_CODER_READER: {
+            className: "TestClaudeCoderReader",
+            useSQLite: true
+          }
+        },
+        // The scripted pipelines, beside the real ones `wrangler.jsonc` binds.
+        workflows: {
+          TEST_REACTIVE_TASK: {
+            name: "test-reactive-task",
+            className: "TestReactiveTask"
+          },
+          TEST_CF_CODER_TASK: {
+            name: "test-cf-coder-task",
+            className: "TestCfCoderTask"
+          },
+          TEST_CLAUDE_CODER_TASK: {
+            name: "test-claude-coder-task",
+            className: "TestClaudeCoderTask"
           }
         }
       }

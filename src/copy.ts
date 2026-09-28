@@ -1,13 +1,13 @@
-import type { A2ACopy } from "@dynamicagents/core/agent";
 import {
   ASK_USER_TOOL_NAME,
   CHECK_BACK_TOOL_NAME
 } from "@dynamicagents/core/agent";
+import type { A2ACopy } from "@dynamicagents/core/task";
 
 /**
  * The words this Worker's agents say that core refuses to write: what a person
- * reads when a task ends without an answer, and the parts of each soul that
- * every agent shares.
+ * reads when a task ends without an answer or between a pipeline's steps, and
+ * the parts of each soul and each job's first message that every agent shares.
  *
  * Shared at the top level rather than in one agent's directory, because an
  * agent importing a sibling's module is what `npm run verify:isolation` fails
@@ -15,11 +15,11 @@ import {
  * belongs to the plugin or sub-agent that owns it.
  */
 
-/** What a person reads when a task ends with no answer to give them. */
+/** What a person reads when a task ends with no answer to give them: each host's. */
 export const copy: A2ACopy = {
-  /** A turn that errored. The diagnostic is logged, not shown. */
+  /** A task whose steps failed. The diagnostic is logged, not shown. */
   failed: "Sorry — something went wrong handling that request.",
-  /** A turn that ended with nothing to say. */
+  /** A task that finished with nothing to say. */
   emptyReply:
     "I finished, but had nothing to report. Ask again if you expected an answer.",
   /** A question that went unanswered. Nothing failed: the agent stopped rather than guess. */
@@ -58,3 +58,27 @@ export const BACKGROUND_GUIDANCE = `## Work that runs in the background
 A sub-agent that runs in the background returns as soon as it starts, and its result arrives later as a message of its own. When you start one, say what you started and stop: do not claim it is done, and do not guess at what it will report. When its result arrives, read it and carry on from there.
 
 Act, don't announce. If your next step is a tool call, make the call in this turn; a turn that ends on "I'll now…" does nothing.`;
+
+/**
+ * Ahead of a job's second attempt. A pipeline runs a failed step once more, in
+ * the same conversation, so without this the model meets its request twice.
+ */
+export const RETRY_BRIEF =
+  "Your previous attempt at this stopped before it finished. Its work is kept: what it said and did is above. Look at what it left first, and carry on from there rather than starting again.";
+
+/**
+ * What a person reads between a pipeline's steps. A step agent's own words
+ * reach them as its progress; these are the pipeline's.
+ */
+export const PIPELINE_COPY = {
+  /** Under the plan, in the question that asks to approve it. */
+  approveHint:
+    "Approve to start the work, reply with what to change and I'll revise the plan, or reject it to stop here.",
+  /** Once a plan was commented on, while the next is written. */
+  replanning: "Revising the plan.",
+  /** An answer that neither approved nor rejected, and said nothing. */
+  noComment: "Revise the plan; no comment given.",
+  /** The reply to a rejected plan. The plan itself is already in the thread. */
+  stopped:
+    "Stopped at the plan: nothing was changed. Ask again whenever you want it built or planned afresh."
+};

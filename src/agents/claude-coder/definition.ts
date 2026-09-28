@@ -8,5 +8,5 @@ import { manifest } from "./manifest";
 export const claudeCoder = defineAgent({
   tenant: "claude-coder",
   manifest,
-  agent: (env: Env) => env.ClaudeCoder
+  agent: (env: Env) => env.ClaudeCoderTasks
 });

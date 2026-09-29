@@ -3,7 +3,6 @@ import type {
   SessionEnd,
   SessionOutcome
 } from "@dynamicagents/plugins/claude-code";
-import { truncateOutput } from "@dynamicagents/plugins/workspace";
 import { CLAUDE_CODE_SESSION } from "@/config";
 
 /**
@@ -15,9 +14,6 @@ import { CLAUDE_CODE_SESSION } from "@/config";
  * report the parent reads. Pure functions and shell scripts, so each rule is
  * tested without a container.
  */
-
-/** Bound on the report text, so one runaway session cannot fill the transcript. */
-const REPORT_MAX = 24_000;
 
 /**
  * How a session the host stopped exits: Claude Code's answer to the `SIGTERM`
@@ -351,6 +347,11 @@ export function tabbed(out: string): string[][] {
  * and one whose `result` event never arrived because the process died first,
  * both get a sentence saying so rather than a report that reads as silence.
  *
+ * **The session's own words are passed whole.** `result.text` is its last
+ * message, or an error the CLI wrote: command output never reaches it, and
+ * Claude Code's per-response output limit bounds it. The parent cannot fetch a
+ * part cut from it, and the middle is where a report's findings are.
+ *
  * The footer under both is {@link sessionFooter}, which carries its own
  * reasoning — including why a denial count belongs beside the cost.
  */
@@ -384,11 +385,8 @@ export function sessionReport(
   const footer = sessionFooter(result);
 
   if (result.isError) {
-    // Bounded on this path too. A failing session is the *more* likely one to
-    // have produced a runaway string — a loop that kept retrying, a command
-    // that dumped a binary.
     const detail =
-      truncateOutput(result.text, REPORT_MAX) ||
+      result.text ||
       `the session ended as ${result.subtype}` +
         (result.apiErrorStatus === null
           ? ""
@@ -399,7 +397,7 @@ export function sessionReport(
   }
 
   const text =
-    truncateOutput(result.text, REPORT_MAX) ||
+    result.text ||
     "The session completed and reported nothing. Check the working tree " +
       "before assuming the change was made.";
   const warning = outcome.followUp?.result;

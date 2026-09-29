@@ -65,7 +65,7 @@ const AGENTS = [
     name: "generic",
     entries: [
       "src/agents/generic/host.ts",
-      "src/agents/generic/task.ts",
+      "src/agents/generic/workflow.ts",
       "src/agents/generic/agent.ts",
       "src/agents/generic/children.ts"
     ],
@@ -84,23 +84,23 @@ const AGENTS = [
     maxBytes: 12_940_000
   },
   {
-    name: "cf-coder",
+    name: "coding",
     entries: [
-      "src/agents/cf-coder/host.ts",
-      "src/agents/cf-coder/task.ts",
-      "src/agents/cf-coder/agent.ts",
-      "src/agents/cf-coder/children.ts",
+      "src/agents/coding/host.ts",
+      "src/agents/coding/workflow.ts",
+      "src/agents/coding/agent.ts",
+      "src/agents/coding/children.ts",
       // The workspace object is a deployed class of this agent's too, and
       // omitting it left the one assertion below that names `/claude-code`
       // unable to fail: the shared base arrives in this graph anyway (via
       // `workspaceName` in `agent.ts`), but the *subclass* did not, so an import
       // added only there was neither leak-checked nor size-counted.
-      "src/agents/cf-coder/workspace-do.ts"
+      "src/agents/coding/workspace.ts"
     ],
     // Both coders share one workspace base, from
     // `@dynamicagents/plugins/workspace`, and the whole point of that base is
     // that it knows nothing about Claude Code: the egress policy arrives through
-    // a config seam, and only `claude-coder`'s subclass fills it in. If this ever
+    // a config seam, and only `anthropic-coding`'s subclass fills it in. If this ever
     // fails, the shared base has grown an import that belongs in a subclass —
     // which would also put an Anthropic credential path in an agent that has no
     // business with one.
@@ -113,21 +113,21 @@ const AGENTS = [
     maxBytes: 14_910_000
   },
   {
-    name: "claude-coder",
+    name: "anthropic-coding",
     entries: [
-      "src/agents/claude-coder/host.ts",
-      "src/agents/claude-coder/task.ts",
-      "src/agents/claude-coder/agent.ts",
-      "src/agents/claude-coder/children.ts",
-      // Included for the reason cf-coder's is, and more sharply: this subclass
+      "src/agents/anthropic-coding/host.ts",
+      "src/agents/anthropic-coding/workflow.ts",
+      "src/agents/anthropic-coding/agent.ts",
+      "src/agents/anthropic-coding/children.ts",
+      // Included for the reason `coding`'s is, and more sharply: this subclass
       // is where the credential-egress gateway is wired, so it is the single
       // file this check most needs to be watching.
-      "src/agents/claude-coder/workspace-do.ts"
+      "src/agents/anthropic-coding/workspace.ts"
     ],
     // Nothing to forbid: this agent installs every plugin in this repo, and
-    // cf-coder's entry above is the other half of the `/claude-code` pair.
+    // `coding`'s entry above is the other half of the `/claude-code` pair.
     forbidden: [],
-    // Measured 13606 KiB: cf-coder's, plus `/claude-code`.
+    // Measured 13606 KiB: `coding`'s, plus `/claude-code`.
     maxBytes: 15_050_000
   }
 ];
@@ -147,7 +147,7 @@ const EXTERNAL = ["cloudflare:*", "node:*", ...builtinModules];
  * name: one that imported a class would carry that agent's plugins into every
  * graph it is part of, another tenant's included.
  */
-const AGENT_CLASS = /^src\/agents\/[^/]+\/(agent|children|workspace-do)\.ts$/;
+const AGENT_CLASS = /^src\/agents\/[^/]+\/(agent|children|workspace)\.ts$/;
 
 let leakFailed = false;
 let sizeFailed = false;
@@ -172,7 +172,7 @@ for (const agent of AGENTS) {
         // dynamic `import()` is parsed — it still appears in `metafile.inputs`, so
         // the isolation half of this check always saw it — and then dropped from the
         // output. `@cloudflare/computer/git` lazy-loads its bundled isomorphic-git
-        // exactly that way, and wiring it into cf-coder moved the real deploy by
+        // exactly that way, and wiring it into `coding` moved the real deploy by
         // ~800 KiB while this script reported no change at all. A ceiling that
         // cannot see the largest thing anyone has added to a bundle is not a
         // ceiling.
@@ -201,7 +201,7 @@ for (const agent of AGENTS) {
         external: EXTERNAL,
         // Required, not cosmetic. The Agents SDK resolves a facet through
         // `ctx.exports[this.constructor.name]`, so a build that minifies class
-        // identifiers turns `GenericGeneral` into `_a` and the lookup fails at
+        // identifiers turns `GenericChild` into `_a` and the lookup fails at
         // runtime. Keeping names here also keeps this measurement honest against the
         // real deploy, which does the same.
         keepNames: true,
@@ -223,7 +223,7 @@ for (const agent of AGENTS) {
   );
 
   agent.entries.forEach((entry, i) => {
-    if (!entry.endsWith("/task.ts")) return;
+    if (!entry.endsWith("/workflow.ts")) return;
     const classes = Object.keys(results[i].metafile.inputs).filter((input) =>
       AGENT_CLASS.test(input)
     );

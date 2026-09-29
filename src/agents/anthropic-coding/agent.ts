@@ -13,7 +13,7 @@ import { workspaceName } from "@dynamicagents/plugins/workspace";
 import type { AgentToolLifecycleResult, AgentToolRunInfo } from "agents";
 import type { ContextConfig } from "agents/context";
 import type { LanguageModel, ToolSet } from "ai";
-import { CLAUDE_CODER } from "@/config";
+import { ANTHROPIC_CODING } from "@/config";
 import { RETRY_BRIEF } from "@/copy";
 import { agentModel } from "@/model";
 import { activeRepo } from "@/workspace/active-repo";
@@ -26,21 +26,21 @@ import {
   sqlPoolStore
 } from "@/workspace/worktree-pool";
 import {
-  ClaudeCoderReader,
-  ClaudeCoderSession,
+  AnthropicCodingReaderChild,
+  AnthropicCodingWriterChild,
   forgetKept,
   keptNote
 } from "./children";
-import { claudeCoder } from "./definition";
+import { anthropicCoding } from "./definition";
 import { container, parentPlugins, sessionWorkspaces } from "./plugins";
 import { activeToolsFor } from "./roles";
 import { MEMORY, RETRY_WORK, ROLE_BRIEFS, SOUL } from "./soul";
 
 /** This agent's log prefix and workspace label. */
-const LABEL = "claude-coder";
+const LABEL = "anthropic-coding";
 
 /**
- * The claude-coder agent — cf-coder's sibling, with a different engine.
+ * The anthropic-coding agent — `coding`'s sibling, with a different engine.
  *
  * The parent is an ordinary agent on Workers AI: it clones, reviews diffs,
  * commits, pushes and opens pull requests, and it has no shell, no editor and
@@ -53,9 +53,9 @@ const LABEL = "claude-coder";
  * to reach Opus on a subscription is to run the client, and the way to do that
  * safely is to keep the credential on this side of the container boundary.
  */
-export class ClaudeCoder extends StepAgent<Env> {
-  protected readonly compactAfterTokens = CLAUDE_CODER.compactAfterTokens;
-  protected readonly keepRecentTokens = CLAUDE_CODER.keepRecentTokens;
+export class AnthropicCodingAgent extends StepAgent<Env> {
+  protected readonly compactAfterTokens = ANTHROPIC_CODING.compactAfterTokens;
+  protected readonly keepRecentTokens = ANTHROPIC_CODING.keepRecentTokens;
 
   /**
    * Which repository the caller is working on — or which worktree the parent
@@ -78,8 +78,12 @@ export class ClaudeCoder extends StepAgent<Env> {
   override getModel(): ThinkModel {
     return agentModel(
       this.env,
-      { modelId: CLAUDE_CODER.modelId, name: this.name },
-      { agent: claudeCoder.tenant, taskId: this.turnTaskId(), phase: "turn" }
+      { modelId: ANTHROPIC_CODING.modelId, name: this.name },
+      {
+        agent: anthropicCoding.tenant,
+        taskId: this.turnTaskId(),
+        phase: "turn"
+      }
     );
   }
 
@@ -87,8 +91,8 @@ export class ClaudeCoder extends StepAgent<Env> {
   protected override compactionModel(): LanguageModel {
     return agentModel(
       this.env,
-      { modelId: CLAUDE_CODER.modelId, name: this.name },
-      { agent: claudeCoder.tenant, phase: "compaction" }
+      { modelId: ANTHROPIC_CODING.modelId, name: this.name },
+      { agent: anthropicCoding.tenant, phase: "compaction" }
     );
   }
 
@@ -111,7 +115,7 @@ export class ClaudeCoder extends StepAgent<Env> {
 
   /** Writing first: the order the delegating model is shown them. */
   override getSubAgents(): SubAgentClass[] {
-    return [ClaudeCoderSession, ClaudeCoderReader];
+    return [AnthropicCodingWriterChild, AnthropicCodingReaderChild];
   }
 
   /** `check_back`, for the wait between opening a pull request and its review. */
@@ -162,7 +166,7 @@ export class ClaudeCoder extends StepAgent<Env> {
   }
 
   /**
-   * The workspace reclaim sweep — an hour after cf-coder's, which is an hour
+   * The workspace reclaim sweep — an hour after `coding`'s, which is an hour
    * after core's, so no two sweeps contend for the same instance — and then the
    * pool reconciled against what is actually still there.
    *
@@ -183,7 +187,7 @@ export class ClaudeCoder extends StepAgent<Env> {
 
   async #reclaim(): Promise<void> {
     const pool = sqlPoolStore(this.ctx.storage);
-    const binding = this.env.CLAUDE_CODER_WORKSPACE;
+    const binding = this.env.ANTHROPIC_CODING_WORKSPACE;
     const key = this.callerKey();
     await sweepIdleWorkspaces({
       storage: this.ctx.storage,
@@ -248,7 +252,7 @@ export class ClaudeCoder extends StepAgent<Env> {
     const repo = this.#active.get();
     const worktree = repo === undefined ? undefined : parseWorktreeRepo(repo);
     if (worktree) this.#active.set(worktree.repo);
-    const binding = this.env.CLAUDE_CODER_WORKSPACE;
+    const binding = this.env.ANTHROPIC_CODING_WORKSPACE;
     const key = this.callerKey();
     const names = new Set([
       workspaceName(key, repo),

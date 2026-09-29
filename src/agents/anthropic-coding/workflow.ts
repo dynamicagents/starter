@@ -12,19 +12,19 @@ import {
 import { PIPELINE_COPY } from "@/copy";
 
 /**
- * claude-coder's pipeline: plan, then put the plan to the caller. Approved, it
+ * `anthropic-coding`'s pipeline: plan, then put the plan to the caller. Approved, it
  * is built. Answered in words, it is written again with them, for as long as
  * the caller keeps commenting. Rejected, the task stops at the plan — which
  * makes a question with no change behind it a plan the caller stops at. The
  * question's expiry or a cancel ends it otherwise.
  *
- * Both steps run on ClaudeCoder, the caller's own instance, so the plan and
+ * Both steps run on AnthropicCodingAgent, the caller's own instance, so the plan and
  * the work share its checkout, its worktrees and its conversation. What a role
  * lets the agent do is the agent's: see `./roles.ts`.
  */
-export class ClaudeCoderTask extends TaskWorkflow<Env> {
+export class AnthropicCodingWorkflow extends TaskWorkflow<Env> {
   /** The step agent's binding. A test worker points it at a scripted one. */
-  protected readonly coder: string = "ClaudeCoder";
+  protected readonly coder: string = "AnthropicCodingAgent";
 
   override run(event: WorkflowEvent<TaskParams>, step: WorkflowStep) {
     return super.run(event, step);

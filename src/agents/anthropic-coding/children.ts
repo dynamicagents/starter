@@ -46,7 +46,7 @@ import {
 } from "./session";
 
 /**
- * The claude-coder's sub-agents: a Claude Code session each, not a model loop.
+ * `anthropic-coding`'s sub-agents: a Claude Code session each, not a model loop.
  *
  * The session is the sub-agent's **model** — `claudeCodeModel` in
  * `@dynamicagents/plugins/claude-code` — so Think's recovery drives it: a run
@@ -76,7 +76,7 @@ function ensureKept(storage: DurableObjectStorage): void {
  *
  * `settle` runs in the finish hook, before the parent builds the message that
  * reports the run, and returns nothing — so the note is stored under the run,
- * and `ClaudeCoder.formatDetachedCompletion` reads it back. SQL rather than
+ * and `AnthropicCodingAgent.formatDetachedCompletion` reads it back. SQL rather than
  * `storage.get`, because that formatter is synchronous.
  */
 export function keepNote(
@@ -136,7 +136,7 @@ function placeOf(runtime: Record<string, unknown> | undefined): SessionPlace {
   const dir = runtime?.dir;
   if (!workspaceName || typeof dir !== "string") {
     throw new Error(
-      "claude-coder: this run carries no workspace; its spec's prepare supplies one"
+      "anthropic-coding: this run carries no workspace; its spec's prepare supplies one"
     );
   }
   return {
@@ -168,7 +168,7 @@ export async function claimSession(
     );
   } catch (err) {
     await workspaces.release(run).catch((released: unknown) =>
-      console.warn("[claude-coder] could not release an unused worktree", {
+      console.warn("[anthropic-coding] could not release an unused worktree", {
         runId: ctx.runId,
         err: String(released)
       })
@@ -251,7 +251,7 @@ abstract class ClaudeCodeRun extends SubAgent<Env> {
   }
 
   #stub(name: string) {
-    const binding = this.env.CLAUDE_CODER_WORKSPACE;
+    const binding = this.env.ANTHROPIC_CODING_WORKSPACE;
     return binding.get(binding.idFromName(name));
   }
 
@@ -358,7 +358,7 @@ abstract class ClaudeCodeRun extends SubAgent<Env> {
     try {
       await this.#stub(place.workspaceName).claudeNoteRateLimit(info);
     } catch (err) {
-      console.warn("[claude-coder] could not record the bucket reading", {
+      console.warn("[anthropic-coding] could not record the bucket reading", {
         err: String(err)
       });
     }
@@ -378,9 +378,12 @@ abstract class ClaudeCodeRun extends SubAgent<Env> {
         await readSubmodules(this.#exec(place.workspaceName), place.dir)
       ).map((sub) => sub.path);
     } catch (err) {
-      console.warn("[claude-coder] could not read the checkout's submodules", {
-        err: String(err)
-      });
+      console.warn(
+        "[anthropic-coding] could not read the checkout's submodules",
+        {
+          err: String(err)
+        }
+      );
       return [];
     }
   }
@@ -406,9 +409,12 @@ abstract class ClaudeCodeRun extends SubAgent<Env> {
         start
       }));
     } catch (err) {
-      console.warn("[claude-coder] could not read where the session starts", {
-        err: String(err)
-      });
+      console.warn(
+        "[anthropic-coding] could not read where the session starts",
+        {
+          err: String(err)
+        }
+      );
     }
     await this.ctx.storage.put(
       REPOS_KEY,
@@ -438,7 +444,7 @@ abstract class ClaudeCodeRun extends SubAgent<Env> {
       }
       return [...byPath].map(([path, files]) => ({ path, files }));
     } catch (err) {
-      console.warn("[claude-coder] could not read what is uncommitted", {
+      console.warn("[anthropic-coding] could not read what is uncommitted", {
         err: String(err)
       });
       return [];
@@ -466,7 +472,7 @@ abstract class ClaudeCodeRun extends SubAgent<Env> {
       });
       if (!done.success) {
         console.warn(
-          "[claude-coder] the uncommitted work was not all deleted",
+          "[anthropic-coding] the uncommitted work was not all deleted",
           {
             stderr: done.stderr.trim().slice(0, 500)
           }
@@ -474,7 +480,7 @@ abstract class ClaudeCodeRun extends SubAgent<Env> {
       }
       return { files: dirty, failed: !done.success };
     } catch (err) {
-      console.warn("[claude-coder] could not delete the uncommitted work", {
+      console.warn("[anthropic-coding] could not delete the uncommitted work", {
         err: String(err)
       });
       return { files: dirty, failed: true };
@@ -505,7 +511,7 @@ abstract class ClaudeCodeRun extends SubAgent<Env> {
           : { path: repo.path };
       });
     } catch (err) {
-      console.warn("[claude-coder] could not count the session's commits", {
+      console.warn("[anthropic-coding] could not count the session's commits", {
         err: String(err)
       });
       return repos.map((repo) => ({ path: repo.path }));
@@ -514,7 +520,7 @@ abstract class ClaudeCodeRun extends SubAgent<Env> {
 }
 
 /** A writing session, in a worktree of its own. */
-export class ClaudeCoderSession extends ClaudeCodeRun {
+export class AnthropicCodingWriterChild extends ClaudeCodeRun {
   static override spec = {
     ...CLAUDE_CODE_AGENT,
     prepare: prepareWriter,
@@ -524,7 +530,7 @@ export class ClaudeCoderSession extends ClaudeCodeRun {
 }
 
 /** A reading session, in a throwaway copy of the parent's checkout. */
-export class ClaudeCoderReader extends ClaudeCodeRun {
+export class AnthropicCodingReaderChild extends ClaudeCodeRun {
   static override spec = {
     ...CLAUDE_CODE_READER_AGENT,
     prepare: prepareReader,

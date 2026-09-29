@@ -41,8 +41,8 @@
 //   npm run cf -- ai --agent generic --phase turn --since 1d
 //   npm run cf -- ai 01KY4PSY6T1HBA7A2V22NKCFZC
 //   npm run cf -- containers
-//   npm run cf -- wf claude-coder-task
-//   npm run cf -- wf claude-coder-task <taskId>
+//   npm run cf -- wf anthropic-coding-workflow
+//   npm run cf -- wf anthropic-coding-workflow <taskId>
 //   npm run cf -- GET workers/scripts
 //
 // `npm run cf -- wf` with no name lists the workflows this Worker actually has

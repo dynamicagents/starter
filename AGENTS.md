@@ -14,7 +14,7 @@ refuses to ship — the words, the config values, which steps each tenant's task
 runs, which plugins each agent installs, and where each sub-agent works.
 
 Each tenant is three classes in `src/agents/<tenant>/`: a task host
-(`host.ts`, core's `TaskHost`), which owns the A2A task; a pipeline (`task.ts`,
+(`host.ts`, core's `TaskHost`), which owns the A2A task; a pipeline (`workflow.ts`,
 core's `TaskWorkflow`), which runs it as steps; and a step agent (`agent.ts`,
 core's `StepAgent`), which runs a step's job. The mechanism is in core's README.
 
@@ -33,7 +33,7 @@ adapters for the workspace this Worker deploys; the object itself is
 | ----------------------------------------------------- | --------------------------------------- |
 | what the model is told about a domain                 | the plugin that owns that domain        |
 | what the agent _is_                                   | `src/agents/<tenant>/soul.ts`           |
-| a step in a tenant's pipeline                         | `src/agents/<tenant>/task.ts`           |
+| a step in a tenant's pipeline                         | `src/agents/<tenant>/workflow.ts`       |
 | what a job's role lets the agent do                   | `src/agents/<tenant>/roles.ts`          |
 | a user-facing string, or guidance every soul shares   | `src/copy.ts`                           |
 | which capabilities an agent has                       | `src/agents/<tenant>/plugins.ts`        |

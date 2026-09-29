@@ -12,22 +12,22 @@ import { computerWorkspace } from "@dynamicagents/plugins/computer";
 import { workspaceName } from "@dynamicagents/plugins/workspace";
 import type { ContextConfig } from "agents/context";
 import type { LanguageModel, ToolSet } from "ai";
-import { CF_CODER } from "@/config";
+import { CODING } from "@/config";
 import { RETRY_BRIEF } from "@/copy";
 import { agentModel } from "@/model";
 import { activeRepo } from "@/workspace/active-repo";
 import { WORKSPACE_WRITERS } from "@/workspace/container";
 import { sweepIdleWorkspaces } from "@/workspace/lifecycle";
-import { CfCoderCode } from "./children";
-import { cfCoder } from "./definition";
+import { CodingChild } from "./children";
+import { coding } from "./definition";
 import { container, parentPlugins } from "./plugins";
 import { MEMORY, SOUL } from "./soul";
 
 /** This agent's log prefix and workspace label. */
-const LABEL = "cf-coder";
+const LABEL = "coding";
 
 /**
- * The cf-coder agent.
+ * The coding agent.
  *
  * A delegating agent like `generic`: the job, the turn and delegation are
  * `@dynamicagents/core/agent`, and the A2A task is `./host.ts`'s. What makes it
@@ -35,9 +35,9 @@ const LABEL = "cf-coder";
  * lifecycle, not inference: a weekly reclaim sweep for workspaces nothing is
  * calling into, and a parent that can read the checkout but not change it.
  */
-export class CfCoder extends StepAgent<Env> {
-  protected readonly compactAfterTokens = CF_CODER.compactAfterTokens;
-  protected readonly keepRecentTokens = CF_CODER.keepRecentTokens;
+export class CodingAgent extends StepAgent<Env> {
+  protected readonly compactAfterTokens = CODING.compactAfterTokens;
+  protected readonly keepRecentTokens = CODING.keepRecentTokens;
 
   /**
    * Which repository the caller is working on. One instance for the object:
@@ -60,8 +60,8 @@ export class CfCoder extends StepAgent<Env> {
   override getModel(): ThinkModel {
     return agentModel(
       this.env,
-      { modelId: CF_CODER.modelId, name: this.name },
-      { agent: cfCoder.tenant, taskId: this.turnTaskId(), phase: "turn" }
+      { modelId: CODING.modelId, name: this.name },
+      { agent: coding.tenant, taskId: this.turnTaskId(), phase: "turn" }
     );
   }
 
@@ -69,8 +69,8 @@ export class CfCoder extends StepAgent<Env> {
   protected override compactionModel(): LanguageModel {
     return agentModel(
       this.env,
-      { modelId: CF_CODER.modelId, name: this.name },
-      { agent: cfCoder.tenant, phase: "compaction" }
+      { modelId: CODING.modelId, name: this.name },
+      { agent: coding.tenant, phase: "compaction" }
     );
   }
 
@@ -87,7 +87,7 @@ export class CfCoder extends StepAgent<Env> {
   }
 
   override getSubAgents(): SubAgentClass[] {
-    return [CfCoderCode];
+    return [CodingChild];
   }
 
   /** `check_back`, for the wait between opening a pull request and its review. */
@@ -131,7 +131,7 @@ export class CfCoder extends StepAgent<Env> {
           sweepIdleWorkspaces({
             storage: this.ctx.storage,
             callerKey: this.callerKey(),
-            binding: this.env.CF_CODER_WORKSPACE,
+            binding: this.env.CODING_WORKSPACE,
             label: LABEL
           })
       }

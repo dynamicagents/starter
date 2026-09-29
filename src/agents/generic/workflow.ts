@@ -8,11 +8,11 @@ import {
 
 /**
  * generic's pipeline: one step, the whole task, on the caller's own
- * `Generic`. A step before it or after it — triage, a judge — goes here.
+ * `GenericAgent`. A step before it or after it — triage, a judge — goes here.
  */
-export class GenericTask extends TaskWorkflow<Env> {
+export class GenericWorkflow extends TaskWorkflow<Env> {
   /** The step agent's binding. A test worker points it at a scripted one. */
-  protected readonly generic: string = "Generic";
+  protected readonly generic: string = "GenericAgent";
 
   override run(event: WorkflowEvent<TaskParams>, step: WorkflowStep) {
     return super.run(event, step);

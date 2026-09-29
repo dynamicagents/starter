@@ -8,7 +8,7 @@ import type { LanguageModel } from "ai";
 import { GENERIC } from "@/config";
 import { RETRY_BRIEF } from "@/copy";
 import { agentModel } from "@/model";
-import { GenericGeneral } from "./children";
+import { GenericChild } from "./children";
 import { generic } from "./definition";
 import { plugins } from "./plugins";
 import { MEMORY, SOUL } from "./soul";
@@ -18,11 +18,11 @@ import { MEMORY, SOUL } from "./soul";
  *
  * The job, the turn and delegation are `@dynamicagents/core/agent`, and the A2A
  * task is `./host.ts`'s. What is actually *this agent* is the members below plus
- * `./plugins.ts`, `./soul.ts` and `./children.ts` — and `../cf-coder/agent.ts`
+ * `./plugins.ts`, `./soul.ts` and `./children.ts` — and `../coding/agent.ts`
  * is the same members with different answers. If adding a domain to an agent
  * needed more than that, the plugin contract would be wrong.
  */
-export class Generic extends StepAgent<Env> {
+export class GenericAgent extends StepAgent<Env> {
   protected readonly compactAfterTokens = GENERIC.compactAfterTokens;
   protected readonly keepRecentTokens = GENERIC.keepRecentTokens;
 
@@ -56,7 +56,7 @@ export class Generic extends StepAgent<Env> {
   }
 
   override getSubAgents(): SubAgentClass[] {
-    return [GenericGeneral];
+    return [GenericChild];
   }
 
   /** A retry is told so, and to carry on from what the first attempt left. */

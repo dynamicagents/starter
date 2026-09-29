@@ -15,25 +15,25 @@ import { tool, type ToolSet } from "ai";
 import { z } from "zod";
 import { RETRY_BRIEF } from "@/copy";
 import { hostManifest } from "@/host-manifest";
-import { Generic } from "@/agents/generic/agent";
-import { GenericGeneral } from "@/agents/generic/children";
-import { GenericTasks } from "@/agents/generic/host";
+import { GenericAgent } from "@/agents/generic/agent";
+import { GenericChild } from "@/agents/generic/children";
+import { GenericHost } from "@/agents/generic/host";
 import { manifest as genericManifest } from "@/agents/generic/manifest";
-import { GenericTask } from "@/agents/generic/task";
-import { CfCoder } from "@/agents/cf-coder/agent";
-import { CfCoderCode } from "@/agents/cf-coder/children";
-import { CfCoderTasks } from "@/agents/cf-coder/host";
-import { manifest as cfCoderManifest } from "@/agents/cf-coder/manifest";
-import { CfCoderTask } from "@/agents/cf-coder/task";
-import { ClaudeCoder } from "@/agents/claude-coder/agent";
+import { GenericWorkflow } from "@/agents/generic/workflow";
+import { CodingAgent } from "@/agents/coding/agent";
+import { CodingChild } from "@/agents/coding/children";
+import { CodingHost } from "@/agents/coding/host";
+import { manifest as codingManifest } from "@/agents/coding/manifest";
+import { CodingWorkflow } from "@/agents/coding/workflow";
+import { AnthropicCodingAgent } from "@/agents/anthropic-coding/agent";
 import {
-  ClaudeCoderReader,
-  ClaudeCoderSession
-} from "@/agents/claude-coder/children";
-import { ClaudeCoderTasks } from "@/agents/claude-coder/host";
-import { manifest as claudeCoderManifest } from "@/agents/claude-coder/manifest";
-import { RETRY_WORK, ROLE_BRIEFS } from "@/agents/claude-coder/soul";
-import { ClaudeCoderTask } from "@/agents/claude-coder/task";
+  AnthropicCodingReaderChild,
+  AnthropicCodingWriterChild
+} from "@/agents/anthropic-coding/children";
+import { AnthropicCodingHost } from "@/agents/anthropic-coding/host";
+import { manifest as anthropicCodingManifest } from "@/agents/anthropic-coding/manifest";
+import { RETRY_WORK, ROLE_BRIEFS } from "@/agents/anthropic-coding/soul";
+import { AnthropicCodingWorkflow } from "@/agents/anthropic-coding/workflow";
 
 /**
  * The Worker the suite runs: this deployment's own, plus each agent on a
@@ -50,15 +50,15 @@ import { ClaudeCoderTask } from "@/agents/claude-coder/task";
 export * from "@/index";
 
 export interface TestEnv extends Env {
-  TEST_GENERIC: DurableObjectNamespace<TestGeneric>;
-  TEST_GENERIC_TASKS: DurableObjectNamespace<TestGenericTasks>;
-  TEST_GENERIC_TASK: Workflow<TaskParams>;
-  TEST_CF_CODER: DurableObjectNamespace<TestCfCoder>;
-  TEST_CF_CODER_TASKS: DurableObjectNamespace<TestCfCoderTasks>;
-  TEST_CF_CODER_TASK: Workflow<TaskParams>;
-  TEST_CLAUDE_CODER: DurableObjectNamespace<TestClaudeCoder>;
-  TEST_CLAUDE_CODER_TASKS: DurableObjectNamespace<TestClaudeCoderTasks>;
-  TEST_CLAUDE_CODER_TASK: Workflow<TaskParams>;
+  TEST_GENERIC_AGENT: DurableObjectNamespace<TestGenericAgent>;
+  TEST_GENERIC_HOST: DurableObjectNamespace<TestGenericHost>;
+  TEST_GENERIC_WORKFLOW: Workflow<TaskParams>;
+  TEST_CODING_AGENT: DurableObjectNamespace<TestCodingAgent>;
+  TEST_CODING_HOST: DurableObjectNamespace<TestCodingHost>;
+  TEST_CODING_WORKFLOW: Workflow<TaskParams>;
+  TEST_ANTHROPIC_CODING_AGENT: DurableObjectNamespace<TestAnthropicCodingAgent>;
+  TEST_ANTHROPIC_CODING_HOST: DurableObjectNamespace<TestAnthropicCodingHost>;
+  TEST_ANTHROPIC_CODING_WORKFLOW: Workflow<TaskParams>;
 }
 
 function after(text: string, prefix: string): string | undefined {
@@ -168,8 +168,8 @@ const sleepTool = (name: string) =>
 
 // --- generic -----------------------------------------------------------------
 
-export class TestGenericGeneral extends GenericGeneral {
-  static override spec = GenericGeneral.spec;
+export class TestGenericChild extends GenericChild {
+  static override spec = GenericChild.spec;
   override getModel(): ThinkModel {
     return scriptedModel(childRule);
   }
@@ -179,35 +179,35 @@ export class TestGenericGeneral extends GenericGeneral {
 }
 
 /** generic's host, pointed at the scripted pipeline. */
-export class TestGenericTasks extends GenericTasks {
-  protected override readonly workflowBinding = "TEST_GENERIC_TASK";
-  protected override readonly hostBinding = "TEST_GENERIC_TASKS";
+export class TestGenericHost extends GenericHost {
+  protected override readonly workflowBinding = "TEST_GENERIC_WORKFLOW";
+  protected override readonly hostBinding = "TEST_GENERIC_HOST";
 }
 
 /** generic's pipeline, on the scripted agent. It declares `run()`, as every pipeline must. */
-export class TestGenericTask extends GenericTask {
-  protected override readonly generic = "TEST_GENERIC";
+export class TestGenericWorkflow extends GenericWorkflow {
+  protected override readonly generic = "TEST_GENERIC_AGENT";
   override run(event: WorkflowEvent<TaskParams>, step: WorkflowStep) {
     return super.run(event, step);
   }
 }
 
-export class TestGeneric extends Generic {
+export class TestGenericAgent extends GenericAgent {
   override getModel(): ThinkModel {
     return scriptedModel(parentRule("general"));
   }
   override getSubAgents(): SubAgentClass[] {
-    return [TestGenericGeneral];
+    return [TestGenericChild];
   }
   override getTools(): ToolSet {
     return { ...super.getTools(), test_wait: sleepTool("parent") };
   }
 }
 
-// --- cf-coder -----------------------------------------------------------------
+// --- coding -----------------------------------------------------------------
 
-export class TestCfCoderCode extends CfCoderCode {
-  static override spec = CfCoderCode.spec;
+export class TestCodingChild extends CodingChild {
+  static override spec = CodingChild.spec;
   override getModel(): ThinkModel {
     return scriptedModel(childRule);
   }
@@ -216,33 +216,33 @@ export class TestCfCoderCode extends CfCoderCode {
   }
 }
 
-/** cf-coder's host, pointed at the scripted pipeline. */
-export class TestCfCoderTasks extends CfCoderTasks {
-  protected override readonly workflowBinding = "TEST_CF_CODER_TASK";
-  protected override readonly hostBinding = "TEST_CF_CODER_TASKS";
+/** `coding`'s host, pointed at the scripted pipeline. */
+export class TestCodingHost extends CodingHost {
+  protected override readonly workflowBinding = "TEST_CODING_WORKFLOW";
+  protected override readonly hostBinding = "TEST_CODING_HOST";
 }
 
-/** cf-coder's pipeline, on the scripted agent. */
-export class TestCfCoderTask extends CfCoderTask {
-  protected override readonly coder = "TEST_CF_CODER";
+/** `coding`'s pipeline, on the scripted agent. */
+export class TestCodingWorkflow extends CodingWorkflow {
+  protected override readonly coder = "TEST_CODING_AGENT";
   override run(event: WorkflowEvent<TaskParams>, step: WorkflowStep) {
     return super.run(event, step);
   }
 }
 
-export class TestCfCoder extends CfCoder {
+export class TestCodingAgent extends CodingAgent {
   override getModel(): ThinkModel {
     return scriptedModel(parentRule("code"));
   }
   override getSubAgents(): SubAgentClass[] {
-    return [TestCfCoderCode];
+    return [TestCodingChild];
   }
   override getTools(): ToolSet {
     return { ...super.getTools(), test_wait: sleepTool("parent") };
   }
 }
 
-// --- claude-coder -------------------------------------------------------------
+// --- anthropic-coding -------------------------------------------------------------
 
 /**
  * The writer's spec with a workspace nobody has to clone: the real `prepare`
@@ -250,14 +250,14 @@ export class TestCfCoder extends CfCoder {
  * is the real one, and finds no worktree to release.
  */
 const SESSION_SPEC = {
-  ...ClaudeCoderSession.spec,
+  ...AnthropicCodingWriterChild.spec,
   prepare: async () => ({
     workspaceName: "test-workspace",
     dir: "/workspace/t"
   })
 } as SubAgentSpec<never, never>;
 
-export class TestClaudeCoderSession extends ClaudeCoderSession {
+export class TestAnthropicCodingWriterChild extends AnthropicCodingWriterChild {
   static override spec = SESSION_SPEC;
   override getModel(): ThinkModel {
     return scriptedModel(childRule);
@@ -269,7 +269,7 @@ export class TestClaudeCoderSession extends ClaudeCoderSession {
 
 /** The reader's spec, with the same stand-in workspace as the writer's. */
 const READER_SPEC = {
-  ...ClaudeCoderReader.spec,
+  ...AnthropicCodingReaderChild.spec,
   prepare: async () => ({
     workspaceName: "test-workspace",
     dir: "/workspace/t"
@@ -277,7 +277,7 @@ const READER_SPEC = {
   settle: async () => {}
 } as SubAgentSpec<never, never>;
 
-export class TestClaudeCoderReader extends ClaudeCoderReader {
+export class TestAnthropicCodingReaderChild extends AnthropicCodingReaderChild {
   static override spec = READER_SPEC;
   override getModel(): ThinkModel {
     return scriptedModel(childRule);
@@ -288,30 +288,30 @@ export class TestClaudeCoderReader extends ClaudeCoderReader {
 }
 
 /**
- * What a job's first message scripts, less what ClaudeCoder adds and the
+ * What a job's first message scripts, less what AnthropicCodingAgent adds and the
  * pipeline frames: where a retry's work is, and the role's brief, in front;
  * and for the code step, the approved plan is the script.
  */
-function claudeCoderScript(text: string): string {
+function anthropicCodingScript(text: string): string {
   const script = unbrief(text, [RETRY_WORK, ...Object.values(ROLE_BRIEFS)]);
   const plan =
     /^The approved plan:\n\n([\s\S]*?)\n\nThe original request:/.exec(script);
   return plan ? plan[1]! : script;
 }
 
-export class TestClaudeCoder extends ClaudeCoder {
+export class TestAnthropicCodingAgent extends AnthropicCodingAgent {
   override getModel(): ThinkModel {
     return scriptedModel((view) =>
       parentRule(
         this.turnStepJob()?.role === "plan"
           ? "claude_code_read"
           : "claude_code",
-        claudeCoderScript
+        anthropicCodingScript
       )(view)
     );
   }
   override getSubAgents(): SubAgentClass[] {
-    return [TestClaudeCoderSession, TestClaudeCoderReader];
+    return [TestAnthropicCodingWriterChild, TestAnthropicCodingReaderChild];
   }
   override getTools(): ToolSet {
     return { ...super.getTools(), test_wait: sleepTool("parent") };
@@ -338,15 +338,16 @@ export class TestClaudeCoder extends ClaudeCoder {
   }
 }
 
-/** claude-coder's host, pointed at the scripted pipeline. */
-export class TestClaudeCoderTasks extends ClaudeCoderTasks {
-  protected override readonly workflowBinding = "TEST_CLAUDE_CODER_TASK";
-  protected override readonly hostBinding = "TEST_CLAUDE_CODER_TASKS";
+/** `anthropic-coding`'s host, pointed at the scripted pipeline. */
+export class TestAnthropicCodingHost extends AnthropicCodingHost {
+  protected override readonly workflowBinding =
+    "TEST_ANTHROPIC_CODING_WORKFLOW";
+  protected override readonly hostBinding = "TEST_ANTHROPIC_CODING_HOST";
 }
 
-/** claude-coder's pipeline, on the scripted agent. */
-export class TestClaudeCoderTask extends ClaudeCoderTask {
-  protected override readonly coder = "TEST_CLAUDE_CODER";
+/** `anthropic-coding`'s pipeline, on the scripted agent. */
+export class TestAnthropicCodingWorkflow extends AnthropicCodingWorkflow {
+  protected override readonly coder = "TEST_ANTHROPIC_CODING_AGENT";
   override run(event: WorkflowEvent<TaskParams>, step: WorkflowStep) {
     return super.run(event, step);
   }
@@ -360,17 +361,17 @@ const a2a = createA2AWorker<TestEnv>({
     defineAgent({
       tenant: "generic",
       manifest: genericManifest,
-      agent: (env: TestEnv) => env.TEST_GENERIC_TASKS
+      agent: (env: TestEnv) => env.TEST_GENERIC_HOST
     }),
     defineAgent({
-      tenant: "cf-coder",
-      manifest: cfCoderManifest,
-      agent: (env: TestEnv) => env.TEST_CF_CODER_TASKS
+      tenant: "coding",
+      manifest: codingManifest,
+      agent: (env: TestEnv) => env.TEST_CODING_HOST
     }),
     defineAgent({
-      tenant: "claude-coder",
-      manifest: claudeCoderManifest,
-      agent: (env: TestEnv) => env.TEST_CLAUDE_CODER_TASKS
+      tenant: "anthropic-coding",
+      manifest: anthropicCodingManifest,
+      agent: (env: TestEnv) => env.TEST_ANTHROPIC_CODING_HOST
     })
   ]
 });

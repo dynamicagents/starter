@@ -17,10 +17,10 @@ import { gitIdentity } from "@/workspace/git-identity";
 import { claudeCodeConfig, CREDENTIALS_KEY } from "./claude-code";
 
 /**
- * The claude-coder's workspace, bound as `CLAUDE_CODER_WORKSPACE`.
+ * `anthropic-coding`'s workspace, bound as `ANTHROPIC_CODING_WORKSPACE`.
  *
  * Everything a workspace does is in `@dynamicagents/plugins/workspace`,
- * shared with cf-coder. Two things are this agent's own, and both exist so that the container
+ * shared with `coding`. Two things are this agent's own, and both exist so that the container
  * never holds an Anthropic credential — see `./claude-code.ts`:
  *
  * 1. `egress: { mode: "http-gateway" }`, so every outbound request from the
@@ -39,7 +39,7 @@ import { claudeCodeConfig, CREDENTIALS_KEY } from "./claude-code";
  * full reasoning — including why it cannot live in the image's entrypoint, where
  * Cloudflare's own recipe puts it. Changing this mode means reading it.
  */
-export class ClaudeCoderWorkspaceDO extends WorkspaceObjectBase {
+export class AnthropicCodingWorkspace extends WorkspaceObjectBase {
   /**
    * The credential pool's `{ index → resetAt }` map.
    *
@@ -67,8 +67,8 @@ export class ClaudeCoderWorkspaceDO extends WorkspaceObjectBase {
 
   protected workspaceConfig(): WorkspaceObjectConfig {
     return {
-      binding: "CLAUDE_CODER_WORKSPACE",
-      label: "claude-coder-workspace",
+      binding: "ANTHROPIC_CODING_WORKSPACE",
+      label: "anthropic-coding-workspace",
       installPlan: INSTALL_PLAN,
       // Above the whole session.
       //
@@ -88,7 +88,7 @@ export class ClaudeCoderWorkspaceDO extends WorkspaceObjectBase {
         mode: "http-gateway",
         gateway: this.#session.egress(this.#credentials)
       },
-      // See cf-coder's workspace for why the binding is named, not read.
+      // See `coding`'s workspace for why the binding is named, not read.
       git: { tokenBinding: "GITHUB_TOKEN", author: gitIdentity(this.env) }
     };
   }
@@ -141,7 +141,7 @@ export class ClaudeCoderWorkspaceDO extends WorkspaceObjectBase {
     if (!lead.ok) return;
     await pool.spend(lead.id, resetAt);
     console.warn(
-      "[claude-coder-workspace] retiring a credential on the " +
+      "[anthropic-coding-workspace] retiring a credential on the " +
         "client's own bucket reading",
       {
         id: lead.id,

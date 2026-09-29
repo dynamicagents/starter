@@ -2,10 +2,10 @@ import type { ThinkModel } from "@cloudflare/think";
 import type { AgentPlugin, SubAgentSpec } from "@dynamicagents/core";
 import { SubAgent } from "@dynamicagents/core/subagent";
 import { computerWorkspace } from "@dynamicagents/plugins/computer";
-import { CF_CODER } from "@/config";
+import { CODING } from "@/config";
 import { agentModel, turnTask } from "@/model";
 import { CODE } from "./code";
-import { cfCoder } from "./definition";
+import { coding } from "./definition";
 import { childPlugins, container } from "./plugins";
 
 /**
@@ -16,12 +16,12 @@ import { childPlugins, container } from "./plugins";
  * a wiring fault, so the fallback refuses rather than naming a workspace nobody
  * chose.
  */
-export class CfCoderCode extends SubAgent<Env> {
+export class CodingChild extends SubAgent<Env> {
   static override spec = CODE as SubAgentSpec<never, never>;
 
   readonly #container = container(this.env, () => {
     throw new Error(
-      "cf-coder: this run carries no workspace name; the `code` spec's prepare supplies one"
+      "coding: this run carries no workspace name; the `code` spec's prepare supplies one"
     );
   });
 
@@ -32,12 +32,12 @@ export class CfCoderCode extends SubAgent<Env> {
   override getModel(): ThinkModel {
     return agentModel(
       this.env,
-      { modelId: CF_CODER.modelId, name: this.name },
+      { modelId: CODING.modelId, name: this.name },
       {
-        agent: cfCoder.tenant,
+        agent: coding.tenant,
         taskId: turnTask(this.activeTurnMetadata),
         phase: "subagent",
-        subAgent: "CfCoderCode"
+        subAgent: "CodingChild"
       }
     );
   }

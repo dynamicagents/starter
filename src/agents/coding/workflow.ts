@@ -7,12 +7,12 @@ import {
 } from "@dynamicagents/core/workflow";
 
 /**
- * cf-coder's pipeline: one step, the whole task, on the caller's own
- * `CfCoder`. A step before it or after it — triage, a judge — goes here.
+ * `coding`'s pipeline: one step, the whole task, on the caller's own
+ * `CodingAgent`. A step before it or after it — triage, a judge — goes here.
  */
-export class CfCoderTask extends TaskWorkflow<Env> {
+export class CodingWorkflow extends TaskWorkflow<Env> {
   /** The step agent's binding. A test worker points it at a scripted one. */
-  protected readonly coder: string = "CfCoder";
+  protected readonly coder: string = "CodingAgent";
 
   override run(event: WorkflowEvent<TaskParams>, step: WorkflowStep) {
     return super.run(event, step);

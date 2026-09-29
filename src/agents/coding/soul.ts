@@ -1,7 +1,7 @@
 import { ASK_GUIDANCE, BACKGROUND_GUIDANCE, WAIT_GUIDANCE } from "@/copy";
 
 /**
- * The cf-coder agent's soul — its identity and operating rules.
+ * The coding agent's soul — its identity and operating rules.
  *
  * Deliberately shorter and less prescriptive than the other agents' souls: it
  * states the goal, the boundaries, and the bar for "done", and leaves the method

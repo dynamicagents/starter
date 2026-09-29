@@ -8,5 +8,5 @@ import { manifest } from "./manifest";
 export const generic = defineAgent({
   tenant: "generic",
   manifest,
-  agent: (env: Env) => env.GenericTasks
+  agent: (env: Env) => env.GenericHost
 });

@@ -100,10 +100,10 @@ export function parseWorktreeRepo(
 export function runBranch(ctx: { taskId: string; runId: string }): string {
   const call = ctx.runId.replace(/^[a-z-]+:/, "");
   if (/^[A-Za-z0-9_-]+$/.test(call) && !call.startsWith("-")) {
-    return `claude-coder/${ctx.taskId}/${call}`;
+    return `anthropic-coding/${ctx.taskId}/${call}`;
   }
   const slug = call.replace(/[^A-Za-z0-9_-]+/g, "-").replace(/^-+|-+$/g, "");
-  return `claude-coder/${ctx.taskId}/${slug ? `${slug}-` : ""}${fnv1a(ctx.runId)}`;
+  return `anthropic-coding/${ctx.taskId}/${slug ? `${slug}-` : ""}${fnv1a(ctx.runId)}`;
 }
 
 /** FNV-1a, 32-bit, as hex: stable and synchronous, for telling ids apart. */
@@ -184,7 +184,7 @@ export function claim(
       : rows.find((row) => row.branch === ctx.continue);
   if (holder?.live) {
     throw new Error(
-      `claude-coder: ${ctx.continue} is being worked on by another session ` +
+      `anthropic-coding: ${ctx.continue} is being worked on by another session ` +
         "right now. Wait for its report, then continue the branch."
     );
   }

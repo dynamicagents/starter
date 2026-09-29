@@ -14,7 +14,7 @@ import type { AgentManifest } from "@dynamicagents/core/a2a";
  * independent.
  */
 export const manifest: AgentManifest = {
-  name: "Claude Coder Agent",
+  name: "Anthropic Coding Agent",
   description:
     "A senior software engineer for substantial changes. Give it a repository and a change to make; it researches the repository and replies with a plan to approve, comment on or reject. Once approved, it delegates the implementation to long-running coding sessions that each work in an isolated checkout, reviews the branches they push, runs the project's own tests and opens a pull request, and replies with its URL. At its best on work too large to specify step by step, and can carry several independent strands in parallel. Never commits to a default branch.",
   version: "0.1.0",

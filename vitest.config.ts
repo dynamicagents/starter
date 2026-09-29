@@ -48,7 +48,7 @@ process.env.GITHUB_TOKEN ??= "test-token";
 // real deploy takes when an operator leaves them unset.
 process.env.GITHUB_NAME ??= "";
 process.env.GITHUB_EMAIL ??= "";
-// claude-coder's credential pool. Never real, and nothing in the suite reaches
+// `anthropic-coding`'s credential pool. Never real, and nothing in the suite reaches
 // Anthropic — the egress gateway is tested against a stubbed `fetch` in
 // `@dynamicagents/plugins`, and no spec here starts a session. One line per
 // entry in `wrangler.jsonc`'s `secrets.required`, since that list is what the
@@ -106,58 +106,64 @@ export default defineConfig({
         // `runAgentTool` cannot create a child. See "Notes for testing" in
         // node_modules/agents/docs/sub-agents.md.
         durableObjects: {
-          TEST_GENERIC: { className: "TestGeneric", useSQLite: true },
-          TEST_CF_CODER: { className: "TestCfCoder", useSQLite: true },
-          TEST_CLAUDE_CODER: { className: "TestClaudeCoder", useSQLite: true },
-          TEST_GENERIC_TASKS: {
-            className: "TestGenericTasks",
+          TEST_GENERIC_AGENT: {
+            className: "TestGenericAgent",
             useSQLite: true
           },
-          TEST_CF_CODER_TASKS: {
-            className: "TestCfCoderTasks",
+          TEST_CODING_AGENT: { className: "TestCodingAgent", useSQLite: true },
+          TEST_ANTHROPIC_CODING_AGENT: {
+            className: "TestAnthropicCodingAgent",
             useSQLite: true
           },
-          TEST_CLAUDE_CODER_TASKS: {
-            className: "TestClaudeCoderTasks",
+          TEST_GENERIC_HOST: {
+            className: "TestGenericHost",
             useSQLite: true
           },
-          GENERIC_GENERAL: { className: "GenericGeneral", useSQLite: true },
-          CF_CODER_CODE: { className: "CfCoderCode", useSQLite: true },
-          CLAUDE_CODER_SESSION: {
-            className: "ClaudeCoderSession",
+          TEST_CODING_HOST: {
+            className: "TestCodingHost",
             useSQLite: true
           },
-          CLAUDE_CODER_READER: {
-            className: "ClaudeCoderReader",
+          TEST_ANTHROPIC_CODING_HOST: {
+            className: "TestAnthropicCodingHost",
             useSQLite: true
           },
-          TEST_GENERIC_GENERAL: {
-            className: "TestGenericGeneral",
+          GENERIC_GENERAL: { className: "GenericChild", useSQLite: true },
+          CODING_CHILD: { className: "CodingChild", useSQLite: true },
+          ANTHROPIC_CODING_WRITER_CHILD: {
+            className: "AnthropicCodingWriterChild",
             useSQLite: true
           },
-          TEST_CF_CODER_CODE: { className: "TestCfCoderCode", useSQLite: true },
-          TEST_CLAUDE_CODER_SESSION: {
-            className: "TestClaudeCoderSession",
+          ANTHROPIC_CODING_READER_CHILD: {
+            className: "AnthropicCodingReaderChild",
             useSQLite: true
           },
-          TEST_CLAUDE_CODER_READER: {
-            className: "TestClaudeCoderReader",
+          TEST_GENERIC_CHILD: {
+            className: "TestGenericChild",
+            useSQLite: true
+          },
+          TEST_CODING_CHILD: { className: "TestCodingChild", useSQLite: true },
+          TEST_ANTHROPIC_CODING_WRITER_CHILD: {
+            className: "TestAnthropicCodingWriterChild",
+            useSQLite: true
+          },
+          TEST_ANTHROPIC_CODING_READER_CHILD: {
+            className: "TestAnthropicCodingReaderChild",
             useSQLite: true
           }
         },
         // The scripted pipelines, beside the real ones `wrangler.jsonc` binds.
         workflows: {
-          TEST_GENERIC_TASK: {
-            name: "test-generic-task",
-            className: "TestGenericTask"
+          TEST_GENERIC_WORKFLOW: {
+            name: "test-generic-workflow",
+            className: "TestGenericWorkflow"
           },
-          TEST_CF_CODER_TASK: {
-            name: "test-cf-coder-task",
-            className: "TestCfCoderTask"
+          TEST_CODING_WORKFLOW: {
+            name: "test-coding-workflow",
+            className: "TestCodingWorkflow"
           },
-          TEST_CLAUDE_CODER_TASK: {
-            name: "test-claude-coder-task",
-            className: "TestClaudeCoderTask"
+          TEST_ANTHROPIC_CODING_WORKFLOW: {
+            name: "test-anthropic-coding-workflow",
+            className: "TestAnthropicCodingWorkflow"
           }
         }
       }

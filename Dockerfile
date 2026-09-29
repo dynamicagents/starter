@@ -1,6 +1,6 @@
 # The workspace container, for every agent in this Worker that has one.
 #
-# **One Dockerfile, two images.** `cf-coder` and `claude-coder` both point a
+# **One Dockerfile, two images.** `coding` and `anthropic-coding` both point a
 # `containers[]` entry here; the second passes a `CLAUDE_CODE_VERSION` build arg
 # (see the block near the end) and gets the CLI, the first does not and stays
 # smaller. Cloudflare builds once per entry, so two entries naming this file are
@@ -135,8 +135,8 @@ RUN if command -v corepack > /dev/null; then \
 # --- Claude Code, for the agent whose sub-agents run it ---------------------
 #
 # `image_vars` in wrangler.jsonc is a Docker build arg, so which image gets the
-# CLI is decided per `containers[]` entry rather than per file. The `cf-coder`
-# entry passes nothing and this is a no-op; the `claude-coder` entry passes a
+# CLI is decided per `containers[]` entry rather than per file. The `coding`
+# entry passes nothing and this is a no-op; the `anthropic-coding` entry passes a
 # version.
 #
 # A build arg rather than a second Dockerfile, because everything above encodes
@@ -167,7 +167,7 @@ RUN if [ -n "$CLAUDE_CODE_VERSION" ]; then \
 # --- The GitHub CLI, for reading a public repository ------------------------
 #
 # Behind its own build arg for the reason Claude Code is: `image_vars` in
-# wrangler.jsonc decides per `containers[]` entry, so the `cf-coder` image passes
+# wrangler.jsonc decides per `containers[]` entry, so the `coding` image passes
 # nothing and stays smaller.
 #
 # **It is unauthenticated, and that is the whole design.** The container holds no
@@ -179,10 +179,10 @@ RUN if [ -n "$CLAUDE_CODE_VERSION" ]; then \
 #
 # The catch: `gh` refuses to run at all without a token, even against a public
 # repository — it exits asking for `gh auth login` before it makes a request. So
-# the claude-coder sessions are launched with a placeholder GH_TOKEN, and the
+# the anthropic-coding sessions are launched with a placeholder GH_TOKEN, and the
 # egress gateway deletes the header on the way out: the same swap the Anthropic
 # credential rides on, inverted. The placeholder lives in the session env, not in
-# this image, because it is only harmless behind that gateway — the `claude-coder`
+# this image, because it is only harmless behind that gateway — the `anthropic-coding`
 # agent's `claude-code.ts` carries why.
 #
 # What that buys, and what it does not:

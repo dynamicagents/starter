@@ -27,10 +27,10 @@ import worker, { type TestEnv } from "./worker";
 
 const testEnv = env as unknown as TestEnv;
 
-/** claude-coder's tasks are a pipeline: `./claude-coder-pipeline.spec.ts`. */
+/** `anthropic-coding`'s tasks are a pipeline: `./anthropic-coding-pipeline.spec.ts`. */
 const TENANTS = [
   { tenant: "generic", background: false },
-  { tenant: "cf-coder", background: true }
+  { tenant: "coding", background: true }
 ] as const;
 
 function harnessFor(tenant: string, label: string): AgentHarness {

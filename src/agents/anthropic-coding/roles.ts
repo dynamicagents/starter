@@ -1,8 +1,8 @@
 import { WORKSPACE_WRITERS } from "@/workspace/container";
 
 /**
- * What ClaudeCoder is asked to be for one job of its task's pipeline — see
- * `./task.ts`. A job with no role is a whole task, as a one-step pipeline sends.
+ * What AnthropicCodingAgent is asked to be for one job of its task's pipeline — see
+ * `./workflow.ts`. A job with no role is a whole task, as a one-step pipeline sends.
  */
 export type Role = "plan" | "code";
 

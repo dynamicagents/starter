@@ -30,7 +30,7 @@ const GENERAL: SubAgentSpec<{ task: string }> = {
   formatInput: (input) => input.task
 };
 
-export class GenericGeneral extends SubAgent<Env> {
+export class GenericChild extends SubAgent<Env> {
   static override spec = GENERAL as SubAgentSpec<never, never>;
 
   override getModel(): ThinkModel {
@@ -41,7 +41,7 @@ export class GenericGeneral extends SubAgent<Env> {
         agent: generic.tenant,
         taskId: turnTask(this.activeTurnMetadata),
         phase: "subagent",
-        subAgent: "GenericGeneral"
+        subAgent: "GenericChild"
       }
     );
   }

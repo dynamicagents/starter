@@ -17,7 +17,7 @@ import type { AgentManifest } from "@dynamicagents/core/a2a";
  * **The description must therefore name every mounted tenant.** It is the only
  * place this card says what is here, so a tenant missing from it is a tenant an
  * operator reading the deploy has no way to discover — which is what happened to
- * `claude-coder` when it was added to `src/index.ts` and not to this string.
+ * `anthropic-coding` when it was added to `src/index.ts` and not to this string.
  *
  * `skills` is empty for the same reason: the skills belong to the tenants, and
  * a client that picked one from here would have no way to act on it.
@@ -28,8 +28,8 @@ export const hostManifest: AgentManifest = {
     "Hosts several Dynamic Agents behind one A2A endpoint. This card describes " +
     "the deployment rather than any one agent — call GetExtendedAgentCard with " +
     "a tenant id to fetch an agent's own card. Tenants: `generic` (a " +
-    "delegating assistant), `cf-coder` (implements changes in a git repository and opens " +
-    "pull requests), `claude-coder` (the same, for larger changes, working " +
+    "delegating assistant), `coding` (implements changes in a git repository and opens " +
+    "pull requests), `anthropic-coding` (the same, for larger changes, working " +
     "several independent strands at once).",
   version: "0.1.0",
   // `extensions` is a required (repeated) protobuf field in v1.0 — we declare no

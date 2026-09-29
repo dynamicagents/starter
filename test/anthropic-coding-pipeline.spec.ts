@@ -12,14 +12,14 @@ import {
   type CapturedCallback
 } from "@dynamicagents/core/testing";
 import type { StepJob, TaskResult } from "@dynamicagents/core/workflow";
-import { activeToolsFor, PLAN_TOOLS } from "@/agents/claude-coder/roles";
+import { activeToolsFor, PLAN_TOOLS } from "@/agents/anthropic-coding/roles";
 import { copy, PIPELINE_COPY, RETRY_BRIEF } from "@/copy";
 import worker, { type TestEnv } from "./worker";
 
 /**
- * claude-coder's pipeline — plan, approve, code — through the real host and
+ * `anthropic-coding`'s pipeline — plan, approve, code — through the real host and
  * workflow, on the scripted agent. The plan and the code steps are jobs on the
- * caller's ClaudeCoder; the approval is the pipeline's own question.
+ * caller's AnthropicCodingAgent; the approval is the pipeline's own question.
  *
  * The scripted agent reads the task's text as its plan step's script, and the
  * approved plan as its code step's: `echo:delegate:sleep:1` plans
@@ -29,15 +29,15 @@ import worker, { type TestEnv } from "./worker";
 const testEnv = env as unknown as TestEnv;
 
 function setup(label: string) {
-  const key = `claude-coder-pipeline:${label}:${crypto.randomUUID()}`;
+  const key = `anthropic-coding-pipeline:${label}:${crypto.randomUUID()}`;
   const harness = createAgentHarness({
     worker,
     env: testEnv,
-    tenant: "claude-coder",
+    tenant: "anthropic-coding",
     identity: { key, name: "Spec Caller", kind: "custom", workspaceId: 1 }
   });
-  const coder = testEnv.TEST_CLAUDE_CODER.get(
-    testEnv.TEST_CLAUDE_CODER.idFromName(key)
+  const coder = testEnv.TEST_ANTHROPIC_CODING_AGENT.get(
+    testEnv.TEST_ANTHROPIC_CODING_AGENT.idFromName(key)
   );
   const turns = async () =>
     JSON.parse(await coder.debugTurns()) as {
@@ -100,7 +100,7 @@ async function question(
 }
 
 async function status(taskId: string) {
-  return (await testEnv.TEST_CLAUDE_CODER_TASK.get(taskId)).status();
+  return (await testEnv.TEST_ANTHROPIC_CODING_WORKFLOW.get(taskId)).status();
 }
 
 async function cancel(harness: AgentHarness, taskId: string) {
@@ -108,7 +108,7 @@ async function cancel(harness: AgentHarness, taskId: string) {
     jsonrpc: "2.0",
     id: 2,
     method: "CancelTask",
-    params: { tenant: "claude-coder", id: taskId }
+    params: { tenant: "anthropic-coding", id: taskId }
   });
   const body = await res.json<{ error?: { message: string } }>();
   if (body.error) throw new Error(body.error.message);
@@ -120,7 +120,7 @@ describe("plan → approve → code", () => {
     using _ = harness.interceptGatekeeper();
     const task = await harness.send("echo:delegate:sleep:1");
     await using instance = await introspectWorkflowInstance(
-      testEnv.TEST_CLAUDE_CODER_TASK,
+      testEnv.TEST_ANTHROPIC_CODING_WORKFLOW,
       task.id
     );
 
@@ -173,7 +173,7 @@ describe("plan → approve → code", () => {
     using _ = harness.interceptGatekeeper();
     const task = await harness.send("echo:the findings");
     await using instance = await introspectWorkflowInstance(
-      testEnv.TEST_CLAUDE_CODER_TASK,
+      testEnv.TEST_ANTHROPIC_CODING_WORKFLOW,
       task.id
     );
     const plan = await question(harness, task.id);
@@ -207,7 +207,7 @@ describe("plan → approve → code", () => {
     using _ = harness.interceptGatekeeper();
     const task = await harness.send("echo:flaky");
     await using instance = await introspectWorkflowInstance(
-      testEnv.TEST_CLAUDE_CODER_TASK,
+      testEnv.TEST_ANTHROPIC_CODING_WORKFLOW,
       task.id
     );
     const plan = await question(harness, task.id);
@@ -243,13 +243,15 @@ describe("plan → approve → code", () => {
 
 describe("the plan reads and writes nothing", () => {
   /**
-   * The real ClaudeCoder's tools, less a plan's: exact, like cf-coder's surface
+   * The real AnthropicCodingAgent's tools, less a plan's: exact, like `coding`'s surface
    * spec, so a writer that appears later fails here rather than in a plan.
    */
   it("keeps only reading tools, and the reading session", async () => {
     const names = await runInDurableObject(
-      testEnv.ClaudeCoder.get(
-        testEnv.ClaudeCoder.idFromName(`surface:${crypto.randomUUID()}`)
+      testEnv.AnthropicCodingAgent.get(
+        testEnv.AnthropicCodingAgent.idFromName(
+          `surface:${crypto.randomUUID()}`
+        )
       ),
       (instance) => {
         const think = [
@@ -294,8 +296,8 @@ describe("the plan reads and writes nothing", () => {
 
   it("briefs a plan's retry without a writing session's work", async () => {
     const briefs = await runInDurableObject(
-      testEnv.ClaudeCoder.get(
-        testEnv.ClaudeCoder.idFromName(`retry:${crypto.randomUUID()}`)
+      testEnv.AnthropicCodingAgent.get(
+        testEnv.AnthropicCodingAgent.idFromName(`retry:${crypto.randomUUID()}`)
       ),
       (instance) => {
         const format = (role: string) =>

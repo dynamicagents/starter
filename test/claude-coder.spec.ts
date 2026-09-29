@@ -499,12 +499,13 @@ describe("the warning round", () => {
     expect(prompt).toMatch(/Commit what should be kept/);
   });
 
-  it("calls a lone checkout the repository, and bounds a long list", () => {
+  it("calls a lone checkout the repository, and names every file", () => {
     const files = Array.from({ length: 15 }, (_, i) => `f${i}`);
     const prompt = warningPrompt([{ path: ".", files }]);
 
     expect(prompt).toContain("- the repository: `f0`");
-    expect(prompt).toContain("and 3 more");
+    expect(prompt).toContain("`f14`");
+    expect(prompt).not.toContain("more");
   });
 });
 

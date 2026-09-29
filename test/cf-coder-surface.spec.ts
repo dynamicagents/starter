@@ -186,13 +186,10 @@ describe("the container config", () => {
     expect(config.shell).toBe("bash");
     expect(config.cwd).toBe("/workspace");
     expect(config.workspaceName()).toBe("caller|owner/repo");
-    // The gate and the command share one tool call, which has to end inside
-    // the turn it runs in: see COMMAND_TIMEOUT_MS in src/workspace/container.ts.
     expect(config.installGateMs).toBeGreaterThan(0);
-    expect(config.timeoutMs).toBeGreaterThan(0);
-    expect(
-      (config.installGateMs ?? Infinity) + (config.timeoutMs ?? Infinity)
-    ).toBeLessThan(15 * 60_000);
+    // The plugin's command timeout, which its container-idle window is sized
+    // against.
+    expect(config.timeoutMs).toBeUndefined();
   });
 
   it("is the same shape whichever name it is given", () => {

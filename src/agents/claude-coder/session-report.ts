@@ -154,13 +154,9 @@ Dependencies are installed at the top of the checkout only. Run \`npm ci\` in a
 submodule before building or testing it.`;
 }
 
-/** A list of files a model can read at a glance, bounded. */
-function listFiles(files: readonly string[], max = 12): string {
-  const shown = files
-    .slice(0, max)
-    .map((file) => `\`${file}\``)
-    .join(", ");
-  return files.length > max ? `${shown} and ${files.length - max} more` : shown;
+/** Every file, since a deleted one's name is kept nowhere else. */
+function listFiles(files: readonly string[]): string {
+  return files.map((file) => `\`${file}\``).join(", ");
 }
 
 /** A repository by the name a reader knows it by. */

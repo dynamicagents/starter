@@ -145,13 +145,12 @@ RUN if command -v corepack > /dev/null; then \
 # silently, in whichever direction the image nobody redeployed recently went.
 #
 # **The pin is load-bearing, not tidiness.** The egress gateway rewrites this
-# client's requests and `events.ts` parses its stream, and both are written
-# against a wire shape captured from **2.1.238**: an `authorization: Bearer`
-# with no `x-api-key`, a specific `anthropic-beta` list carrying
-# `claude-code-20250219` and `oauth-2025-04-20`, and an unauthenticated
-# `HEAD /api/hello` preflight. A version bump can move any of that, so it is a
-# deliberate act that needs the smoke test re-run — see `src/claude-code/README.md`
-# in `@dynamicagents/plugins`. Do not bump this to pick up a newer CLI without it.
+# client's requests and its stream parser reads what it prints, and both are
+# written against one version's traffic — `VERIFIED_CLAUDE_CODE_VERSION` in
+# `@dynamicagents/plugins/claude-code`. The version passed here is that one, and
+# `npm run check` fails when they differ. A newer CLI is verified in plugins
+# first, by its probe; its claude-code README's "Updating Claude Code" is the
+# procedure.
 #
 # `--no-fund --no-audit` for the same reason as the ENV block below: a build log
 # nobody reads is still a build log somebody has to scroll.

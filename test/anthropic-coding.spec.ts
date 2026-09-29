@@ -362,7 +362,7 @@ describe("a plan", () => {
     const id = await requireArtifactsStub(env).createArtifact("plan");
     const report = await reportPlan(
       env,
-      { id, isNew: true, origin: "https://agents.example" },
+      { id, isNew: true },
       "run-1",
       outcome(ANSWER) as never
     );
@@ -370,7 +370,7 @@ describe("a plan", () => {
     expect(report).toContain(`\`${id}\``);
     expect(report).toContain(ANSWER.title);
     expect(report).toContain(ANSWER.lastReply);
-    expect(report).toContain(`https://agents.example/a/${id}`);
+    expect(report).not.toContain(`/a/${id}`);
     expect(report).not.toContain(ANSWER.plan);
     expect(
       (await requireArtifactsStub(env).readArtifact(id))?.entries

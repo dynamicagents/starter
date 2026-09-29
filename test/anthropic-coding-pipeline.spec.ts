@@ -177,7 +177,11 @@ describe("a plan", () => {
     const task = await harness.send(`approve:${id}`);
     const asked = await question(harness, task.id);
     expect(asked.requestKind).toBe("approval");
-    expect(asked.prompt).toContain(`/a/${id}`);
+    expect(asked.artifact).toEqual({
+      id,
+      url: expect.stringMatching(new RegExp(`/a/${id}$`))
+    });
+    expect(asked.prompt).toContain(asked.artifact!.url);
     await harness.answer(task.id, asked.requestId, { optionId: "approve" });
 
     expect((await harness.waitForTerminal(task.id)).text).toBe("Approved.");
@@ -197,7 +201,9 @@ describe("a plan", () => {
 
     const task = await harness.send(`approve:${id}`);
     const done = await harness.waitForTerminal(task.id);
-    expect(done.text).toContain("Nothing was asked");
+    expect(done.text).toMatch(
+      /Not an artifact you can ask the person to approve/
+    );
     expect(
       harness.callbacks.some(
         (c) => c.taskId === task.id && c.state === "TASK_STATE_INPUT_REQUIRED"

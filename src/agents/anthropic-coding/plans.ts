@@ -1,6 +1,5 @@
 import {
   ARTIFACT_RETENTION_MS,
-  artifactViewerUrl,
   requireArtifactsStub,
   type ArtifactEntry
 } from "@dynamicagents/core/artifacts";
@@ -59,10 +58,10 @@ export const WRITE_INPUT = CLAUDE_CODE_WRITE_INPUT.extend({
 export const PLANNER_DESCRIPTION = [
   "Have a Claude Code session work out a plan for a change, in a throwaway copy",
   "of your checkout: it reads the code and can run the tests, and changes",
-  "nothing. The plan is filed on a page of its own that anyone with the link can",
-  "read. What comes back is the plan's id, its title, the session's account of",
-  "it and the link — not the plan itself: a writing session given the id reads",
-  "it whole, and so does the person you ask to approve it.",
+  "nothing. The plan is filed on a page of its own. What comes back is the plan's",
+  "id, its title and the session's account of it — not the plan itself: a",
+  "writing session given the id reads it whole, and so does the person you ask to",
+  "approve it, who gets its link with your question.",
   "",
   "To change a plan, call this again with `plan` set to its id, and say what",
   "to change; the new version goes on the same page. A plan that was approved is",
@@ -210,9 +209,4 @@ export function latestPlan(page: readonly ArtifactEntry[]): string | undefined {
 /** A version of the plan as it is filed: its title over it. */
 export function planText(answer: PlanAnswer): string {
   return `# ${answer.title.trim()}\n\n${answer.plan.trim()}`;
-}
-
-/** The plan's link, on this deployment's origin. */
-export function planLink(origin: string, id: string): string {
-  return artifactViewerUrl(origin, id);
 }

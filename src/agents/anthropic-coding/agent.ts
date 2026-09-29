@@ -128,12 +128,8 @@ export class AnthropicCodingAgent extends StepAgent<Env> {
    * Only a plan this caller's agent opened is put to the caller — a link is
    * shared by design, and approving one locks it. See `./plans.ts`.
    */
-  protected override async approvalArtifact(
-    id: string
-  ): Promise<string | undefined> {
-    return ownsPlan(this.ctx.storage, id)
-      ? super.approvalArtifact(id)
-      : undefined;
+  protected override async mayAskApproval(id: string): Promise<boolean> {
+    return ownsPlan(this.ctx.storage, id) && (await super.mayAskApproval(id));
   }
 
   /** `check_back`, for the wait between opening a pull request and its review. */

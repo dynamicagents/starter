@@ -114,10 +114,12 @@ function parentRule(
         : call("ask_user", { question: ask, options: ["Yes", "No"] });
     }
     // An approval of an artifact; its answer arrives as the next message, and
-    // is echoed as the reply.
+    // is echoed as the reply. A refused one fails the call, and its error is.
     const artifact = after(text, "approve:");
     if (artifact !== undefined) {
-      return call("ask_user", { question: "Approve the plan?", artifact });
+      return view.answered
+        ? { text: lastToolOutput(view) }
+        : call("ask_user", { question: "Approve the plan?", artifact });
     }
     const wait = after(text, "wait:");
     if (wait !== undefined) {

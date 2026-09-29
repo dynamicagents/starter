@@ -37,7 +37,6 @@ import {
   PLAN_LABEL,
   PLAN_OUTPUT,
   PlanAnswer,
-  planLink,
   PLANNER_DESCRIPTION,
   planText,
   WRITE_INPUT,
@@ -281,12 +280,7 @@ export async function preparePlanner(
   }
   const place = await sessionWorkspaces(ctx.parent).reading();
   const id = edits ?? (await createPlan(env, storage));
-  const origin = ctx.parent.selfOrigin();
-  const plan: PlanPlace = {
-    id,
-    isNew: edits === undefined,
-    ...(origin ? { origin } : {})
-  };
+  const plan: PlanPlace = { id, isNew: edits === undefined };
   return { ...runtimeOf(place), [PLAN_KEY]: plan };
 }
 
@@ -310,7 +304,7 @@ export async function settlePlanner(
 
 /**
  * What the parent is told of a planning session, having filed its plan: the
- * plan's id, title and link, and the session's account — see `./plans.ts`.
+ * plan's id and title, and the session's account — see `./plans.ts`.
  * The session answers through `--json-schema`; one that did not files nothing.
  */
 export async function reportPlan(
@@ -340,8 +334,7 @@ export async function reportPlan(
     kind: "filed",
     id: plan.id,
     title: answer.data.title.trim(),
-    lastReply: answer.data.lastReply,
-    ...(plan.origin ? { link: planLink(plan.origin, plan.id) } : {})
+    lastReply: answer.data.lastReply
   });
 }
 
@@ -353,8 +346,6 @@ export interface PlanPlace {
   id: string;
   /** Opened for this run, rather than an edit of one that was there. */
   isNew: boolean;
-  /** This deployment's origin, for the plan's link. */
-  origin?: string;
 }
 
 function planPlaceOf(

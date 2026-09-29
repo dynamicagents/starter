@@ -333,9 +333,9 @@ behaves, and answer through the StructuredOutput tool.`
 }
 
 /**
- * What the parent is told of a planning session: the plan's id, title and link,
- * and what the session had to say about it — never the plan, which the parent
- * hands on by its id.
+ * What the parent is told of a planning session: the plan's id and title, and
+ * what the session had to say about it — never the plan, which the parent hands
+ * on by its id.
  */
 export function planReport(
   outcome: SessionOutcome,
@@ -345,7 +345,6 @@ export function planReport(
         id: string;
         title: string;
         lastReply: string;
-        link?: string;
       }
     | { kind: "unanswered" }
     | { kind: "locked"; id: string; lastReply: string }
@@ -353,12 +352,7 @@ export function planReport(
   const result = outcome.session.result;
   const footer = result ? `_${sessionFooter(result)}_` : "";
   if (filed.kind === "filed") {
-    return [
-      `**Plan \`${filed.id}\`: ${filed.title}**`,
-      filed.lastReply,
-      filed.link ? `Its page: ${filed.link}` : "",
-      footer
-    ]
+    return [`**Plan \`${filed.id}\`: ${filed.title}**`, filed.lastReply, footer]
       .filter(Boolean)
       .join("\n\n");
   }

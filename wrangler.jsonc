@@ -318,16 +318,25 @@
       "deleted_classes": ["ProactiveAgent"]
     },
     {
-      // The agents move onto Think under new class names, behind task hosts,
-      // and start empty with their workspaces: every task, conversation, memory
-      // and checkout the old classes held is dropped. `deleted_classes` names
-      // each class as it is deployed, which is what a deletion is matched on.
+      // The agents move onto Think under new class names, and start empty:
+      // every task, conversation and memory the old classes held is dropped.
+      // The workspace objects are untouched, so every checkout survives.
       "tag": "v10",
+      "deleted_classes": ["ReactiveAgent", "CfCoderAgent", "ClaudeCoderAgent"],
+      "new_sqlite_classes": ["Reactive", "CfCoder", "ClaudeCoder"]
+    },
+    {
+      // Each tenant becomes a task host, a pipeline and a step agent, under a
+      // name for what it does, and starts empty with its workspace: every task,
+      // conversation, memory and checkout the old classes held is dropped.
+      // `deleted_classes` names each class as it is deployed, which is what a
+      // deletion is matched on.
+      "tag": "v11",
       "deleted_classes": [
-        "ReactiveAgent",
-        "CfCoderAgent",
+        "Reactive",
+        "CfCoder",
         "CfCoderWorkspaceDO",
-        "ClaudeCoderAgent",
+        "ClaudeCoder",
         "ClaudeCoderWorkspaceDO"
       ],
       "new_sqlite_classes": [

@@ -114,7 +114,8 @@ function parentRule(
         : call("ask_user", { question: ask, options: ["Yes", "No"] });
     }
     // An approval of an artifact; its answer arrives as the next message, and
-    // is echoed as the reply. A refused one fails the call, and its error is.
+    // is echoed as the reply. A refused one fails the call, and the model echoes
+    // the call's error instead.
     const artifact = after(text, "approve:");
     if (artifact !== undefined) {
       return view.answered
@@ -278,9 +279,10 @@ export class TestAnthropicCodingWriterChild extends AnthropicCodingWriterChild {
 }
 
 /**
- * The planner's spec: the real `prepare` — which refuses what it must before
- * any workspace is needed — with the stand-in workspace in place of a reading
- * copy, and the real `settle`.
+ * The planner's spec with a reduced `prepare`: it opens a plan, or takes the one
+ * named, and hands over the stand-in workspace in place of a reading copy. It
+ * does not check ownership or the lock, which `preparePlanner` does and
+ * `anthropic-coding.spec.ts` covers. `settle` is the real one.
  */
 const PLANNER_SPEC = {
   ...AnthropicCodingPlannerChild.spec,

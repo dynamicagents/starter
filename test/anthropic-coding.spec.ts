@@ -286,7 +286,7 @@ describe("a plan", () => {
     ({
       input: { task: TASK, ...(plan ? { plan } : {}) },
       taskId: "task-1",
-      runId: "detached:call_1"
+      runId: `detached:${crypto.randomUUID()}`
     }) as const;
 
   /** A planning session's outcome: its answer through `--json-schema`, or none. */
@@ -333,6 +333,20 @@ describe("a plan", () => {
     expect(owned).toBe(true);
   });
 
+  it("opens the plan it opened before when prepare runs again for the same run", async () => {
+    const key = `anthropic-coding-spec:${crypto.randomUUID()}`;
+    await checkedOut(key);
+    const ids = await onParent(async (agent) => {
+      activeRepo(agent.ctx.storage).set("acme/plan");
+      const ctx = { ...planning(), parent: agent.pluginContext() };
+      const first = await preparePlanner(ctx);
+      const again = await preparePlanner(ctx);
+      return [first, again].map((r) => (r.plan as { id: string }).id);
+    }, key);
+
+    expect(ids[1]).toBe(ids[0]);
+  });
+
   it.each([
     ["one another caller opened", "foreign"],
     ["one that was approved", "locked"]
@@ -354,7 +368,7 @@ describe("a plan", () => {
       );
     });
     expect(refused).toMatch(
-      which === "foreign" ? /is not a plan of yours/ : /was approved/
+      which === "foreign" ? /is not a plan of yours/ : /is locked \(approved\)/
     );
   });
 

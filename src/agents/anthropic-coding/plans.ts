@@ -129,12 +129,20 @@ function ensure(storage: DurableObjectStorage): void {
  * Open a plan for this caller, and forget the ones retention has taken: an
  * artifact lives for {@link ARTIFACT_RETENTION_MS} from when it was opened, and
  * so does its row here.
+ *
+ * `sourceKey` names what opens it — a planning run — so opening it again for
+ * the same one, as a replayed `prepare` does, finds the plan it opened rather
+ * than a second one.
  */
 export async function createPlan(
   env: Env,
-  storage: DurableObjectStorage
+  storage: DurableObjectStorage,
+  sourceKey?: string
 ): Promise<string> {
-  const id = await requireArtifactsStub(env).createArtifact(PLAN_KIND);
+  const id = await requireArtifactsStub(env).createArtifact(
+    PLAN_KIND,
+    sourceKey
+  );
   ensure(storage);
   const now = Date.now();
   storage.sql.exec(
@@ -164,6 +172,8 @@ export type PlanLookup =
       ok: true;
       plan: string | undefined;
       locked: boolean;
+      /** What it was settled as — `approved`, or `failed` for one never written. */
+      status: string | null;
       page: ArtifactEntry[];
     }
   | { ok: false; reason: string };
@@ -194,6 +204,7 @@ export async function lookUpPlan(
     ok: true,
     plan: latestPlan(artifact.entries),
     locked: artifact.locked,
+    status: artifact.status,
     page: artifact.entries
   };
 }

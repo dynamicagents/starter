@@ -262,7 +262,8 @@ async function settleReader({
 /**
  * A planning session works where a reading one does, on a plan of this
  * caller's: a new one, opened only once the workspace has admitted the run, or
- * one it names, which must not be locked — an approved plan does not change.
+ * one it names, which must not be locked — approved, or failed before it was
+ * written, a locked plan does not change.
  */
 export async function preparePlanner(
   ctx: SubAgentPrepareContext<PlanInput, Env>
@@ -274,25 +275,34 @@ export async function preparePlanner(
     if (!found.ok) throw new Error(`claude_code_plan: ${found.reason}`);
     if (found.locked) {
       throw new Error(
-        `claude_code_plan: the plan \`${edits}\` was approved, and an approved plan does not change. Write a new plan instead.`
+        `claude_code_plan: the plan \`${edits}\` is locked (${found.status ?? "locked"}), and a locked plan does not change. Write a new plan instead.`
       );
     }
   }
   const place = await sessionWorkspaces(ctx.parent).reading();
-  const id = edits ?? (await createPlan(env, storage));
+  const id =
+    edits ?? (await createPlan(env, storage, `${ctx.taskId}:${ctx.runId}`));
   const plan: PlanPlace = { id, isNew: edits === undefined };
   return { ...runtimeOf(place), [PLAN_KEY]: plan };
 }
 
 /**
  * A planning session's end. A new plan its session never wrote is locked as
- * `failed`, so its page says so rather than waiting on a plan nobody will write;
- * an edit that failed leaves the plan as it was.
+ * `failed`, so its page says so rather than waiting on a plan nobody will write
+ * — whether or not stopping the session worked; an edit that failed leaves the
+ * plan as it was.
  */
 export async function settlePlanner(
   ctx: SubAgentSettleContext<Env>
 ): Promise<void> {
-  await settleReader(ctx);
+  try {
+    await settleReader(ctx);
+  } finally {
+    await closeUnwritten(ctx);
+  }
+}
+
+async function closeUnwritten(ctx: SubAgentSettleContext<Env>): Promise<void> {
   const plan = planPlaceOf(ctx.runtime);
   if (!plan?.isNew) return;
   const artifacts = requireArtifactsStub(ctx.parent.env);

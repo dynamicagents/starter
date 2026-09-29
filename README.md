@@ -216,8 +216,9 @@ caller's to set, in what the agent remembers about them:
 3. **`claude_code`** with the plan's id gives the writing session the plan whole — the
    text the caller read, not the agent's account of it.
 
-A plan is the caller's that opened it ([`plans.ts`](src/agents/anthropic-coding/plans.ts)):
-a link is shared by design, but only the caller's own agent edits, approves or builds it.
+A plan belongs to the caller whose agent opened it
+([`plans.ts`](src/agents/anthropic-coding/plans.ts)): a link is shared by design, but only
+that caller's agent edits, approves or builds it.
 
 ### The two coders need one thing the others do not
 

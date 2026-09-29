@@ -358,7 +358,7 @@ export function planReport(
   }
   if (filed.kind === "locked") {
     return [
-      `**The plan \`${filed.id}\` was not changed**: it was approved while the session ran, or it is gone. Write a new plan if it still needs one.`,
+      `**The plan \`${filed.id}\` was not changed**: it was locked while the session ran, or it is gone. Write a new plan if it still needs one.`,
       filed.lastReply,
       footer
     ]

@@ -205,11 +205,11 @@
   },
 
   // --- the agents ----------------------------------------------------------
-  // Two Durable Object classes per tenant, each keyed by the verified caller
-  // (`identity.key`): a task host, which holds that caller's A2A tasks, and the
-  // step agent its pipeline runs on, which holds its SQLite-backed Session —
-  // continuous history plus writable memory. A host's binding is named as its
-  // class: `hostBinding` names it, and a workflow reaches the host through it.
+  // Each tenant's task host, which holds a caller's A2A tasks, and the step
+  // agent its pipeline runs on, which holds its SQLite-backed Session —
+  // continuous history plus writable memory. Both are keyed by the verified
+  // caller (`identity.key`). A host's binding is named as its class:
+  // `hostBinding` names it, and a workflow reaches the host through it.
   //
   // The sub-agent classes (`GenericChild` and its siblings) are deliberately
   // absent. Each is a facet created beneath its agent, so it needs no binding and

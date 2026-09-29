@@ -16,8 +16,8 @@ import type { AgentManifest } from "@dynamicagents/core/a2a";
  *
  * **The description must therefore name every mounted tenant.** It is the only
  * place this card says what is here, so a tenant missing from it is a tenant an
- * operator reading the deploy has no way to discover — which is what happened to
- * `anthropic-coding` when it was added to `src/index.ts` and not to this string.
+ * operator reading the deploy has no way to discover. Mounting one in
+ * `src/index.ts` means naming it here too.
  *
  * `skills` is empty for the same reason: the skills belong to the tenants, and
  * a client that picked one from here would have no way to act on it.

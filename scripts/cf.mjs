@@ -427,8 +427,13 @@ async function cmdWf(args) {
   if (flags.json || flags.raw) return void printBody(text, { raw: flags.raw });
   const r = parseJson(text)?.result;
   if (!r) return void printBody(text);
+  // The API's errors are `{ name, message }`, on the instance and on a step.
+  const describe = (e) =>
+    e && typeof e === "object"
+      ? `${e.name ?? "Error"}: ${e.message ?? JSON.stringify(e)}`
+      : String(e);
   out(
-    `status: ${r.status}  success: ${r.success}  error: ${r.error ?? "null"}`
+    `status: ${r.status}  success: ${r.success}  error: ${r.error ? describe(r.error) : "null"}`
   );
   // A task that ended as an answer other than success still finishes its
   // instance `complete`, so the verdict the pipeline returns is where the
@@ -440,15 +445,24 @@ async function cmdWf(args) {
     `queued ${r.queued ?? "?"} · start ${r.start ?? "?"} · end ${r.end ?? "?"}`
   );
   out(`steps (${r.step_count ?? r.steps?.length ?? 0}):`);
-  // A step still running or waiting — a parked task's `waitForEvent` — has
-  // `success: null`, which is neither outcome.
+  // A `step` records `success`, null while it runs or retries. A `sleep` or a
+  // `waitForEvent` — a parked task's question — records `finished` and an
+  // `error` instead, and a `termination` records what stopped the instance.
   const state = (s) =>
-    s.success === true ? "ok" : s.success === false ? "ERROR" : "pending";
+    s.type === "termination"
+      ? `terminated by ${s.trigger?.source ?? "?"}`
+      : s.success === false || s.error
+        ? "ERROR"
+        : s.success === true || s.finished === true
+          ? "ok"
+          : "pending";
   for (const s of r.steps ?? []) {
-    const errs = (s.attempts ?? []).filter((a) => a.error).map((a) => a.error);
+    const errs = [...(s.attempts ?? []).map((a) => a.error), s.error]
+      .filter(Boolean)
+      .map(describe);
     out(
       `  - ${(s.name ?? s.type ?? "?").padEnd(16)} ${state(s)}` +
-        (errs.length ? ` ${JSON.stringify(errs)}` : "")
+        (errs.length ? ` ${errs.join("; ")}` : "")
     );
   }
 }

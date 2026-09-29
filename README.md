@@ -88,7 +88,7 @@ one endpoint, one signing key, one card ([`src/index.ts`](src/index.ts)):
 export const generic = defineAgent({
   tenant: "generic",
   manifest,
-  agent: (env: Env) => env.GenericAgent
+  agent: (env: Env) => env.GenericHost
 });
 
 // src/index.ts — mounted

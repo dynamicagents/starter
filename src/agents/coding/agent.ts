@@ -5,39 +5,39 @@ import type {
   TurnContext
 } from "@cloudflare/think";
 import type { AgentPlugin } from "@dynamicagents/core";
-import { A2AAgent } from "@dynamicagents/core/agent";
+import { StepAgent } from "@dynamicagents/core/agent";
 import type { SubAgentClass } from "@dynamicagents/core/subagent";
+import type { StepJob } from "@dynamicagents/core/workflow";
 import { computerWorkspace } from "@dynamicagents/plugins/computer";
 import { workspaceName } from "@dynamicagents/plugins/workspace";
 import type { ContextConfig } from "agents/context";
 import type { LanguageModel, ToolSet } from "ai";
-import { CF_CODER } from "@/config";
-import { copy } from "@/copy";
+import { CODING } from "@/config";
+import { RETRY_BRIEF } from "@/copy";
 import { agentModel } from "@/model";
 import { activeRepo } from "@/workspace/active-repo";
 import { WORKSPACE_WRITERS } from "@/workspace/container";
 import { sweepIdleWorkspaces } from "@/workspace/lifecycle";
-import { CfCoderCode } from "./children";
-import { cfCoder } from "./definition";
+import { CodingChild } from "./children";
+import { coding } from "./definition";
 import { container, parentPlugins } from "./plugins";
 import { MEMORY, SOUL } from "./soul";
 
 /** This agent's log prefix and workspace label. */
-const LABEL = "cf-coder";
+const LABEL = "coding";
 
 /**
- * The cf-coder agent.
+ * The coding agent.
  *
- * A delegating agent like `reactive`: the task, the turn and delegation are
- * `@dynamicagents/core/agent`. What makes it the odd one out is the container
- * underneath — so the members below are mostly lifecycle, not inference: a
- * weekly reclaim sweep for workspaces nothing is calling into, and a parent that
- * can read the checkout but not change it.
+ * A delegating agent like `generic`: the job, the turn and delegation are
+ * `@dynamicagents/core/agent`, and the A2A task is `./host.ts`'s. What makes it
+ * the odd one out is the container underneath — so the members below are mostly
+ * lifecycle, not inference: a weekly reclaim sweep for workspaces nothing is
+ * calling into, and a parent that can read the checkout but not change it.
  */
-export class CfCoder extends A2AAgent<Env> {
-  protected readonly copy = copy;
-  protected readonly compactAfterTokens = CF_CODER.compactAfterTokens;
-  protected readonly keepRecentTokens = CF_CODER.keepRecentTokens;
+export class CodingAgent extends StepAgent<Env> {
+  protected readonly compactAfterTokens = CODING.compactAfterTokens;
+  protected readonly keepRecentTokens = CODING.keepRecentTokens;
 
   /**
    * Which repository the caller is working on. One instance for the object:
@@ -60,8 +60,8 @@ export class CfCoder extends A2AAgent<Env> {
   override getModel(): ThinkModel {
     return agentModel(
       this.env,
-      { modelId: CF_CODER.modelId, name: this.name },
-      { agent: cfCoder.tenant, taskId: this.turnTaskId(), phase: "turn" }
+      { modelId: CODING.modelId, name: this.name },
+      { agent: coding.tenant, taskId: this.turnTaskId(), phase: "turn" }
     );
   }
 
@@ -69,8 +69,8 @@ export class CfCoder extends A2AAgent<Env> {
   protected override compactionModel(): LanguageModel {
     return agentModel(
       this.env,
-      { modelId: CF_CODER.modelId, name: this.name },
-      { agent: cfCoder.tenant, phase: "compaction" }
+      { modelId: CODING.modelId, name: this.name },
+      { agent: coding.tenant, phase: "compaction" }
     );
   }
 
@@ -87,7 +87,7 @@ export class CfCoder extends A2AAgent<Env> {
   }
 
   override getSubAgents(): SubAgentClass[] {
-    return [CfCoderCode];
+    return [CodingChild];
   }
 
   /** `check_back`, for the wait between opening a pull request and its review. */
@@ -95,15 +95,23 @@ export class CfCoder extends A2AAgent<Env> {
     return { ...super.getTools(), check_back: this.checkBackTool() };
   }
 
-  /** The turn core configures, minus Think's own file writers. */
+  /**
+   * The turn core configures, minus Think's own file writers. Core's own list
+   * wins where it sets one: a turn for a job that has ended gets no tools.
+   */
   override async beforeTurn(ctx: TurnContext): Promise<TurnConfig | void> {
     const base = await super.beforeTurn(ctx);
     return {
       ...base,
-      activeTools: Object.keys(ctx.tools).filter(
-        (name) => !WORKSPACE_WRITERS.has(name)
-      )
+      activeTools:
+        base?.activeTools ??
+        Object.keys(ctx.tools).filter((name) => !WORKSPACE_WRITERS.has(name))
     };
+  }
+
+  /** A retry is told so, and to carry on from what the first attempt left. */
+  protected override formatStepJobInput(job: StepJob): string {
+    return job.attempt > 1 ? `${RETRY_BRIEF}\n\n${job.input}` : job.input;
   }
 
   /**
@@ -123,7 +131,7 @@ export class CfCoder extends A2AAgent<Env> {
           sweepIdleWorkspaces({
             storage: this.ctx.storage,
             callerKey: this.callerKey(),
-            binding: this.env.CF_CODER_WORKSPACE,
+            binding: this.env.CODING_WORKSPACE,
             label: LABEL
           })
       }

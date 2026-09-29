@@ -11,28 +11,28 @@ import {
 import { openWorkspace, workspaceName } from "@dynamicagents/plugins/workspace";
 import type { AgentToolLifecycleResult, AgentToolRunInfo } from "agents";
 import type { ContextConfig } from "agents/context";
-import type { ClaudeCoderWorkspaceDO } from "@/index";
+import type { AnthropicCodingWorkspace } from "@/index";
 import {
-  ClaudeCoderReader,
-  ClaudeCoderSession,
+  AnthropicCodingReaderChild,
+  AnthropicCodingWriterChild,
   claimSession,
   forgetKept,
   keepNote,
   settleSession
-} from "@/agents/claude-coder/children";
+} from "@/agents/anthropic-coding/children";
 import {
   sessionBrief,
   sessionFooter,
   warningPrompt,
   writingNote
-} from "@/agents/claude-coder/session-report";
+} from "@/agents/anthropic-coding/session";
 import { CLAUDE_CODE_SESSION } from "@/config";
 import {
   claudeCodeConfig,
   CREDENTIALS_KEY,
   GH_TOKEN_PLACEHOLDER
-} from "@/agents/claude-coder/claude-code";
-import { admitSession } from "@/agents/claude-coder/plugins";
+} from "@/agents/anthropic-coding/claude-code";
+import { admitSession } from "@/agents/anthropic-coding/plugins";
 import { activeRepo } from "@/workspace/active-repo";
 import { gitIdentity } from "@/workspace/git-identity";
 import type {
@@ -41,7 +41,7 @@ import type {
 } from "@/workspace/subtask-workspace";
 
 /**
- * The claude-coder's wiring, pinned.
+ * `anthropic-coding`'s wiring, pinned.
  *
  * The division of labour between this file and `@dynamicagents/plugins` is worth
  * stating, because it is what keeps both suites small. The *machine* — the
@@ -75,17 +75,17 @@ interface Parent {
 
 const onParent = <T>(
   read: (agent: Parent) => T | Promise<T>,
-  key = `claude-coder-spec:${crypto.randomUUID()}`
+  key = `anthropic-coding-spec:${crypto.randomUUID()}`
 ) =>
   runInDurableObject(
-    (env.ClaudeCoder as unknown as DurableObjectNamespace).get(
-      env.ClaudeCoder.idFromName(key)
+    (env.AnthropicCodingAgent as unknown as DurableObjectNamespace).get(
+      env.AnthropicCodingAgent.idFromName(key)
     ),
     (instance) => read(instance as unknown as Parent)
   );
 
-const { freshStub: freshWorkspace } = makeDoHelpers<ClaudeCoderWorkspaceDO>(
-  env.CLAUDE_CODER_WORKSPACE
+const { freshStub: freshWorkspace } = makeDoHelpers<AnthropicCodingWorkspace>(
+  env.ANTHROPIC_CODING_WORKSPACE
 );
 
 /**
@@ -159,32 +159,33 @@ describe("the parent's surface", () => {
     const names = await onParent((agent) =>
       agent.getSubAgents().map((Cls) => Cls.name)
     );
-    expect(names).toEqual(["ClaudeCoderSession", "ClaudeCoderReader"]);
+    expect(names).toEqual([
+      "AnthropicCodingWriterChild",
+      "AnthropicCodingReaderChild"
+    ]);
   });
 });
 
 describe("the sessions", () => {
   it("run in the background, because a session outlasts a turn", () => {
-    expect(ClaudeCoderSession.spec.detached).toBe(true);
-    expect(ClaudeCoderReader.spec.detached).toBe(true);
+    expect(AnthropicCodingWriterChild.spec.detached).toBe(true);
+    expect(AnthropicCodingReaderChild.spec.detached).toBe(true);
   });
 
-  it.each([["CLAUDE_CODER_SESSION"], ["CLAUDE_CODER_READER"]])(
-    "install no tools on %s: the session brings its own",
-    async (binding) => {
-      const ns = (env as unknown as Record<string, DurableObjectNamespace>)[
-        binding
-      ]!;
-      const tools = await runInDurableObject(
-        ns.get(ns.idFromName(`claude-coder-spec:${crypto.randomUUID()}`)),
-        (instance) =>
-          Object.keys(
-            (instance as unknown as { getTools(): object }).getTools()
-          )
-      );
-      expect(tools).toEqual([]);
-    }
-  );
+  it.each([
+    ["ANTHROPIC_CODING_WRITER_CHILD"],
+    ["ANTHROPIC_CODING_READER_CHILD"]
+  ])("install no tools on %s: the session brings its own", async (binding) => {
+    const ns = (env as unknown as Record<string, DurableObjectNamespace>)[
+      binding
+    ]!;
+    const tools = await runInDurableObject(
+      ns.get(ns.idFromName(`anthropic-coding-spec:${crypto.randomUUID()}`)),
+      (instance) =>
+        Object.keys((instance as unknown as { getTools(): object }).getTools())
+    );
+    expect(tools).toEqual([]);
+  });
 });
 
 /**
@@ -194,8 +195,8 @@ describe("the sessions", () => {
  */
 describe("preparing a session", () => {
   it.each([
-    ["writing", ClaudeCoderSession],
-    ["reading", ClaudeCoderReader]
+    ["writing", AnthropicCodingWriterChild],
+    ["reading", AnthropicCodingReaderChild]
   ])(
     "refuses a %s session in a workspace with nothing checked out",
     async (_label, Cls) => {
@@ -216,10 +217,10 @@ describe("preparing a session", () => {
 
   it("does not mistake a checkout with nothing to install for an empty workspace", async () => {
     const dir = "/workspace/spike";
-    const key = `claude-coder-spec:${crypto.randomUUID()}`;
+    const key = `anthropic-coding-spec:${crypto.randomUUID()}`;
     const name = workspaceName(key, "acme/spike");
-    const workspace = env.CLAUDE_CODER_WORKSPACE.get(
-      env.CLAUDE_CODER_WORKSPACE.idFromName(name)
+    const workspace = env.ANTHROPIC_CODING_WORKSPACE.get(
+      env.ANTHROPIC_CODING_WORKSPACE.idFromName(name)
     );
 
     // A repository with git in it and no lockfile: cloned, recorded, and skipped
@@ -232,7 +233,7 @@ describe("preparing a session", () => {
 
     const runtime = await onParent((agent) => {
       activeRepo(agent.ctx.storage).set("acme/spike");
-      return ClaudeCoderReader.spec.prepare!({
+      return AnthropicCodingReaderChild.spec.prepare!({
         input: { task: TASK } as never,
         taskId: "task-1",
         runId: "detached:call_1",
@@ -247,7 +248,7 @@ describe("preparing a session", () => {
 function recordingPool(
   resolve?: () => Promise<never>,
   kept: KeptWork = {
-    note: "Its work up to that point is kept on `claude-coder/task-1/call_1`.",
+    note: "Its work up to that point is kept on `anthropic-coding/task-1/call_1`.",
     settled: true
   }
 ) {
@@ -258,7 +259,7 @@ function recordingPool(
       (async () => ({
         workspaceName: "w",
         dir: "/workspace/w",
-        branch: "claude-coder/task-1/call_1"
+        branch: "anthropic-coding/task-1/call_1"
       })),
     reading: async () => ({ workspaceName: "w", dir: "/workspace/w" }),
     release: async (_ctx, options) => {
@@ -300,7 +301,7 @@ describe("a writing session's worktree", () => {
     expect(runtime).toEqual({
       workspaceName: "w",
       dir: "/workspace/w",
-      branch: "claude-coder/task-1/call_1"
+      branch: "anthropic-coding/task-1/call_1"
     });
   });
 
@@ -338,7 +339,7 @@ describe("a writing session's worktree", () => {
       keepNote(agent.ctx.storage, "task-1", "detached:call_1", "kept on b");
       const run = {
         runId: "detached:call_1",
-        agentType: "ClaudeCoderSession",
+        agentType: "AnthropicCodingWriterChild",
         displayOrder: 1
       } as unknown as AgentToolRunInfo;
       const failed = { status: "error", error: "boom" } as const;
@@ -351,7 +352,7 @@ describe("a writing session's worktree", () => {
   });
 });
 
-/** The pre-flight: see `admitSession` in `@/agents/claude-coder/plugins`. */
+/** The pre-flight: see `admitSession` in `@/agents/anthropic-coding/plugins`. */
 describe("the credential pool", () => {
   it("reports a fresh pool as usable", async () => {
     const workspace = freshWorkspace("fresh-pool");
@@ -375,7 +376,7 @@ describe("the credential pool", () => {
   it("refuses a session once every credential is spent, saying when one resets", async () => {
     const name = `admit-spent:${crypto.randomUUID()}`;
     const resetAt = Date.now() + 60 * 60_000;
-    const binding = env.CLAUDE_CODER_WORKSPACE;
+    const binding = env.ANTHROPIC_CODING_WORKSPACE;
     await runInDurableObject(
       binding.get(binding.idFromName(name)),
       async (_, state) => {
@@ -439,12 +440,12 @@ describe("the brief a session starts from", () => {
 describe("the branch a writing session is told about", () => {
   it("names the submodules, and says to commit inside each one", () => {
     const brief = sessionBrief(TASK, undefined, {
-      branch: "claude-coder/task-1/1",
+      branch: "anthropic-coding/task-1/1",
       submodules: ["core", "starter"],
       continues: false
     });
 
-    expect(brief).toContain("You are on `claude-coder/task-1/1`");
+    expect(brief).toContain("You are on `anthropic-coding/task-1/1`");
     expect(brief).toContain("- `core`\n- `starter`");
     expect(brief).toMatch(/Commit inside each one you\nchange/);
     // The install is the root's alone, and a session that does not know that
@@ -455,7 +456,7 @@ describe("the branch a writing session is told about", () => {
   /** Only commits leave a session, and it has to hear that before it starts. */
   it("says uncommitted work is deleted, and that the parent pushes", () => {
     const brief = sessionBrief(TASK, undefined, {
-      branch: "claude-coder/task-1/1",
+      branch: "anthropic-coding/task-1/1",
       submodules: [],
       continues: false
     });
@@ -471,7 +472,7 @@ describe("the branch a writing session is told about", () => {
 
   it("tells a continuing session the branch already holds work", () => {
     const brief = sessionBrief(TASK, undefined, {
-      branch: "claude-coder/task-1/1",
+      branch: "anthropic-coding/task-1/1",
       submodules: [],
       continues: true
     });
@@ -499,12 +500,13 @@ describe("the warning round", () => {
     expect(prompt).toMatch(/Commit what should be kept/);
   });
 
-  it("calls a lone checkout the repository, and bounds a long list", () => {
+  it("calls a lone checkout the repository, and names every file", () => {
     const files = Array.from({ length: 15 }, (_, i) => `f${i}`);
     const prompt = warningPrompt([{ path: ".", files }]);
 
     expect(prompt).toContain("- the repository: `f0`");
-    expect(prompt).toContain("and 3 more");
+    expect(prompt).toContain("`f14`");
+    expect(prompt).not.toContain("more");
   });
 });
 
@@ -513,7 +515,7 @@ describe("the warning round", () => {
  * the discard runs after the session exits.
  */
 describe("the note on what a writing session kept", () => {
-  const branch = "claude-coder/task-1/1";
+  const branch = "anthropic-coding/task-1/1";
 
   it("names each repository with commits, and how to reach the worktree", () => {
     const note = writingNote({
@@ -543,7 +545,9 @@ describe("the note on what a writing session kept", () => {
       discarded: []
     });
 
-    expect(note).toMatch(/No commits were made on `claude-coder\/task-1\/1`/);
+    expect(note).toMatch(
+      /No commits were made on `anthropic-coding\/task-1\/1`/
+    );
   });
 
   it("names what was deleted uncommitted", () => {
@@ -666,7 +670,7 @@ describe("how hard this deployment asks a session to think", () => {
  * because the egress gateway spends entry 0 first, and the empty entry an unset
  * secret produces, which would otherwise be sent as a bare `Bearer `.
  */
-describe("claude-coder's credential pool", () => {
+describe("anthropic-coding's credential pool", () => {
   it("hands over every configured credential, in declared order", () => {
     const config = claudeCodeConfig(env as never);
 
@@ -697,7 +701,7 @@ describe("claude-coder's credential pool", () => {
  * Who a session's commits belong to.
  *
  * Why the session needs an identity of its own is beside the option, in
- * `@/agents/claude-coder/claude-code.ts`. What only this side can get wrong is
+ * `@/agents/anthropic-coding/claude-code.ts`. What only this side can get wrong is
  * answering it with a *different* identity from the workspace object's, which
  * is the disagreement `@/workspace/git-identity` exists to prevent — so this
  * pins that they are one answer, not any particular name.
@@ -714,7 +718,7 @@ describe("who a session commits as", () => {
  * Where `gh`'s placeholder token lives, which is the whole of its safety.
  *
  * It is only harmless behind the sessions' egress gateway, which strips it. In
- * the image it would also reach cf-coder's container, whose egress is `direct`,
+ * the image it would also reach `coding`'s container, whose egress is `direct`,
  * and be presented to GitHub as a credential by anything that reads `GH_TOKEN`.
  */
 describe("gh's placeholder token", () => {

@@ -125,9 +125,9 @@
   // are rented: an entry bills only for what is running, so raising it costs
   // nothing until there is work to fill it.
   //
-  // **For claude-coder it is what bounds the fan-out.** A writing session works in
+  // **For `anthropic-coding` it is what bounds the fan-out.** A writing session works in
   // a worktree of its own while the parent keeps one, so N writers at once want
-  // N+1 instances of `ClaudeCoderWorkspaceDO` — `CLAUDE_CODER` in `src/config.ts`
+  // N+1 instances of `AnthropicCodingWorkspace` — `ANTHROPIC_CODING` in `src/config.ts`
   // carries why. A reading session wants none: it runs in the parent's container,
   // against the checkout already in it. The cap is per deployment rather than per
   // task, so the number is that peak multiplied by the tasks expected to run at
@@ -153,14 +153,14 @@
   // unset, an entry with `max_instances` above one starts at a 10% step.
   "containers": [
     {
-      "class_name": "CfCoderWorkspaceDO",
+      "class_name": "CodingWorkspace",
       "image": "./Dockerfile",
       "instance_type": { "vcpu": 2, "memory_mib": 6144, "disk_mb": 8000 },
       "max_instances": 5,
       "rollout_step_percentage": 100
     },
     {
-      "class_name": "ClaudeCoderWorkspaceDO",
+      "class_name": "AnthropicCodingWorkspace",
       "image": "./Dockerfile",
       // **Pinned, and the pin is load-bearing.** The egress gateway rewrites
       // this client's requests and `events.ts` parses its stream; both are
@@ -183,7 +183,7 @@
   // There is deliberately **no R2 bucket here**, and it is worth saying why,
   // because a `BACKUP_BUCKET` binding looks like an obvious thing to add.
   //
-  // cf-coder used to snapshot its container's `/workspace` to R2 between tasks
+  // The coding agent used to snapshot its container's `/workspace` to R2 between tasks
   // so a follow-up skipped the clone and the install. It never worked once in
   // production: `@cloudflare/sandbox` mounts that archive **inside the
   // container** over s3fs, so it needs R2 S3-API credentials
@@ -205,20 +205,25 @@
   },
 
   // --- the agents ----------------------------------------------------------
-  // One Durable Object class per agent: each is keyed by the verified caller
-  // (`identity.key`), holding that caller's tasks and its SQLite-backed Session —
-  // continuous history plus writable memory.
+  // Each tenant's task host, which holds a caller's A2A tasks, and the step
+  // agent its pipeline runs on, which holds its SQLite-backed Session —
+  // continuous history plus writable memory. Both are keyed by the verified
+  // caller (`identity.key`). A host's binding is named as its class:
+  // `hostBinding` names it, and a workflow reaches the host through it.
   //
-  // The sub-agent classes (`ReactiveGeneral` and its siblings) are deliberately
+  // The sub-agent classes (`GenericChild` and its siblings) are deliberately
   // absent. Each is a facet created beneath its agent, so it needs no binding and
   // no `new_sqlite_classes` entry; it only has to be exported from src/index.ts
   // so `ctx.exports` can resolve it by class name. They DO need a test-only
   // binding — see the comment in vitest.config.ts.
   "durable_objects": {
     "bindings": [
-      { "class_name": "Reactive", "name": "Reactive" },
-      { "class_name": "CfCoder", "name": "CfCoder" },
-      { "class_name": "ClaudeCoder", "name": "ClaudeCoder" },
+      { "class_name": "GenericHost", "name": "GenericHost" },
+      { "class_name": "GenericAgent", "name": "GenericAgent" },
+      { "class_name": "CodingHost", "name": "CodingHost" },
+      { "class_name": "CodingAgent", "name": "CodingAgent" },
+      { "class_name": "AnthropicCodingHost", "name": "AnthropicCodingHost" },
+      { "class_name": "AnthropicCodingAgent", "name": "AnthropicCodingAgent" },
 
       // Not agents — the workspaces. One object per caller per repository,
       // holding that checkout's filesystem in SQLite and owning the container
@@ -230,10 +235,10 @@
       // Durable Object namespace is keyed by class name: one class would put
       // both agents' checkouts in one namespace, and a caller working on the
       // same repository through both would get one container for both.
-      { "class_name": "CfCoderWorkspaceDO", "name": "CF_CODER_WORKSPACE" },
+      { "class_name": "CodingWorkspace", "name": "CODING_WORKSPACE" },
       {
-        "class_name": "ClaudeCoderWorkspaceDO",
-        "name": "CLAUDE_CODER_WORKSPACE"
+        "class_name": "AnthropicCodingWorkspace",
+        "name": "ANTHROPIC_CODING_WORKSPACE"
       },
 
       // Not an agent, and not optional. Core files every sub-agent note on the
@@ -319,6 +324,54 @@
       "tag": "v10",
       "deleted_classes": ["ReactiveAgent", "CfCoderAgent", "ClaudeCoderAgent"],
       "new_sqlite_classes": ["Reactive", "CfCoder", "ClaudeCoder"]
+    },
+    {
+      // Each tenant becomes a task host, a pipeline and a step agent, under a
+      // name for what it does, and starts empty with its workspace: every task,
+      // conversation, memory and checkout the old classes held is dropped.
+      // `deleted_classes` names each class as it is deployed, which is what a
+      // deletion is matched on.
+      "tag": "v11",
+      "deleted_classes": [
+        "Reactive",
+        "CfCoder",
+        "CfCoderWorkspaceDO",
+        "ClaudeCoder",
+        "ClaudeCoderWorkspaceDO"
+      ],
+      "new_sqlite_classes": [
+        "GenericHost",
+        "GenericAgent",
+        "CodingHost",
+        "CodingAgent",
+        "CodingWorkspace",
+        "AnthropicCodingHost",
+        "AnthropicCodingAgent",
+        "AnthropicCodingWorkspace"
+      ]
+    }
+  ],
+
+  // --- workflows --------------------------------------------------------------
+  // Each tenant's pipeline: every task is an instance, its id the task's. The
+  // names differ from the pre-Think Workflows (`handle-task`, `cf-coder`,
+  // `claude-coder`), which the cutover deletes once this deploys: a name reused
+  // would be deleted with them.
+  "workflows": [
+    {
+      "name": "generic-workflow",
+      "binding": "GENERIC_WORKFLOW",
+      "class_name": "GenericWorkflow"
+    },
+    {
+      "name": "coding-workflow",
+      "binding": "CODING_WORKFLOW",
+      "class_name": "CodingWorkflow"
+    },
+    {
+      "name": "anthropic-coding-workflow",
+      "binding": "ANTHROPIC_CODING_WORKFLOW",
+      "class_name": "AnthropicCodingWorkflow"
     }
   ],
 
@@ -347,7 +400,7 @@
       "GITHUB_NAME",
       "GITHUB_EMAIL",
 
-      // claude-coder only, and a credential pool rather than a secret — see
+      // `anthropic-coding` only, and a credential pool rather than a secret — see
       // `.env.example`, which is where an operator sets them, for how rotation
       // works and why none of them ever enters the container.
       //
@@ -356,7 +409,7 @@
       // missing-secret warnings, so a name left here and unset is typed as a
       // definite string that is undefined at runtime and warns on every local
       // run. Adding or dropping one is the same edit in this list *and* in the
-      // pool in `src/agents/claude-coder/claude-code.ts`.
+      // pool in `src/agents/anthropic-coding/claude-code.ts`.
       "CLAUDE_CODE_OAUTH_TOKEN_1",
       "CLAUDE_CODE_OAUTH_TOKEN_2",
       "CLAUDE_CODE_OAUTH_TOKEN_3"

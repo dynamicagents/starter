@@ -2,9 +2,9 @@ import type { ThinkModel } from "@cloudflare/think";
 import type { AgentPlugin, SubAgentSpec } from "@dynamicagents/core";
 import { SubAgent } from "@dynamicagents/core/subagent";
 import { z } from "zod";
-import { REACTIVE } from "@/config";
+import { GENERIC } from "@/config";
 import { agentModel, turnTask } from "@/model";
-import { reactive } from "./definition";
+import { generic } from "./definition";
 import { plugins } from "./plugins";
 import { GENERAL_SOUL } from "./soul";
 
@@ -30,18 +30,18 @@ const GENERAL: SubAgentSpec<{ task: string }> = {
   formatInput: (input) => input.task
 };
 
-export class ReactiveGeneral extends SubAgent<Env> {
+export class GenericChild extends SubAgent<Env> {
   static override spec = GENERAL as SubAgentSpec<never, never>;
 
   override getModel(): ThinkModel {
     return agentModel(
       this.env,
-      { modelId: REACTIVE.modelId, name: this.name },
+      { modelId: GENERIC.modelId, name: this.name },
       {
-        agent: reactive.tenant,
+        agent: generic.tenant,
         taskId: turnTask(this.activeTurnMetadata),
         phase: "subagent",
-        subAgent: "ReactiveGeneral"
+        subAgent: "GenericChild"
       }
     );
   }

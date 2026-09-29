@@ -11,6 +11,7 @@
 //                              what core tags each call with; --all totals every match
 //   fields [--worker <name>]   discover available log fields for a dataset
 //   containers [name]          container apps: image, version, rollout progress
+//   wf     [name [instance]]   Workflows: list defs / list instances / one instance
 //
 // logs flags:
 //   --since <30m|2h|1d>   time window back from now (default 1h)
@@ -37,10 +38,16 @@
 //   npm run cf -- logs --worker da-starter --app --since 30m
 //   npm run cf -- ai --since 2h
 //   npm run cf -- ai --task <taskId> --all
-//   npm run cf -- ai --agent reactive --phase turn --since 1d
+//   npm run cf -- ai --agent generic --phase turn --since 1d
 //   npm run cf -- ai 01KY4PSY6T1HBA7A2V22NKCFZC
 //   npm run cf -- containers
+//   npm run cf -- wf anthropic-coding-workflow
+//   npm run cf -- wf anthropic-coding-workflow <taskId>
 //   npm run cf -- GET workers/scripts
+//
+// `npm run cf -- wf` with no name lists the workflows this Worker actually has
+// deployed. That query is the authority; a list written here would be a second
+// copy of `wrangler.jsonc` that nothing checks. An instance's id is its task's.
 import fs from "node:fs";
 
 const ENV_FILE = ".cf.env";
@@ -73,6 +80,9 @@ const USAGE = `cf.mjs — Cloudflare API proxy (credentials from ${ENV_FILE})
   fields [--worker <name>]               list available log fields
   containers [name] [--json|--raw]       container apps: which image is actually
                                          serving, and any rollout still moving
+  wf                                     list workflow definitions
+  wf <name>                              list recent instances of a workflow
+  wf <name> <taskId> [--json]            one task's instance, per-step pass/fail
   [METHOD] <path> [-d <json|@file>]      raw passthrough (path is account-relative
        [-q <k=v>]... [--raw]             unless it starts with "/")`;
 
@@ -374,6 +384,87 @@ function messageText(msg) {
   if (msg.tool_calls)
     return `tool_calls: ${JSON.stringify(msg.tool_calls, null, 2)}`;
   return JSON.stringify(msg.content ?? msg);
+}
+
+async function cmdWf(args) {
+  const { flags, pos } = parseFlags(args, { bool: ["--json", "--raw"] });
+  const [name, instance] = pos;
+
+  if (!name) {
+    const { res, text } = await request("GET", acct("workflows"));
+    ensureOk(res, text);
+    if (flags.json || flags.raw)
+      return void printBody(text, { raw: flags.raw });
+    const defs = parseJson(text)?.result ?? [];
+    for (const w of defs)
+      out(`- ${w.name}  | class: ${w.class_name}  | script: ${w.script_name}`);
+    return;
+  }
+
+  if (!instance) {
+    const { res, text } = await request(
+      "GET",
+      acct(`workflows/${name}/instances`)
+    );
+    ensureOk(res, text);
+    if (flags.json || flags.raw)
+      return void printBody(text, { raw: flags.raw });
+    const arr = parseJson(text)?.result ?? [];
+    if (!Array.isArray(arr) || arr.length === 0)
+      return void out("no instances");
+    for (const i of arr)
+      out(
+        `${i.id}  ${(i.status ?? "?").padEnd(10)}  ${i.created_on ?? i.created ?? ""}`
+      );
+    return;
+  }
+
+  const { res, text } = await request(
+    "GET",
+    acct(`workflows/${name}/instances/${instance}`)
+  );
+  ensureOk(res, text);
+  if (flags.json || flags.raw) return void printBody(text, { raw: flags.raw });
+  const r = parseJson(text)?.result;
+  if (!r) return void printBody(text);
+  // The API's errors are `{ name, message }`, on the instance and on a step.
+  const describe = (e) =>
+    e && typeof e === "object"
+      ? `${e.name ?? "Error"}: ${e.message ?? JSON.stringify(e)}`
+      : String(e);
+  out(
+    `status: ${r.status}  success: ${r.success}  error: ${r.error ? describe(r.error) : "null"}`
+  );
+  // A task that ended as an answer other than success still finishes its
+  // instance `complete`, so the verdict the pipeline returns is where the
+  // outcome and the steps that ran are recorded. It arrives in the instance's
+  // `output`, beside the reply.
+  const verdict = r.output?.verdict;
+  if (verdict) out(`verdict: ${JSON.stringify(verdict)}`);
+  out(
+    `queued ${r.queued ?? "?"} · start ${r.start ?? "?"} · end ${r.end ?? "?"}`
+  );
+  out(`steps (${r.step_count ?? r.steps?.length ?? 0}):`);
+  // A `step` records `success`, null while it runs or retries. A `sleep` or a
+  // `waitForEvent` — a parked task's question — records `finished` and an
+  // `error` instead, and a `termination` records what stopped the instance.
+  const state = (s) =>
+    s.type === "termination"
+      ? `terminated by ${s.trigger?.source ?? "?"}`
+      : s.success === false || s.error
+        ? "ERROR"
+        : s.success === true || s.finished === true
+          ? "ok"
+          : "pending";
+  for (const s of r.steps ?? []) {
+    const errs = [...(s.attempts ?? []).map((a) => a.error), s.error]
+      .filter(Boolean)
+      .map(describe);
+    out(
+      `  - ${(s.name ?? s.type ?? "?").padEnd(16)} ${state(s)}` +
+        (errs.length ? ` ${errs.join("; ")}` : "")
+    );
+  }
 }
 
 // `cf ai` flags that match one of the AI Gateway metadata keys core stamps on
@@ -848,6 +939,8 @@ if (!cmd || cmd === "help" || cmd === "--help" || cmd === "-h") {
   await cmdAi(argv.slice(1));
 } else if (cmd === "fields") {
   await cmdFields(argv.slice(1));
+} else if (cmd === "wf") {
+  await cmdWf(argv.slice(1));
 } else if (cmd === "containers") {
   await cmdContainers(argv.slice(1));
 } else {

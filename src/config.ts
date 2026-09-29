@@ -27,31 +27,31 @@ export interface AgentTuning {
 }
 
 /**
- * The reactive agent. Tight on purpose: a delegating agent accumulates
+ * The generic agent. Tight on purpose: a delegating agent accumulates
  * sub-agent results fast.
  */
-export const REACTIVE: AgentTuning = {
+export const GENERIC: AgentTuning = {
   modelId: "@cf/zai-org/glm-5.3-flash",
   compactAfterTokens: 16_000,
   keepRecentTokens: 5_000
 };
 
 /**
- * cf-coder. Wider than reactive's, for one reason: what the model can no
+ * `coding`. Wider than generic's, for one reason: what the model can no
  * longer see it pays a container round trip to rediscover.
  *
  * Do not point the model at a Claude model: reaching one on a subscription
- * credential is what `claude-coder` exists for, and it needs a whole container
- * to do safely; see `src/agents/claude-coder/agent.ts`.
+ * credential is what `anthropic-coding` exists for, and it needs a whole container
+ * to do safely; see `src/agents/anthropic-coding/agent.ts`.
  */
-export const CF_CODER: AgentTuning = {
+export const CODING: AgentTuning = {
   modelId: "@cf/zai-org/glm-5.3-flash",
   compactAfterTokens: 60_000,
   keepRecentTokens: 12_000
 };
 
 /**
- * claude-coder: cf-coder's shape, with the work done elsewhere.
+ * `anthropic-coding`: `coding`'s shape, with the work done elsewhere.
  *
  * **The full-size model, not the flash one.** The parent does no work of its
  * own: it reads diffs and decides what to delegate, so every turn it spends is a
@@ -64,8 +64,8 @@ export const CF_CODER: AgentTuning = {
  * across the deployment; past it a workspace fails to start, and
  * `npm run cf -- containers` is what shows it.
  */
-export const CLAUDE_CODER: AgentTuning = {
-  ...CF_CODER,
+export const ANTHROPIC_CODING: AgentTuning = {
+  ...CODING,
   modelId: "@cf/zai-org/glm-5.3"
 };
 
@@ -111,7 +111,7 @@ export const CLAUDE_CODE_SESSION = {
    * Forty minutes, and **this is the ceiling on a session**.
    *
    * Longer than the workspace base's twenty-minute container-idle window, so
-   * `ClaudeCoderWorkspaceDO` derives its own from this constant rather than
+   * `AnthropicCodingWorkspace` derives its own from this constant rather than
    * restating it: a session stays detached for its whole timeout, and nothing
    * touches the workspace object while it runs.
    */
@@ -148,5 +148,5 @@ export const CLAUDE_CODE_SESSION = {
    */
   permissionMode: "bypassPermissions"
   // The credentials are the host's to answer, not a setting: see
-  // `src/agents/claude-coder/claude-code.ts`.
+  // `src/agents/anthropic-coding/claude-code.ts`.
 } as const satisfies Omit<ClaudeCodeConfig, "credentials">;

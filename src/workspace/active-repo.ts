@@ -38,7 +38,7 @@
  * selection before the follow-up turn that reviews and pushes the work.
  *
  * The fix is to key the selection by task, which every turn now carries
- * (`A2AAgent.turnTaskId()`), threaded through `workspaceName()`, which must stay
+ * (`StepAgent.turnTaskId()`), threaded through `workspaceName()`, which must stay
  * synchronous. Until then, one task at a time per caller is a load-bearing
  * assumption.
  *

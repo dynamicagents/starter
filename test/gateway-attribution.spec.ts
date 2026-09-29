@@ -2,9 +2,9 @@ import { describe, it, expect } from "vitest";
 import { env } from "cloudflare:workers";
 import { runInDurableObject } from "cloudflare:test";
 import type { LanguageModel } from "ai";
-import { reactive } from "@/agents/reactive/definition";
-import { cfCoder } from "@/agents/cf-coder/definition";
-import { claudeCoder } from "@/agents/claude-coder/definition";
+import { generic } from "@/agents/generic/definition";
+import { coding } from "@/agents/coding/definition";
+import { anthropicCoding } from "@/agents/anthropic-coding/definition";
 
 /**
  * What AI Gateway is told about this Worker's model calls, observed at the
@@ -58,14 +58,15 @@ async function gatewayOf(
   return gateways[0];
 }
 
-const PARENTS = [reactive, cfCoder, claudeCoder];
+const PARENTS = [generic, coding, anthropicCoding];
 
 /** An agent's own object, by tenant. `resolveAgent` hands back its RPC shape. */
 function parentStub(tenant: string, key: string) {
   const namespaces: Record<string, DurableObjectNamespace> = {
-    [reactive.tenant]: env.Reactive as unknown as DurableObjectNamespace,
-    [cfCoder.tenant]: env.CfCoder as unknown as DurableObjectNamespace,
-    [claudeCoder.tenant]: env.ClaudeCoder as unknown as DurableObjectNamespace
+    [generic.tenant]: env.GenericAgent as unknown as DurableObjectNamespace,
+    [coding.tenant]: env.CodingAgent as unknown as DurableObjectNamespace,
+    [anthropicCoding.tenant]:
+      env.AnthropicCodingAgent as unknown as DurableObjectNamespace
   };
   const ns = namespaces[tenant]!;
   return ns.get(ns.idFromName(key));
@@ -115,8 +116,8 @@ describe("an agent's calls", () => {
  */
 describe("a sub-agent's calls", () => {
   it.each([
-    ["REACTIVE_GENERAL", "ReactiveGeneral", reactive.tenant],
-    ["CF_CODER_CODE", "CfCoderCode", cfCoder.tenant]
+    ["GENERIC_GENERAL", "GenericChild", generic.tenant],
+    ["CODING_CHILD", "CodingChild", coding.tenant]
   ])("are the parent's, as %s", async (binding, subAgent, tenant) => {
     const namespace = (
       env as unknown as Record<string, DurableObjectNamespace>

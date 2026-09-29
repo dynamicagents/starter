@@ -26,14 +26,14 @@ import { workspaceGit } from "@/workspace/git";
 import { gitIdentity } from "@/workspace/git-identity";
 import { hostScratch } from "@/workspace/scratch";
 import { claudeCodeConfig } from "./claude-code";
-import { claudeCoder } from "./definition";
+import { anthropicCoding } from "./definition";
 
 /**
  * The one file you edit to add or remove a capability for this agent.
  *
  * ## The parent's list, and nothing for the sessions
  *
- * cf-coder's parent delegates because a parent that reads files and runs builds
+ * `coding`'s parent delegates because a parent that reads files and runs builds
  * accumulates a conversation nobody can keep warm. That reason applies here too
  * — and a second one lands on top of it: **a session is not a model loop at
  * all.** It is one `claude -p` process inside the container, with its own tools,
@@ -47,7 +47,7 @@ import { claudeCoder } from "./definition";
  * See the outage comment on `@/workspace/container.ts`.
  */
 export function container(env: Env, name: () => string): ComputerConfig {
-  return workspaceContainer(env.CLAUDE_CODER_WORKSPACE, name);
+  return workspaceContainer(env.ANTHROPIC_CODING_WORKSPACE, name);
 }
 
 /** Stop a run's session in a workspace: both execs, and a reader's copy. */
@@ -56,7 +56,7 @@ export async function stopSession(
   workspace: string,
   runId: string
 ): Promise<void> {
-  const binding = env.CLAUDE_CODER_WORKSPACE;
+  const binding = env.ANTHROPIC_CODING_WORKSPACE;
   using opened = await openWorkspace(
     binding.get(binding.idFromName(workspace))
   );
@@ -91,10 +91,10 @@ function exhausted(retryAt: number | undefined): string {
  * with the reset time in it, and nothing is dispatched.
  *
  * Asked of the workspace the session runs in, because each keeps its own pool:
- * see `./workspace-do.ts`.
+ * see `./workspace.ts`.
  */
 export async function admitSession(env: Env, workspace: string): Promise<void> {
-  const binding = env.CLAUDE_CODER_WORKSPACE;
+  const binding = env.ANTHROPIC_CODING_WORKSPACE;
   const lead = await binding
     .get(binding.idFromName(workspace))
     .claudeCredentials();
@@ -111,7 +111,7 @@ export async function admitSession(env: Env, workspace: string): Promise<void> {
 export function sessionWorkspaces(ctx: PluginContext<Env>): SubtaskWorkspaces {
   const env = ctx.env;
   return subtaskWorkspaces({
-    binding: env.CLAUDE_CODER_WORKSPACE,
+    binding: env.ANTHROPIC_CODING_WORKSPACE,
     callerKey: () => ctx.callerKey(),
     // The same settings the parent's own tools run under — `shell: "bash"`
     // above all — pointed at whichever worktree is being prepared. A partial
@@ -125,7 +125,7 @@ export function sessionWorkspaces(ctx: PluginContext<Env>): SubtaskWorkspaces {
     pool: sqlPoolStore(ctx.storage),
     // The tenant id is where this name lives; `./agent.ts` spells its own log
     // prefix from the same place.
-    label: claudeCoder.tenant
+    label: anthropicCoding.tenant
   });
 }
 
@@ -142,7 +142,7 @@ export const parentPlugins = (
   active: ActiveRepo,
   config: ComputerConfig
 ): AgentPlugin<Env>[] => {
-  const binding = env.CLAUDE_CODER_WORKSPACE;
+  const binding = env.ANTHROPIC_CODING_WORKSPACE;
   /** How the parent's tools move into the worktrees and back — see `@/workspace/worktrees`. */
   const worktrees = worktreeSwitch({
     active,

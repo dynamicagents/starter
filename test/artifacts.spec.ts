@@ -112,7 +112,7 @@ describe("a sub-agent's notes reach the thread as one link", () => {
     const harness = createAgentHarness({
       worker: testWorker,
       env: env as unknown as TestEnv,
-      tenant: "reactive",
+      tenant: "generic",
       identity: {
         key: `transcript:${crypto.randomUUID()}`,
         name: "Spec Caller",

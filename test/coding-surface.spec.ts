@@ -4,11 +4,11 @@ import { runInDurableObject } from "cloudflare:test";
 import type { TurnConfig, TurnContext } from "@cloudflare/think";
 import type { ComputerConfig } from "@dynamicagents/plugins/computer";
 import type { ContextConfig } from "agents/context";
-import { CODE } from "@/agents/cf-coder/code";
-import { container } from "@/agents/cf-coder/plugins";
+import { CODE } from "@/agents/coding/code";
+import { container } from "@/agents/coding/plugins";
 
 /**
- * cf-coder's tool surface, pinned.
+ * `coding`'s tool surface, pinned.
  *
  * This agent's parent and its sub-agent install **different** plugin lists: the
  * parent orchestrates and reviews with git, a browser and read-only eyes on the
@@ -29,18 +29,18 @@ interface Surface {
 }
 
 const onParent = <T>(read: (agent: Surface) => T | Promise<T>) => {
-  const ns = env.CfCoder as unknown as DurableObjectNamespace;
+  const ns = env.CodingAgent as unknown as DurableObjectNamespace;
   return runInDurableObject(
-    ns.get(ns.idFromName(`cf-coder-surface:${crypto.randomUUID()}`)),
+    ns.get(ns.idFromName(`coding-surface:${crypto.randomUUID()}`)),
     (instance) => read(instance as unknown as Surface)
   );
 };
 
 const onChild = <T>(read: (agent: Surface) => T | Promise<T>) => {
   const ns = (env as unknown as Record<string, DurableObjectNamespace>)
-    .CF_CODER_CODE!;
+    .CODING_CHILD!;
   return runInDurableObject(
-    ns.get(ns.idFromName(`cf-coder-surface:${crypto.randomUUID()}`)),
+    ns.get(ns.idFromName(`coding-surface:${crypto.randomUUID()}`)),
     (instance) => read(instance as unknown as Surface)
   );
 };
@@ -186,13 +186,10 @@ describe("the container config", () => {
     expect(config.shell).toBe("bash");
     expect(config.cwd).toBe("/workspace");
     expect(config.workspaceName()).toBe("caller|owner/repo");
-    // The gate and the command share one tool call, which has to end inside
-    // the turn it runs in: see COMMAND_TIMEOUT_MS in src/workspace/container.ts.
     expect(config.installGateMs).toBeGreaterThan(0);
-    expect(config.timeoutMs).toBeGreaterThan(0);
-    expect(
-      (config.installGateMs ?? Infinity) + (config.timeoutMs ?? Infinity)
-    ).toBeLessThan(15 * 60_000);
+    // The plugin's command timeout, which its container-idle window is sized
+    // against.
+    expect(config.timeoutMs).toBeUndefined();
   });
 
   it("is the same shape whichever name it is given", () => {

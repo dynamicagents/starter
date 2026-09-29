@@ -22,7 +22,7 @@ import worker from "@/index";
  * `createA2AWorker` and has nothing to check.
  */
 
-const TENANTS = ["reactive", "cf-coder", "claude-coder"] as const;
+const TENANTS = ["generic", "coding", "anthropic-coding"] as const;
 
 const get = (path: string) =>
   worker.fetch(new Request(`${AGENT_ORIGIN}${path}`), env);
@@ -132,7 +132,7 @@ describe("discovery", () => {
   it("404s a path the Worker does not serve", async () => {
     expect((await get("/nope")).status).toBe(404);
     // The old layout answered here; nothing should now.
-    expect((await get("/reactive/a2a")).status).toBe(404);
+    expect((await get("/generic/a2a")).status).toBe(404);
   });
 });
 
@@ -203,8 +203,8 @@ describe("tenant isolation", () => {
     // The isolation this design buys, and the thing the audience cannot express
     // — every tenant shares one endpoint and therefore one `aud`, so only the
     // tenant claim separates them.
-    const res = await rpc(sendMessage("cf-coder"), {
-      authorization: `Bearer ${await tokenFor("reactive")}`
+    const res = await rpc(sendMessage("coding"), {
+      authorization: `Bearer ${await tokenFor("generic")}`
     });
     expect(res.status).toBe(401);
   });
@@ -212,7 +212,7 @@ describe("tenant isolation", () => {
   it("refuses a token carrying no tenant claim", async () => {
     // A gatekeeper too old to scope its tokens. Treating this as a wildcard would
     // reopen the replay above for every such caller.
-    const res = await rpc(sendMessage("reactive"), {
+    const res = await rpc(sendMessage("generic"), {
       authorization: `Bearer ${await tokenFor("")}`
     });
     expect(res.status).toBe(401);
@@ -221,7 +221,7 @@ describe("tenant isolation", () => {
   it("refuses a request naming no tenant", async () => {
     const res = await rpc(
       { jsonrpc: "2.0", id: 1, method: "SendMessage", params: {} },
-      { authorization: `Bearer ${await tokenFor("reactive")}` }
+      { authorization: `Bearer ${await tokenFor("generic")}` }
     );
     const body = await res.json<{ error: { message: string } }>();
     expect(body.error.message).toMatch(/params\.tenant is required/);
@@ -236,7 +236,7 @@ describe("tenant isolation", () => {
   });
 
   it("refuses an unauthenticated call", async () => {
-    const res = await rpc(sendMessage("reactive"));
+    const res = await rpc(sendMessage("generic"));
     expect(res.status).toBe(401);
   });
 
@@ -245,7 +245,7 @@ describe("tenant isolation", () => {
       new Request(`${AGENT_ORIGIN}/not-a-real-endpoint`, {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify(sendMessage("reactive"))
+        body: JSON.stringify(sendMessage("generic"))
       }),
       env
     );

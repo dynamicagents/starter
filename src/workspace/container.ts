@@ -11,17 +11,6 @@ import {
 const INSTALL_GATE_MS = 180_000;
 
 /**
- * What one container command may run for.
- *
- * A command runs inside a turn, and Think cuts a turn after roughly three to
- * fifteen minutes; the tool call in flight at the cut is lost, and the model
- * gets back only that it was interrupted. The container's own kill returns
- * every line the command wrote. So the command is bounded well inside a turn,
- * together with the install gate, which shares the same tool call.
- */
-const COMMAND_TIMEOUT_MS = 400_000;
-
-/**
  * What a read-only parent is told about the workspace, in place of the
  * `computer` plugin's own block — which describes a shell, a writer and an
  * editor the parent does not have. A model told it has a shell spends a turn
@@ -104,20 +93,10 @@ export function workspaceContainer(
      * short, report "nothing was run — call again in a moment", and spend a
      * step on it.
      *
-     * Three minutes covers a measured install with room. It is not free: the wait
-     * happens inside the same tool call as the command, and both come out of one
-     * turn; see {@link COMMAND_TIMEOUT_MS}.
+     * Three minutes covers a measured install with room.
      */
-    installGateMs: INSTALL_GATE_MS,
-    /**
-     * Stated rather than defaulted, because it is one side of an invariant held
-     * with the turn and the install gate; see {@link COMMAND_TIMEOUT_MS}.
-     *
-     * Note the other end of the same command: the container-idle window in
-     * `@dynamicagents/plugins/workspace` must stay above this, or the idle
-     * sweeper destroys the container out from under a command still running in
-     * it. That package's default is the one this agent takes.
-     */
-    timeoutMs: COMMAND_TIMEOUT_MS
+    installGateMs: INSTALL_GATE_MS
+    // No `timeoutMs`: the plugin's default is the one its container-idle window
+    // is sized against, and a longer one needs that window raised with it.
   };
 }

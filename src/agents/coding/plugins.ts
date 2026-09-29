@@ -44,7 +44,7 @@ export function container(
   env: Env,
   workspaceName: () => string
 ): ComputerConfig {
-  return workspaceContainer(env.CF_CODER_WORKSPACE, workspaceName);
+  return workspaceContainer(env.CODING_WORKSPACE, workspaceName);
 }
 
 /**
@@ -61,8 +61,8 @@ export const parentPlugins = (
   config: ComputerConfig
 ): AgentPlugin<Env>[] => {
   const workspace = () =>
-    env.CF_CODER_WORKSPACE.get(
-      env.CF_CODER_WORKSPACE.idFromName(config.workspaceName())
+    env.CODING_WORKSPACE.get(
+      env.CODING_WORKSPACE.idFromName(config.workspaceName())
     );
   /** Shared with the workspace object — see `@/workspace/git-identity`. */
   const author = gitIdentity(env);
@@ -80,7 +80,7 @@ export const parentPlugins = (
       // its own environment — so the container never holds the credential at
       // all, in any command, for any length of time.
       git: workspaceGit({
-        binding: env.CF_CODER_WORKSPACE,
+        binding: env.CODING_WORKSPACE,
         // The same name `config` resolves, and it has to be: a push acting on a
         // different workspace than the container writes into would push whatever
         // that other checkout happened to contain.

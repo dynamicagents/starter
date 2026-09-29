@@ -6,13 +6,13 @@ import {
   definePlugin,
   type SubAgentSpec
 } from "@dynamicagents/core";
-import { ReactiveGeneral } from "@/agents/reactive/children";
-import { CfCoderCode } from "@/agents/cf-coder/children";
+import { GenericChild } from "@/agents/generic/children";
+import { CodingChild } from "@/agents/coding/children";
 import {
-  ClaudeCoderReader,
-  ClaudeCoderSession
-} from "@/agents/claude-coder/children";
-import { CF_CODER, CLAUDE_CODER, REACTIVE } from "@/config";
+  AnthropicCodingReaderChild,
+  AnthropicCodingWriterChild
+} from "@/agents/anthropic-coding/children";
+import { CODING, ANTHROPIC_CODING, GENERIC } from "@/config";
 
 /**
  * The seam between this repo and the packages it composes: what happens when
@@ -21,10 +21,10 @@ import { CF_CODER, CLAUDE_CODER, REACTIVE } from "@/config";
  */
 
 const SPECS: [string, SubAgentSpec<unknown, unknown>][] = [
-  ["ReactiveGeneral", ReactiveGeneral.spec],
-  ["CfCoderCode", CfCoderCode.spec],
-  ["ClaudeCoderSession", ClaudeCoderSession.spec],
-  ["ClaudeCoderReader", ClaudeCoderReader.spec]
+  ["GenericChild", GenericChild.spec],
+  ["CodingChild", CodingChild.spec],
+  ["AnthropicCodingWriterChild", AnthropicCodingWriterChild.spec],
+  ["AnthropicCodingReaderChild", AnthropicCodingReaderChild.spec]
 ] as [string, SubAgentSpec<unknown, unknown>][];
 
 describe("a sub-agent this repo binds", () => {
@@ -41,10 +41,10 @@ describe("a sub-agent this repo binds", () => {
     expect(
       Object.fromEntries(SPECS.map(([name, spec]) => [name, !!spec.detached]))
     ).toEqual({
-      ReactiveGeneral: false,
-      CfCoderCode: true,
-      ClaudeCoderSession: true,
-      ClaudeCoderReader: true
+      GenericChild: false,
+      CodingChild: true,
+      AnthropicCodingWriterChild: true,
+      AnthropicCodingReaderChild: true
     });
   });
 
@@ -80,14 +80,14 @@ describe("contract skew between the repos", () => {
 });
 
 describe("tuning", () => {
-  it("runs claude-coder's parent on the full-size model, and only it", () => {
-    expect(CLAUDE_CODER.modelId).not.toBe(CF_CODER.modelId);
-    expect(REACTIVE.modelId).toBe(CF_CODER.modelId);
-    // Everything else is cf-coder's, so a change to one reaches the other.
-    expect({ ...CLAUDE_CODER, modelId: CF_CODER.modelId }).toEqual(CF_CODER);
+  it("runs anthropic-coding's parent on the full-size model, and only it", () => {
+    expect(ANTHROPIC_CODING.modelId).not.toBe(CODING.modelId);
+    expect(GENERIC.modelId).toBe(CODING.modelId);
+    // Everything else is `coding`'s, so a change to one reaches the other.
+    expect({ ...ANTHROPIC_CODING, modelId: CODING.modelId }).toEqual(CODING);
   });
 
-  it.each([REACTIVE, CF_CODER, CLAUDE_CODER])(
+  it.each([GENERIC, CODING, ANTHROPIC_CODING])(
     "keeps a recent tail inside the compaction threshold",
     (tuning) => {
       expect(tuning.keepRecentTokens).toBeLessThan(tuning.compactAfterTokens);

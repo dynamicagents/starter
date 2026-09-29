@@ -2,19 +2,25 @@ import { createA2AWorker } from "@dynamicagents/core/worker";
 import { Artifacts, handleArtifactRoute } from "@dynamicagents/core/artifacts";
 
 import { hostManifest } from "./host-manifest";
-import { reactive } from "./agents/reactive/definition";
-import { cfCoder } from "./agents/cf-coder/definition";
-import { claudeCoder } from "./agents/claude-coder/definition";
+import { generic } from "./agents/generic/definition";
+import { coding } from "./agents/coding/definition";
+import { anthropicCoding } from "./agents/anthropic-coding/definition";
 
-// Durable Objects must be exported from the Worker entry so the runtime can
-// resolve them by class name. The sub-agent classes are **facets**: they need no
-// wrangler binding and no `new_sqlite_classes` entry, only this export, so
-// `ctx.exports` can find them.
-export { Reactive } from "./agents/reactive/agent";
-export { ReactiveGeneral } from "./agents/reactive/children";
+// Durable Objects and Workflows must be exported from the Worker entry so the
+// runtime can resolve them by class name. Each tenant is a task host, the
+// pipeline it runs each task as, and the step agent the pipeline's steps run
+// on. The sub-agent classes are **facets**: they need no wrangler binding and
+// no `new_sqlite_classes` entry, only this export, so `ctx.exports` can find
+// them.
+export { GenericHost } from "./agents/generic/host";
+export { GenericWorkflow } from "./agents/generic/workflow";
+export { GenericAgent } from "./agents/generic/agent";
+export { GenericChild } from "./agents/generic/children";
 
-export { CfCoder } from "./agents/cf-coder/agent";
-export { CfCoderCode } from "./agents/cf-coder/children";
+export { CodingHost } from "./agents/coding/host";
+export { CodingWorkflow } from "./agents/coding/workflow";
+export { CodingAgent } from "./agents/coding/agent";
+export { CodingChild } from "./agents/coding/children";
 
 // The workspaces: a Durable Object holding one repository's filesystem in
 // SQLite, paired with the container that mounts it. One class per agent that has
@@ -22,8 +28,8 @@ export { CfCoderCode } from "./agents/cf-coder/children";
 // agents' checkouts in one namespace. Both are thin subclasses of the base in
 // `@dynamicagents/plugins/workspace`; `verify:isolation` keeps each out of
 // the bundles that do not install it.
-export { CfCoderWorkspaceDO } from "./agents/cf-coder/workspace-do";
-export { ClaudeCoderWorkspaceDO } from "./agents/claude-coder/workspace-do";
+export { CodingWorkspace } from "./agents/coding/workspace";
+export { AnthropicCodingWorkspace } from "./agents/anthropic-coding/workspace";
 
 // Not one of our classes, and **not optional**. `CloudflareContainerBackend`
 // builds the container's egress loopback with `ctx.exports.WorkspaceProxy`, so
@@ -38,11 +44,13 @@ export { WorkspaceProxy } from "@cloudflare/computer";
 // beside the binding in wrangler.jsonc.
 export { Artifacts };
 
-export { ClaudeCoder } from "./agents/claude-coder/agent";
+export { AnthropicCodingHost } from "./agents/anthropic-coding/host";
+export { AnthropicCodingWorkflow } from "./agents/anthropic-coding/workflow";
+export { AnthropicCodingAgent } from "./agents/anthropic-coding/agent";
 export {
-  ClaudeCoderSession,
-  ClaudeCoderReader
-} from "./agents/claude-coder/children";
+  AnthropicCodingWriterChild,
+  AnthropicCodingReaderChild
+} from "./agents/anthropic-coding/children";
 
 /**
  * One Worker, every agent below, addressed by A2A `tenant`.
@@ -69,7 +77,7 @@ export {
  */
 const a2a = createA2AWorker<Env>({
   manifest: hostManifest,
-  agents: [reactive, cfCoder, claudeCoder]
+  agents: [generic, coding, anthropicCoding]
 });
 
 export default {

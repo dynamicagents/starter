@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { env } from "cloudflare:workers";
 import { makeDoHelpers } from "@dynamicagents/core/testing";
-import type { CfCoderWorkspaceDO } from "@/index";
+import type { CodingWorkspace } from "@/index";
 import type { PluginContext } from "@dynamicagents/core";
 import { openWorkspace, workspaceName } from "@dynamicagents/plugins/workspace";
 import { SCRATCH_OPEN_TOOL } from "@dynamicagents/plugins/scratch";
@@ -23,8 +23,8 @@ import { hostScratch, SCRATCH_DIR, SCRATCH_REPO } from "@/workspace/scratch";
  * container — which is just as well, since the pool cannot start one.
  */
 
-const { freshStub: freshWorkspace } = makeDoHelpers<CfCoderWorkspaceDO>(
-  env.CF_CODER_WORKSPACE
+const { freshStub: freshWorkspace } = makeDoHelpers<CodingWorkspace>(
+  env.CODING_WORKSPACE
 );
 
 /** `ActiveRepo` over two variables — the same contract, without the SQLite. */
@@ -91,7 +91,7 @@ async function open(
 }
 
 /** A workspace with a scratchpad on disk, as `git init` would leave it. */
-async function seedScratch(stub: DurableObjectStub<CfCoderWorkspaceDO>) {
+async function seedScratch(stub: DurableObjectStub<CodingWorkspace>) {
   using ws = await openWorkspace(stub);
   await ws.fs.mkdir(`${SCRATCH_DIR}/.git`, { recursive: true });
   await ws.fs.writeFile(`${SCRATCH_DIR}/.git/HEAD`, "ref: refs/heads/main\n");

@@ -5,8 +5,8 @@ import { manifest } from "./manifest";
  * How this agent is reached: its tenant id, its card and its Durable Object,
  * declared once. `src/index.ts` mounts the tenant from this.
  */
-export const claudeCoder = defineAgent({
-  tenant: "claude-coder",
+export const coding = defineAgent({
+  tenant: "coding",
   manifest,
-  agent: (env: Env) => env.ClaudeCoder
+  agent: (env: Env) => env.CodingHost
 });

@@ -1,11 +1,11 @@
 import { ASK_GUIDANCE, BACKGROUND_GUIDANCE, WAIT_GUIDANCE } from "@/copy";
 
 /**
- * The claude-coder agent's soul — its identity and operating rules.
+ * The anthropic-coding agent's soul — its identity and operating rules.
  *
- * A near-sibling of `../cf-coder/soul.ts`, and the differences are the interesting
+ * A near-sibling of `../coding/soul.ts`, and the differences are the interesting
  * part. Both agents delegate every edit and own the git history; what changes is
- * *what they delegate to*. cf-coder's `code` is a sub-agent on a Workers AI
+ * *what they delegate to*. `coding`'s `code` is a sub-agent on a Workers AI
  * model, briefed and bounded by this repository. A `claude_code` session is
  * a whole Claude Code process — its own loop, its own tools, its own context
  * management — that cannot be interrupted, cannot ask a question, and costs
@@ -54,7 +54,7 @@ const LINES: string[] = [
   // changes how a brief should be written.
   "A session cannot ask you anything once it starts. Anything it would need to ask, decide first — or ask the user yourself before delegating. Put everything that matters in the brief: it cannot see this conversation.",
 
-  // The advertised `investigate` skill, which the rest of this soul would
+  // The advertised `planning` skill, which the rest of this soul would
   // otherwise contradict outright. A card that offers findings-without-a-PR
   // while the soul says "finish by opening a pull request" hands a gatekeeper a
   // contract the agent is instructed not to honour — so the exception is stated
@@ -66,7 +66,7 @@ const LINES: string[] = [
   "Done means: the change works, the project's own tests and linters were run and passed, and the diff contains nothing you were not asked for. If you could not get there, say so plainly and describe exactly where you stopped — a half-finished branch reported as finished costs a reviewer far more than an honest failure.",
 
   // The review step, which is the parent's entire technical contribution. It
-  // matters more here than in cf-coder: a Claude Code session is autonomous for
+  // matters more here than in `coding`: a Claude Code session is autonomous for
   // tens of minutes and reports a summary of its own work.
   "A writing session works in a worktree of its own and commits to a branch its report names — in each repository it changed, a submodule included. Nothing is pushed: **the branch is the deliverable, and it is in that worktree, not your checkout.** Switch your tools there with `repo_worktree`, read each changed repository's diff with `repo_diff` and `base`, push that branch, under the name the report gives it, with `repo_push` and open the pull request from the same directory, then switch back — `repo_push` cannot rename a branch, and a name of your own publishes nothing. The session tells you what it did; the diff tells you what happened. Where they disagree, the diff is right — delegate a correction with `continue` set to the branch, rather than proposing something you cannot explain. On a large change, size it up first and then read the parts that matter.",
 
@@ -110,6 +110,20 @@ export const SOUL = [
   "",
   WAIT_GUIDANCE
 ].join("\n");
+
+/**
+ * What each role in `./workflow.ts`'s pipeline asks, put ahead of the job's input.
+ * The plan's tools are held to reading by `./roles.ts`; this says why, so the
+ * model plans rather than discovering the wall.
+ */
+export const ROLE_BRIEFS: Record<string, string> = {
+  plan: "This job is the plan, and only the plan. Open the repository if the request names one, and read what the change will touch — through `claude_code_read` for anything beyond a quick look. Then reply with the plan itself: what will change and where, what you will leave alone, and how the result will be checked. Name no branch: a writing session commits to a branch of its own, and that branch is the pull request's. Change nothing: no writing session, no commit, no push, no pull request. The caller reads your reply and approves it before anything is built, so write it for them. A request that asks a question rather than for a change is answered here, in full: the caller can stop at the plan.",
+  code: "The caller approved the plan below. Carry it out to a pull request, as you would any change, and keep to it: if the work shows the plan was wrong, say so in your report rather than quietly doing something else."
+};
+
+/** Where a first attempt's work is, after `@/copy`'s `RETRY_BRIEF`. */
+export const RETRY_WORK =
+  "`repo_worktrees` lists the branches its writing sessions committed to, and anything it pushed is on the remote.";
 
 /** What the model is told the `memory` block is for. */
 export const MEMORY =

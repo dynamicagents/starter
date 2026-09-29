@@ -25,7 +25,7 @@ import {
   sessionFooter,
   warningPrompt,
   writingNote
-} from "@/agents/claude-coder/session-report";
+} from "@/agents/claude-coder/session";
 import { CLAUDE_CODE_SESSION } from "@/config";
 import {
   claudeCodeConfig,

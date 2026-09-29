@@ -43,7 +43,7 @@ import {
   type RepoStart,
   type Uncommitted,
   type WritingOutcome
-} from "./session-report";
+} from "./session";
 
 /**
  * The claude-coder's sub-agents: a Claude Code session each, not a model loop.

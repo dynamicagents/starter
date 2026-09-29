@@ -162,15 +162,13 @@
     {
       "class_name": "AnthropicCodingWorkspace",
       "image": "./Dockerfile",
-      // **Pinned, and the pin is load-bearing.** The egress gateway rewrites
-      // this client's requests and `events.ts` parses its stream; both are
-      // written against a wire shape captured from this exact version. A bump
-      // needs the smoke test re-run — see the Dockerfile.
+      // **Pinned to the version the claude-code plugin verified**, and
+      // `npm run check` fails when the two differ — the Dockerfile carries why.
       // `gh` is unauthenticated and can only read public repositories — the
       // Dockerfile block carries why, and why it still needs a GH_TOKEN. The
       // checksum is pinned because the build downloads the tarball.
       "image_vars": {
-        "CLAUDE_CODE_VERSION": "2.1.238",
+        "CLAUDE_CODE_VERSION": "2.1.285",
         "GH_VERSION": "2.101.0",
         "GH_SHA256": "9bca2d1c16825f109907a23307628a2f0698fbf99662b73a5cf0b020293072b8"
       },

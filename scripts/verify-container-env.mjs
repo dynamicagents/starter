@@ -18,7 +18,7 @@
  * script, and hence its place in `npm run check`.
  */
 
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 
 /** What `computerd` passes through under its own name. */
 const INHERITED = ["PATH", "HOME", "TMPDIR", "TZ", "LANG", "TERM"];
@@ -114,3 +114,45 @@ if (tag !== version) {
 }
 
 console.log(`✓ Dockerfile: computerd ${tag} matches @cloudflare/computer`);
+
+/**
+ * The Claude Code the image installs is the version the claude-code plugin
+ * verified its egress gateway and stream parser against.
+ *
+ * Another pair released apart that fails only in a running container: a CLI
+ * whose requests or `stream-json` lines moved builds and deploys cleanly. The
+ * plugin moves its verified version only once its probe passes, so a pin that
+ * matches it is one somebody checked.
+ */
+const wrangler = readFileSync(
+  new URL("../wrangler.jsonc", import.meta.url),
+  "utf8"
+);
+const pinned = /"CLAUDE_CODE_VERSION":\s*"([^"]*)"/.exec(wrangler)?.[1];
+const verifiedModule = new URL(
+  "../node_modules/@dynamicagents/plugins/dist/claude-code/verified.js",
+  import.meta.url
+);
+const verified = existsSync(verifiedModule)
+  ? (await import(verifiedModule.href)).VERIFIED_CLAUDE_CODE_VERSION
+  : undefined;
+
+if (!verified) {
+  console.error(
+    "@dynamicagents/plugins names no verified Claude Code version — install one " +
+      "that exports VERIFIED_CLAUDE_CODE_VERSION from its claude-code subpath."
+  );
+  process.exit(1);
+}
+if (pinned !== verified) {
+  console.error(
+    `wrangler.jsonc: CLAUDE_CODE_VERSION is ${pinned ?? "not pinned"} but the ` +
+      `claude-code plugin verified ${verified}. Set it to ${verified}; a newer ` +
+      "CLI is verified in the plugin first, by its probe."
+  );
+  process.exit(1);
+}
+
+console.log(
+  `✓ wrangler.jsonc: Claude Code ${pinned} is the version the claude-code plugin verified`
+);

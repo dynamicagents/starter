@@ -7,12 +7,12 @@ import {
 } from "@dynamicagents/core/workflow";
 
 /**
- * reactive's pipeline: one step, the whole task, on the caller's own
- * `Reactive`. A step before it or after it — triage, a judge — goes here.
+ * generic's pipeline: one step, the whole task, on the caller's own
+ * `Generic`. A step before it or after it — triage, a judge — goes here.
  */
-export class ReactiveTask extends TaskWorkflow<Env> {
+export class GenericTask extends TaskWorkflow<Env> {
   /** The step agent's binding. A test worker points it at a scripted one. */
-  protected readonly reactive: string = "Reactive";
+  protected readonly generic: string = "Generic";
 
   override run(event: WorkflowEvent<TaskParams>, step: WorkflowStep) {
     return super.run(event, step);
@@ -23,7 +23,7 @@ export class ReactiveTask extends TaskWorkflow<Env> {
     step: TaskStep
   ): Promise<PipelineResult> {
     const reply = await step.agent("main", {
-      agent: this.reactive,
+      agent: this.generic,
       input: event.payload.text
     });
     return { reply };

@@ -27,17 +27,17 @@ export interface AgentTuning {
 }
 
 /**
- * The reactive agent. Tight on purpose: a delegating agent accumulates
+ * The generic agent. Tight on purpose: a delegating agent accumulates
  * sub-agent results fast.
  */
-export const REACTIVE: AgentTuning = {
+export const GENERIC: AgentTuning = {
   modelId: "@cf/zai-org/glm-5.3-flash",
   compactAfterTokens: 16_000,
   keepRecentTokens: 5_000
 };
 
 /**
- * cf-coder. Wider than reactive's, for one reason: what the model can no
+ * cf-coder. Wider than generic's, for one reason: what the model can no
  * longer see it pays a container round trip to rediscover.
  *
  * Do not point the model at a Claude model: reaching one on a subscription

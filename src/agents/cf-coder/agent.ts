@@ -29,7 +29,7 @@ const LABEL = "cf-coder";
 /**
  * The cf-coder agent.
  *
- * A delegating agent like `reactive`: the job, the turn and delegation are
+ * A delegating agent like `generic`: the job, the turn and delegation are
  * `@dynamicagents/core/agent`, and the A2A task is `./host.ts`'s. What makes it
  * the odd one out is the container underneath — so the members below are mostly
  * lifecycle, not inference: a weekly reclaim sweep for workspaces nothing is

@@ -6,13 +6,13 @@ import {
   definePlugin,
   type SubAgentSpec
 } from "@dynamicagents/core";
-import { ReactiveGeneral } from "@/agents/reactive/children";
+import { GenericGeneral } from "@/agents/generic/children";
 import { CfCoderCode } from "@/agents/cf-coder/children";
 import {
   ClaudeCoderReader,
   ClaudeCoderSession
 } from "@/agents/claude-coder/children";
-import { CF_CODER, CLAUDE_CODER, REACTIVE } from "@/config";
+import { CF_CODER, CLAUDE_CODER, GENERIC } from "@/config";
 
 /**
  * The seam between this repo and the packages it composes: what happens when
@@ -21,7 +21,7 @@ import { CF_CODER, CLAUDE_CODER, REACTIVE } from "@/config";
  */
 
 const SPECS: [string, SubAgentSpec<unknown, unknown>][] = [
-  ["ReactiveGeneral", ReactiveGeneral.spec],
+  ["GenericGeneral", GenericGeneral.spec],
   ["CfCoderCode", CfCoderCode.spec],
   ["ClaudeCoderSession", ClaudeCoderSession.spec],
   ["ClaudeCoderReader", ClaudeCoderReader.spec]
@@ -41,7 +41,7 @@ describe("a sub-agent this repo binds", () => {
     expect(
       Object.fromEntries(SPECS.map(([name, spec]) => [name, !!spec.detached]))
     ).toEqual({
-      ReactiveGeneral: false,
+      GenericGeneral: false,
       CfCoderCode: true,
       ClaudeCoderSession: true,
       ClaudeCoderReader: true
@@ -82,12 +82,12 @@ describe("contract skew between the repos", () => {
 describe("tuning", () => {
   it("runs claude-coder's parent on the full-size model, and only it", () => {
     expect(CLAUDE_CODER.modelId).not.toBe(CF_CODER.modelId);
-    expect(REACTIVE.modelId).toBe(CF_CODER.modelId);
+    expect(GENERIC.modelId).toBe(CF_CODER.modelId);
     // Everything else is cf-coder's, so a change to one reaches the other.
     expect({ ...CLAUDE_CODER, modelId: CF_CODER.modelId }).toEqual(CF_CODER);
   });
 
-  it.each([REACTIVE, CF_CODER, CLAUDE_CODER])(
+  it.each([GENERIC, CF_CODER, CLAUDE_CODER])(
     "keeps a recent tail inside the compaction threshold",
     (tuning) => {
       expect(tuning.keepRecentTokens).toBeLessThan(tuning.compactAfterTokens);

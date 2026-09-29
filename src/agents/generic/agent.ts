@@ -5,16 +5,16 @@ import type { SubAgentClass } from "@dynamicagents/core/subagent";
 import type { StepJob } from "@dynamicagents/core/workflow";
 import type { ContextConfig } from "agents/context";
 import type { LanguageModel } from "ai";
-import { REACTIVE } from "@/config";
+import { GENERIC } from "@/config";
 import { RETRY_BRIEF } from "@/copy";
 import { agentModel } from "@/model";
-import { ReactiveGeneral } from "./children";
-import { reactive } from "./definition";
+import { GenericGeneral } from "./children";
+import { generic } from "./definition";
 import { plugins } from "./plugins";
 import { MEMORY, SOUL } from "./soul";
 
 /**
- * The reactive agent: the flagship.
+ * The generic agent: the flagship.
  *
  * The job, the turn and delegation are `@dynamicagents/core/agent`, and the A2A
  * task is `./host.ts`'s. What is actually *this agent* is the members below plus
@@ -22,15 +22,15 @@ import { MEMORY, SOUL } from "./soul";
  * is the same members with different answers. If adding a domain to an agent
  * needed more than that, the plugin contract would be wrong.
  */
-export class Reactive extends StepAgent<Env> {
-  protected readonly compactAfterTokens = REACTIVE.compactAfterTokens;
-  protected readonly keepRecentTokens = REACTIVE.keepRecentTokens;
+export class Generic extends StepAgent<Env> {
+  protected readonly compactAfterTokens = GENERIC.compactAfterTokens;
+  protected readonly keepRecentTokens = GENERIC.keepRecentTokens;
 
   override getModel(): ThinkModel {
     return agentModel(
       this.env,
-      { modelId: REACTIVE.modelId, name: this.name },
-      { agent: reactive.tenant, taskId: this.turnTaskId(), phase: "turn" }
+      { modelId: GENERIC.modelId, name: this.name },
+      { agent: generic.tenant, taskId: this.turnTaskId(), phase: "turn" }
     );
   }
 
@@ -38,8 +38,8 @@ export class Reactive extends StepAgent<Env> {
   protected override compactionModel(): LanguageModel {
     return agentModel(
       this.env,
-      { modelId: REACTIVE.modelId, name: this.name },
-      { agent: reactive.tenant, phase: "compaction" }
+      { modelId: GENERIC.modelId, name: this.name },
+      { agent: generic.tenant, phase: "compaction" }
     );
   }
 
@@ -56,7 +56,7 @@ export class Reactive extends StepAgent<Env> {
   }
 
   override getSubAgents(): SubAgentClass[] {
-    return [ReactiveGeneral];
+    return [GenericGeneral];
   }
 
   /** A retry is told so, and to carry on from what the first attempt left. */

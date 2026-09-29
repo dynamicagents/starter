@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import { env } from "cloudflare:workers";
 import { runInDurableObject } from "cloudflare:test";
 import type { LanguageModel } from "ai";
-import { reactive } from "@/agents/reactive/definition";
+import { generic } from "@/agents/generic/definition";
 import { cfCoder } from "@/agents/cf-coder/definition";
 import { claudeCoder } from "@/agents/claude-coder/definition";
 
@@ -58,12 +58,12 @@ async function gatewayOf(
   return gateways[0];
 }
 
-const PARENTS = [reactive, cfCoder, claudeCoder];
+const PARENTS = [generic, cfCoder, claudeCoder];
 
 /** An agent's own object, by tenant. `resolveAgent` hands back its RPC shape. */
 function parentStub(tenant: string, key: string) {
   const namespaces: Record<string, DurableObjectNamespace> = {
-    [reactive.tenant]: env.Reactive as unknown as DurableObjectNamespace,
+    [generic.tenant]: env.Generic as unknown as DurableObjectNamespace,
     [cfCoder.tenant]: env.CfCoder as unknown as DurableObjectNamespace,
     [claudeCoder.tenant]: env.ClaudeCoder as unknown as DurableObjectNamespace
   };
@@ -115,7 +115,7 @@ describe("an agent's calls", () => {
  */
 describe("a sub-agent's calls", () => {
   it.each([
-    ["REACTIVE_GENERAL", "ReactiveGeneral", reactive.tenant],
+    ["GENERIC_GENERAL", "GenericGeneral", generic.tenant],
     ["CF_CODER_CODE", "CfCoderCode", cfCoder.tenant]
   ])("are the parent's, as %s", async (binding, subAgent, tenant) => {
     const namespace = (

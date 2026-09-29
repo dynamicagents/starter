@@ -106,11 +106,11 @@ export default defineConfig({
         // `runAgentTool` cannot create a child. See "Notes for testing" in
         // node_modules/agents/docs/sub-agents.md.
         durableObjects: {
-          TEST_REACTIVE: { className: "TestReactive", useSQLite: true },
+          TEST_GENERIC: { className: "TestGeneric", useSQLite: true },
           TEST_CF_CODER: { className: "TestCfCoder", useSQLite: true },
           TEST_CLAUDE_CODER: { className: "TestClaudeCoder", useSQLite: true },
-          TEST_REACTIVE_TASKS: {
-            className: "TestReactiveTasks",
+          TEST_GENERIC_TASKS: {
+            className: "TestGenericTasks",
             useSQLite: true
           },
           TEST_CF_CODER_TASKS: {
@@ -121,7 +121,7 @@ export default defineConfig({
             className: "TestClaudeCoderTasks",
             useSQLite: true
           },
-          REACTIVE_GENERAL: { className: "ReactiveGeneral", useSQLite: true },
+          GENERIC_GENERAL: { className: "GenericGeneral", useSQLite: true },
           CF_CODER_CODE: { className: "CfCoderCode", useSQLite: true },
           CLAUDE_CODER_SESSION: {
             className: "ClaudeCoderSession",
@@ -131,8 +131,8 @@ export default defineConfig({
             className: "ClaudeCoderReader",
             useSQLite: true
           },
-          TEST_REACTIVE_GENERAL: {
-            className: "TestReactiveGeneral",
+          TEST_GENERIC_GENERAL: {
+            className: "TestGenericGeneral",
             useSQLite: true
           },
           TEST_CF_CODER_CODE: { className: "TestCfCoderCode", useSQLite: true },
@@ -147,9 +147,9 @@ export default defineConfig({
         },
         // The scripted pipelines, beside the real ones `wrangler.jsonc` binds.
         workflows: {
-          TEST_REACTIVE_TASK: {
-            name: "test-reactive-task",
-            className: "TestReactiveTask"
+          TEST_GENERIC_TASK: {
+            name: "test-generic-task",
+            className: "TestGenericTask"
           },
           TEST_CF_CODER_TASK: {
             name: "test-cf-coder-task",

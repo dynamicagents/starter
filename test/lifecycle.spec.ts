@@ -29,7 +29,7 @@ const testEnv = env as unknown as TestEnv;
 
 /** claude-coder's tasks are a pipeline: `./claude-coder-pipeline.spec.ts`. */
 const TENANTS = [
-  { tenant: "reactive", background: false },
+  { tenant: "generic", background: false },
   { tenant: "cf-coder", background: true }
 ] as const;
 

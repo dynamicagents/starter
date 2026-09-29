@@ -38,7 +38,7 @@
 //   npm run cf -- logs --worker da-starter --app --since 30m
 //   npm run cf -- ai --since 2h
 //   npm run cf -- ai --task <taskId> --all
-//   npm run cf -- ai --agent reactive --phase turn --since 1d
+//   npm run cf -- ai --agent generic --phase turn --since 1d
 //   npm run cf -- ai 01KY4PSY6T1HBA7A2V22NKCFZC
 //   npm run cf -- containers
 //   npm run cf -- wf claude-coder-task

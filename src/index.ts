@@ -2,7 +2,7 @@ import { createA2AWorker } from "@dynamicagents/core/worker";
 import { Artifacts, handleArtifactRoute } from "@dynamicagents/core/artifacts";
 
 import { hostManifest } from "./host-manifest";
-import { reactive } from "./agents/reactive/definition";
+import { generic } from "./agents/generic/definition";
 import { cfCoder } from "./agents/cf-coder/definition";
 import { claudeCoder } from "./agents/claude-coder/definition";
 
@@ -12,10 +12,10 @@ import { claudeCoder } from "./agents/claude-coder/definition";
 // on. The sub-agent classes are **facets**: they need no wrangler binding and
 // no `new_sqlite_classes` entry, only this export, so `ctx.exports` can find
 // them.
-export { ReactiveTasks } from "./agents/reactive/host";
-export { ReactiveTask } from "./agents/reactive/task";
-export { Reactive } from "./agents/reactive/agent";
-export { ReactiveGeneral } from "./agents/reactive/children";
+export { GenericTasks } from "./agents/generic/host";
+export { GenericTask } from "./agents/generic/task";
+export { Generic } from "./agents/generic/agent";
+export { GenericGeneral } from "./agents/generic/children";
 
 export { CfCoderTasks } from "./agents/cf-coder/host";
 export { CfCoderTask } from "./agents/cf-coder/task";
@@ -77,7 +77,7 @@ export {
  */
 const a2a = createA2AWorker<Env>({
   manifest: hostManifest,
-  agents: [reactive, cfCoder, claudeCoder]
+  agents: [generic, cfCoder, claudeCoder]
 });
 
 export default {

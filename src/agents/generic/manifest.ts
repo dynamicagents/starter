@@ -12,7 +12,7 @@ import type { AgentManifest } from "@dynamicagents/core/a2a";
  * here instead of silently going unadvertised.
  */
 export const manifest: AgentManifest = {
-  name: "Reactive Agent",
+  name: "Generic Agent",
   description:
     "A delegating A2A agent. Verifies the gatekeeper identity JWT, then answers the " +
     "caller on a Workers AI model — handing work to sub-agents when it helps — " +

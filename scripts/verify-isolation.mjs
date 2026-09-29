@@ -62,12 +62,12 @@ const plugin = (name) => `@dynamicagents/plugins/dist/${name}/`;
  */
 const AGENTS = [
   {
-    name: "reactive",
+    name: "generic",
     entries: [
-      "src/agents/reactive/host.ts",
-      "src/agents/reactive/task.ts",
-      "src/agents/reactive/agent.ts",
-      "src/agents/reactive/children.ts"
+      "src/agents/generic/host.ts",
+      "src/agents/generic/task.ts",
+      "src/agents/generic/agent.ts",
+      "src/agents/generic/children.ts"
     ],
     // Every container-side plugin, and the container client itself: this agent's
     // files are Think's own workspace, in its SQLite.
@@ -105,7 +105,7 @@ const AGENTS = [
     // which would also put an Anthropic credential path in an agent that has no
     // business with one.
     forbidden: [plugin("claude-code")],
-    // Measured 13474 KiB. Over reactive's by the container client and
+    // Measured 13474 KiB. Over generic's by the container client and
     // `@cloudflare/computer/git`, which bundles isomorphic-git so that clone,
     // fetch and push run on this side of the container boundary and the forge
     // token never crosses it. A workspace agent, so it also carries `/alarm`
@@ -201,7 +201,7 @@ for (const agent of AGENTS) {
         external: EXTERNAL,
         // Required, not cosmetic. The Agents SDK resolves a facet through
         // `ctx.exports[this.constructor.name]`, so a build that minifies class
-        // identifiers turns `ReactiveGeneral` into `_a` and the lookup fails at
+        // identifiers turns `GenericGeneral` into `_a` and the lookup fails at
         // runtime. Keeping names here also keeps this measurement honest against the
         // real deploy, which does the same.
         keepNames: true,

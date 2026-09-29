@@ -211,15 +211,15 @@
   // continuous history plus writable memory. A host's binding is named as its
   // class: `hostBinding` names it, and a workflow reaches the host through it.
   //
-  // The sub-agent classes (`ReactiveGeneral` and its siblings) are deliberately
+  // The sub-agent classes (`GenericGeneral` and its siblings) are deliberately
   // absent. Each is a facet created beneath its agent, so it needs no binding and
   // no `new_sqlite_classes` entry; it only has to be exported from src/index.ts
   // so `ctx.exports` can resolve it by class name. They DO need a test-only
   // binding — see the comment in vitest.config.ts.
   "durable_objects": {
     "bindings": [
-      { "class_name": "ReactiveTasks", "name": "ReactiveTasks" },
-      { "class_name": "Reactive", "name": "Reactive" },
+      { "class_name": "GenericTasks", "name": "GenericTasks" },
+      { "class_name": "Generic", "name": "Generic" },
       { "class_name": "CfCoderTasks", "name": "CfCoderTasks" },
       { "class_name": "CfCoder", "name": "CfCoder" },
       { "class_name": "ClaudeCoderTasks", "name": "ClaudeCoderTasks" },
@@ -320,13 +320,14 @@
     {
       // The agents move onto Think under new class names, behind task hosts,
       // and start empty: every task, conversation and memory the old classes
-      // held is dropped. The workspace objects are untouched, so every checkout
-      // survives.
+      // held is dropped. `deleted_classes` names each class as it is deployed,
+      // which is what a deletion is matched on. The workspace objects are
+      // untouched, so every checkout survives.
       "tag": "v10",
       "deleted_classes": ["ReactiveAgent", "CfCoderAgent", "ClaudeCoderAgent"],
       "new_sqlite_classes": [
-        "ReactiveTasks",
-        "Reactive",
+        "GenericTasks",
+        "Generic",
         "CfCoderTasks",
         "CfCoder",
         "ClaudeCoderTasks",
@@ -342,9 +343,9 @@
   // would be deleted with them.
   "workflows": [
     {
-      "name": "reactive-task",
-      "binding": "REACTIVE_TASK",
-      "class_name": "ReactiveTask"
+      "name": "generic-task",
+      "binding": "GENERIC_TASK",
+      "class_name": "GenericTask"
     },
     {
       "name": "cf-coder-task",

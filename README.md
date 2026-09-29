@@ -56,7 +56,7 @@ Register each agent with your gatekeeper using the **same endpoint** and its own
 
 | endpoint                    | tenant id      |
 | --------------------------- | -------------- |
-| `https://<your-worker>/a2a` | `reactive`     |
+| `https://<your-worker>/a2a` | `generic`      |
 | `https://<your-worker>/a2a` | `cf-coder`     |
 | `https://<your-worker>/a2a` | `claude-coder` |
 
@@ -84,17 +84,17 @@ A Worker is not one agent. The agents here are **tenants** of one deployment —
 one endpoint, one signing key, one card ([`src/index.ts`](src/index.ts)):
 
 ```ts
-// src/agents/reactive/definition.ts — declared once
-export const reactive = defineAgent({
-  tenant: "reactive",
+// src/agents/generic/definition.ts — declared once
+export const generic = defineAgent({
+  tenant: "generic",
   manifest,
-  agent: (env: Env) => env.Reactive
+  agent: (env: Env) => env.Generic
 });
 
 // src/index.ts — mounted
 createA2AWorker<Env>({
   manifest: hostManifest,
-  agents: [reactive, cfCoder, claudeCoder]
+  agents: [generic, cfCoder, claudeCoder]
 });
 ```
 
@@ -153,7 +153,7 @@ tenant-aware card method:
   "jsonrpc": "2.0",
   "id": 1,
   "method": "GetExtendedAgentCard",
-  "params": { "tenant": "reactive" }
+  "params": { "tenant": "generic" }
 }
 ```
 
@@ -187,14 +187,14 @@ request body, and a token minted for one agent would work against any sibling.
 
 | Agent                                       | What it is                                                             | Why it's here                                                                            |
 | ------------------------------------------- | ---------------------------------------------------------------------- | ---------------------------------------------------------------------------------------- |
-| [`reactive/`](src/agents/reactive/)         | Answers, and hands self-contained work to a sub-agent it waits for     | The flagship                                                                             |
+| [`generic/`](src/agents/generic/)           | Answers, and hands self-contained work to a sub-agent it waits for     | The flagship                                                                             |
 | [`cf-coder/`](src/agents/cf-coder/)         | Clones a repo into a Linux sandbox, changes it, opens a pull request   | Proves a plugin can own a Durable Object and a container without core knowing            |
 | [`claude-coder/`](src/agents/claude-coder/) | The same, but each sub-agent is a Claude Code session in the container | **Proves a sub-agent need not be a model loop at all** — its model is the session itself |
 
 Each is a task host, a pipeline and a step agent, all three from
 [`@dynamicagents/core`](https://github.com/dynamicagents/core): the host owns the A2A
 task, the pipeline runs it as steps, and the step agent — on `@cloudflare/think` —
-runs a step's job. reactive and cf-coder are one-step pipelines. A sub-agent that may
+runs a step's job. generic and cf-coder are one-step pipelines. A sub-agent that may
 run past the fifteen minutes a turn can last runs **in the background**: the job stays
 open, and its result arrives as a later turn.
 
@@ -328,7 +328,7 @@ Each agent has its own `plugins.ts`. Delete a line and that module leaves the bu
 entirely:
 
 ```ts
-// src/agents/reactive/plugins.ts
+// src/agents/generic/plugins.ts
 export const plugins = (env: Env): AgentPlugin<Env>[] => [
   browser({ binding: env.BROWSER })
 ];
@@ -357,7 +357,7 @@ and two instances would disagree about where the checkout is.
 
 A plugin is not a package; it is an object satisfying a contract, declared with
 `definePlugin`. A sub-agent is the same: a `SubAgentSpec` bound to a `SubAgent` class.
-[`src/agents/reactive/children.ts`](src/agents/reactive/children.ts) binds one this repo
+[`src/agents/generic/children.ts`](src/agents/generic/children.ts) binds one this repo
 writes — the `general` catch-all — and it is indistinguishable at the seam from the Claude
 Code specs `@dynamicagents/plugins` publishes.
 
@@ -507,7 +507,7 @@ src/
   model.ts              ← the one Workers AI model each class runs, tagged for AI Gateway
   workspace/            ← the container-backed workspace both coders share
   agents/
-    reactive/           ← agent, children (the `general` sub-agent), definition, plugins, soul, manifest
+    generic/           ← agent, children (the `general` sub-agent), definition, plugins, soul, manifest
     cf-coder/           ← the same set, plus the `code` spec and the workspace object
     claude-coder/       ← the same set, plus the Claude Code sessions' report and the workspace object
 test/

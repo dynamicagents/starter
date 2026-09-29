@@ -15,11 +15,11 @@ import { tool, type ToolSet } from "ai";
 import { z } from "zod";
 import { RETRY_BRIEF } from "@/copy";
 import { hostManifest } from "@/host-manifest";
-import { Reactive } from "@/agents/reactive/agent";
-import { ReactiveGeneral } from "@/agents/reactive/children";
-import { ReactiveTasks } from "@/agents/reactive/host";
-import { manifest as reactiveManifest } from "@/agents/reactive/manifest";
-import { ReactiveTask } from "@/agents/reactive/task";
+import { Generic } from "@/agents/generic/agent";
+import { GenericGeneral } from "@/agents/generic/children";
+import { GenericTasks } from "@/agents/generic/host";
+import { manifest as genericManifest } from "@/agents/generic/manifest";
+import { GenericTask } from "@/agents/generic/task";
 import { CfCoder } from "@/agents/cf-coder/agent";
 import { CfCoderCode } from "@/agents/cf-coder/children";
 import { CfCoderTasks } from "@/agents/cf-coder/host";
@@ -50,9 +50,9 @@ import { ClaudeCoderTask } from "@/agents/claude-coder/task";
 export * from "@/index";
 
 export interface TestEnv extends Env {
-  TEST_REACTIVE: DurableObjectNamespace<TestReactive>;
-  TEST_REACTIVE_TASKS: DurableObjectNamespace<TestReactiveTasks>;
-  TEST_REACTIVE_TASK: Workflow<TaskParams>;
+  TEST_GENERIC: DurableObjectNamespace<TestGeneric>;
+  TEST_GENERIC_TASKS: DurableObjectNamespace<TestGenericTasks>;
+  TEST_GENERIC_TASK: Workflow<TaskParams>;
   TEST_CF_CODER: DurableObjectNamespace<TestCfCoder>;
   TEST_CF_CODER_TASKS: DurableObjectNamespace<TestCfCoderTasks>;
   TEST_CF_CODER_TASK: Workflow<TaskParams>;
@@ -166,10 +166,10 @@ const sleepTool = (name: string) =>
     }
   });
 
-// --- reactive -----------------------------------------------------------------
+// --- generic -----------------------------------------------------------------
 
-export class TestReactiveGeneral extends ReactiveGeneral {
-  static override spec = ReactiveGeneral.spec;
+export class TestGenericGeneral extends GenericGeneral {
+  static override spec = GenericGeneral.spec;
   override getModel(): ThinkModel {
     return scriptedModel(childRule);
   }
@@ -178,26 +178,26 @@ export class TestReactiveGeneral extends ReactiveGeneral {
   }
 }
 
-/** reactive's host, pointed at the scripted pipeline. */
-export class TestReactiveTasks extends ReactiveTasks {
-  protected override readonly workflowBinding = "TEST_REACTIVE_TASK";
-  protected override readonly hostBinding = "TEST_REACTIVE_TASKS";
+/** generic's host, pointed at the scripted pipeline. */
+export class TestGenericTasks extends GenericTasks {
+  protected override readonly workflowBinding = "TEST_GENERIC_TASK";
+  protected override readonly hostBinding = "TEST_GENERIC_TASKS";
 }
 
-/** reactive's pipeline, on the scripted agent. It declares `run()`, as every pipeline must. */
-export class TestReactiveTask extends ReactiveTask {
-  protected override readonly reactive = "TEST_REACTIVE";
+/** generic's pipeline, on the scripted agent. It declares `run()`, as every pipeline must. */
+export class TestGenericTask extends GenericTask {
+  protected override readonly generic = "TEST_GENERIC";
   override run(event: WorkflowEvent<TaskParams>, step: WorkflowStep) {
     return super.run(event, step);
   }
 }
 
-export class TestReactive extends Reactive {
+export class TestGeneric extends Generic {
   override getModel(): ThinkModel {
     return scriptedModel(parentRule("general"));
   }
   override getSubAgents(): SubAgentClass[] {
-    return [TestReactiveGeneral];
+    return [TestGenericGeneral];
   }
   override getTools(): ToolSet {
     return { ...super.getTools(), test_wait: sleepTool("parent") };
@@ -358,9 +358,9 @@ const a2a = createA2AWorker<TestEnv>({
   manifest: hostManifest,
   agents: [
     defineAgent({
-      tenant: "reactive",
-      manifest: reactiveManifest,
-      agent: (env: TestEnv) => env.TEST_REACTIVE_TASKS
+      tenant: "generic",
+      manifest: genericManifest,
+      agent: (env: TestEnv) => env.TEST_GENERIC_TASKS
     }),
     defineAgent({
       tenant: "cf-coder",

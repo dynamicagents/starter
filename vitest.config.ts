@@ -14,12 +14,14 @@ import { createVcr, recordFromEnv } from "@dynamicagents/core/testing/node";
 
 /**
  * The whole suite runs in the Workers runtime (workerd via miniflare) through a
- * single `cloudflareTest()` pool — including the loop specs, which drive the
- * round and turn operations against an injected mock model and a `FakeSession`.
+ * single `cloudflareTest()` pool.
  *
- * The pool reads `wrangler.jsonc` directly (main, compat settings, the AI
- * binding, and the three agent DOs with their SQLite migration) so this config
- * cannot drift from it; secrets are supplied via `process.env` below.
+ * The pool reads `wrangler.jsonc` directly (compat settings, the AI binding, and
+ * the agent DOs with their SQLite migration) so this config cannot drift from
+ * it; secrets are supplied via `process.env` below. Its `main` is
+ * `test/worker.ts`, which is this deployment's Worker plus each agent on a
+ * scripted model — Workers AI has no local mode, so a real model cannot finish
+ * a turn here.
  */
 
 // Test defaults for the required secrets. Real env vars — from CI or the shell —
@@ -82,6 +84,7 @@ export default defineConfig({
   plugins: [
     cloudflareTest({
       wrangler: { configPath: "./wrangler.jsonc" },
+      main: "./test/worker.ts",
       // Required, not just the default. Workers AI has no local execution mode
       // (Miniflare always proxies `AI` through a remote-connection worker), and
       // leaving this unset — even though `false` is its documented default —
@@ -93,25 +96,35 @@ export default defineConfig({
       remoteBindings: false,
       miniflare: {
         outboundService: vcr.outboundService,
-        // Test-only Durable Object bindings for the subagent facet classes.
+        // Test-only Durable Object bindings: the scripted agents in
+        // `test/worker.ts`, and every sub-agent class.
         //
-        // In production they need NO binding and NO `new_sqlite_classes` entry —
-        // facet storage is created beneath the bound parent agent — but the
-        // Vitest pool only marks *bound* classes as DO classes, so without this
-        // `ctx.exports.ReactiveSubagent` is not facet-compatible and
-        // `subAgent()` throws. See "Notes for testing" in
+        // In production a sub-agent needs NO binding and NO `new_sqlite_classes`
+        // entry — facet storage is created beneath the bound parent agent — but
+        // the pool only marks *bound* classes as DO classes, so without these
+        // `runAgentTool` cannot create a child. See "Notes for testing" in
         // node_modules/agents/docs/sub-agents.md.
         durableObjects: {
-          REACTIVE_SUBAGENT: {
-            className: "ReactiveSubagent",
+          TEST_REACTIVE: { className: "TestReactive", useSQLite: true },
+          TEST_CF_CODER: { className: "TestCfCoder", useSQLite: true },
+          TEST_CLAUDE_CODER: { className: "TestClaudeCoder", useSQLite: true },
+          REACTIVE_GENERAL: { className: "ReactiveGeneral", useSQLite: true },
+          CF_CODER_CODE: { className: "CfCoderCode", useSQLite: true },
+          CLAUDE_CODER_SESSION: {
+            className: "ClaudeCoderSession",
             useSQLite: true
           },
-          CF_CODER_SUBAGENT: {
-            className: "CfCoderSubagent",
+          CLAUDE_CODER_READER: {
+            className: "ClaudeCoderReader",
             useSQLite: true
           },
-          CLAUDE_CODER_SUBAGENT: {
-            className: "ClaudeCoderSubagent",
+          TEST_REACTIVE_GENERAL: {
+            className: "TestReactiveGeneral",
+            useSQLite: true
+          },
+          TEST_CF_CODER_CODE: { className: "TestCfCoderCode", useSQLite: true },
+          TEST_CLAUDE_CODER_SESSION: {
+            className: "TestClaudeCoderSession",
             useSQLite: true
           }
         }
@@ -120,6 +133,10 @@ export default defineConfig({
   ],
   test: {
     include: ["test/**/*.spec.ts"],
+    // A lifecycle spec waits on real alarms: a background run reports in a
+    // later turn.
+    testTimeout: 60_000,
+    hookTimeout: 60_000,
     // Node realm. Last chance to flush a cassette; each is already written when
     // its test releases it, so this is only a safety net.
     globalSetup: ["@dynamicagents/core/testing/vcr-global-setup"]

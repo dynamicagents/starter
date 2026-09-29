@@ -101,9 +101,12 @@ describe("the parent's way into a worktree", () => {
   it("does not switch into a worktree that is still being prepared", async () => {
     const { worktrees, pool, selected } = setup();
     const { dir: _dir, ...unprepared } = HELD;
-    pool.put({ ...unprepared, live: { taskId: "task-a", subtaskId: 3 } });
+    pool.put({
+      ...unprepared,
+      live: { taskId: "task-a", runId: "detached:3" }
+    });
     expect(await worktrees.use(BRANCH)).toMatch(
-      /still being prepared for subtask 3/
+      /still being prepared; try again once its session has started/
     );
     expect(selected()).toBe("acme/super");
   });
@@ -132,8 +135,10 @@ describe("the parent's way into a worktree", () => {
 
   it("will not release a worktree a session is working in", async () => {
     const { worktrees, pool } = setup();
-    pool.put({ ...HELD, live: { taskId: "task-a", subtaskId: 3 } });
-    expect(await worktrees.release(BRANCH)).toMatch(/Subtask 3 is working/);
+    pool.put({ ...HELD, live: { taskId: "task-a", runId: "detached:3" } });
+    expect(await worktrees.release(BRANCH)).toMatch(
+      /A session is working in that worktree/
+    );
   });
 });
 
@@ -153,7 +158,7 @@ describe("writing from inside a worktree", () => {
 
   it("refuses a commit or a push while a session is still working there", async () => {
     const { worktrees, pool } = inside();
-    pool.put({ ...HELD, live: { taskId: "task-a", subtaskId: 3 } });
+    pool.put({ ...HELD, live: { taskId: "task-a", runId: "detached:3" } });
     for (const tool of ["repo_commit", "repo_push"] as const) {
       expect(
         await worktrees.beforeWrite({
@@ -161,7 +166,7 @@ describe("writing from inside a worktree", () => {
           dir: "/workspace/super/core",
           branch: BRANCH
         })
-      ).toMatch(/Subtask 3 is still working/);
+      ).toMatch(/A session is still working in this worktree/);
     }
   });
 

@@ -2,16 +2,16 @@
 
 **A working, deployable Dynamic Agent on Cloudflare Workers.**
 
-Zero-trust A2A, durable task lifecycle, delegation to isolated subagents, episodic
-memory. Clone it, generate keys, deploy.
+Zero-trust A2A, a durable task lifecycle, delegation to sub-agents, and one
+continuous, searchable conversation per caller. Clone it, generate keys, deploy.
 
 It ships **several example agents in one Worker** — grow the one you want and
 delete the rest. Adding or removing a capability is a single line.
 
-Everything here is an _example_. The round loop, the durable Subtask rows, the
-subagent execution and the task lifecycle all live in `@dynamicagents/core`, so this
-repo is the ~250 lines per agent that are actually yours: plugins, soul, manifest,
-config, and the round contract.
+Everything here is an _example_. The turn is `@cloudflare/think`'s, and the A2A task
+around it and delegation to sub-agents live in `@dynamicagents/core`, so this repo is
+only what is actually yours: each agent's plugins, soul, manifest and sub-agents, and
+the config and copy they share.
 
 > Part of a three-package split:
 > [`@dynamicagents/core`](https://github.com/dynamicagents/core) (the mandatory foundation) ·
@@ -25,7 +25,6 @@ config, and the round contract.
 ```bash
 npm install
 npm run keygen          # one key for the deployment — see .env.example
-npx wrangler vectorize create da-starter-recall --dimensions=1024 --metric=cosine
 ```
 
 Put the key and `GATEKEEPER_ORIGINS` in `.env` before starting — the Worker reads both
@@ -65,11 +64,9 @@ Register each agent with your gatekeeper using the **same endpoint** and its own
 live](#where-the-endpoints-live). Register whatever path this deployment actually serves.
 
 > **The default models need a paid Workers plan**, or prepaid AI Gateway credits. Every
-> Workers AI agent takes its models from `MODEL` in [`src/config.ts`](src/config.ts),
-> and those are not served on Workers Free. On the free tier, point `MODEL`'s
-> `chatModelId` and `fallbackChatModelId` at models that are, and that support function
-> calling. Then check `CLAUDE_CODER_CONFIG` in the same file: it sets its own
-> `chatModelId` and `fallbackChatModelId` rather than inheriting `MODEL`'s.
+> agent takes its model from [`src/config.ts`](src/config.ts), and those are not served
+> on Workers Free. On the free tier, point each agent's `modelId` at one that is, and that
+> supports function calling.
 
 > **Browser Rendering needs a paid Workers plan.** On the free tier, remove `browser()`
 > from the agents' `plugins.ts` and the `browser` binding from `wrangler.jsonc`.
@@ -91,8 +88,7 @@ one endpoint, one signing key, one card ([`src/index.ts`](src/index.ts)):
 export const reactive = defineAgent({
   tenant: "reactive",
   manifest,
-  agent: (env: Env) => env.ReactiveAgent,
-  workflow: (env: Env) => env.HANDLE_TASK_WORKFLOW
+  agent: (env: Env) => env.Reactive
 });
 
 // src/index.ts — mounted
@@ -101,11 +97,6 @@ createA2AWorker<Env>({
   agents: [reactive, cfCoder, claudeCoder]
 });
 ```
-
-That same declaration is what the agent's Workflow resolves its DO stub from, so
-the tenant and the workflow can never address different Durable Objects — a
-mismatch that used to type-check perfectly and surface as a task that never
-called back.
 
 ```
 /.well-known/agent-card.json   the stub card for the deployment
@@ -194,29 +185,30 @@ request body, and a token minted for one agent would work against any sibling.
 
 ## The agents
 
-| Agent                                       | What it is                                                           | Why it's here                                                                                |
-| ------------------------------------------- | -------------------------------------------------------------------- | -------------------------------------------------------------------------------------------- |
-| [`reactive/`](src/agents/reactive/)         | Round loop, delegation, subagent execution                           | The flagship                                                                                 |
-| [`cf-coder/`](src/agents/cf-coder/)         | Clones a repo into a Linux sandbox, changes it, opens a pull request | Proves a plugin can own a Durable Object and a container without core knowing                |
-| [`claude-coder/`](src/agents/claude-coder/) | The same, but each subtask is a Claude Code session in the container | **Proves a subtask need not be a model loop at all** — `executeChunk` is overridden outright |
+| Agent                                       | What it is                                                             | Why it's here                                                                            |
+| ------------------------------------------- | ---------------------------------------------------------------------- | ---------------------------------------------------------------------------------------- |
+| [`reactive/`](src/agents/reactive/)         | Answers, and hands self-contained work to a sub-agent it waits for     | The flagship                                                                             |
+| [`cf-coder/`](src/agents/cf-coder/)         | Clones a repo into a Linux sandbox, changes it, opens a pull request   | Proves a plugin can own a Durable Object and a container without core knowing            |
+| [`claude-coder/`](src/agents/claude-coder/) | The same, but each sub-agent is a Claude Code session in the container | **Proves a sub-agent need not be a model loop at all** — its model is the session itself |
 
-Reactive and both coders are all `RoundAgentBase` from
-[`@dynamicagents/core/round`](https://github.com/dynamicagents/core) and differ in five
-methods each.
+All three are `A2AAgent` from
+[`@dynamicagents/core/agent`](https://github.com/dynamicagents/core), on
+`@cloudflare/think`, and differ in their members. A sub-agent that may run past the
+fifteen minutes a turn can last runs **in the background**: the task stays `working`,
+and its result arrives as a later turn.
 
 ### The two coders need one thing the others do not
 
-A **container**. Everything else about them — the round loop, the durable Subtask
-rows, the model pair — is what every other agent here runs.
+A **container**. Everything else about them — the turn, the A2A task, the
+Workers AI model — is what every other agent here runs.
 
 The two differ in exactly one place, and it is one level below the agent: what a
-subtask _is_. A `cf-coder` subtask is a Dynamic Agents subagent running core's tool loop
-inside the container. A `claude-coder` subtask is one `claude -p` session — its
-own loop, its own tools, its own context management — which is why that agent
-overrides `executeChunk` instead of configuring a recipe. Their workspace Durable
-Objects are two thin subclasses of `WorkspaceObjectBase` from
-`@dynamicagents/plugins/computer`, differing only in a
-`WorkspaceObjectConfig`.
+sub-agent _is_. cf-coder's `code` is a Think sub-agent on Workers AI, working in
+the container. A `claude-coder` session is one `claude -p` process — its own loop,
+its own tools, its own context management — so its sub-agent's model is
+`claudeCodeModel`, which runs the session, rather than a model call. Their
+workspace Durable Objects are two thin subclasses of `WorkspaceObjectBase` from
+`@dynamicagents/plugins/workspace`, differing only in a `WorkspaceObjectConfig`.
 
 That egress policy is the whole reason `claude-coder` exists. An Anthropic
 **subscription** credential is refused for raw Messages API calls on every
@@ -228,12 +220,12 @@ request through a `Fetcher` on the Worker side which swaps the real one in. That
 egress gateway also holds an ordered **pool** of credentials and rotates when
 Anthropic says one's 5-hour or weekly bucket is spent.
 
-Every agent's own round loop, both coders included, runs on Workers AI through
-the `AI` binding. **There is no model credential in this deployment**: the
-binding is authenticated by the platform, so there is nothing to store, nothing
-to rotate, and cf-coder's container has never seen one. An AI Gateway `401` means
-Authenticated Gateway is switched on for the AI Gateway named by `aiGatewayId` —
-switch it off, because the binding does not send a token.
+Every agent's own model, both coders included, runs on Workers AI through the
+`AI` binding. **There is no model credential in this deployment**: the binding is
+authenticated by the platform, so there is nothing to store, nothing to rotate,
+and cf-coder's container has never seen one. An AI Gateway `401` means
+Authenticated Gateway is switched on for the `default` AI Gateway every call goes
+through — switch it off, because the binding does not send a token.
 [`.env.example`](.env.example) is the full list of what a deployment does need.
 
 The container needs the **Workers Paid** plan and a running Docker daemon on the
@@ -294,19 +286,19 @@ Two consequences worth knowing before you debug something surprising:
   resets an existing checkout rather than assuming an empty directory — and
   refuses outright if the tree is dirty, because those changes are a previous
   task's work and nobody could recover them once discarded.
-- **A cancelled task resets the working tree rather than destroying the
-  container.** That is the opposite of what it used to do, and the reversal is the
-  point: the container _was_ the state, and now it holds none of it but
-  dependencies. Destroying one costs a container start and a reinstall, and
-  leaves the abandoned edits exactly where they were.
+- **A cancelled task leaves its work where it stopped.** A cancel may be a
+  pause — to add to the task, or to pick it up later — and what a run did may
+  have had effects that redoing it would repeat, so nothing is reset for it. A
+  writing session's worktree keeps its work committed on its branch; a
+  checkout keeps its changes. Whether to continue, commit or discard is the
+  agent's call, on the next task.
 
-Delegated subtasks reach the parent's workspace through a `resolveRuntime` hook —
-`code()`'s for cf-coder, the `claude-code` plugin's for claude-coder. It runs on
-the **parent** and puts the workspace name into the runtime state the subagent
-receives. That indirection is required, not stylistic: core gives a subagent
-execution a `callerKey` thunk that **throws**, so a facet cannot derive the name
-itself — and it is deliberately not a subtask param, because those are
-model-authored and a model could then name somebody else's workspace.
+A sub-agent reaches its workspace through its spec's `prepare`, which runs on the
+**parent**, where the caller and the repository are known, and hands the
+workspace name to the sub-agent as `runtime()`. It is deliberately not the
+sub-agent's input: the parent's model writes that, and a model could then name
+somebody else's workspace. A claude-coder writing session gets a worktree of its
+own that way, and its `settle` records and frees it when the run ends.
 
 ---
 
@@ -317,19 +309,17 @@ entirely:
 
 ```ts
 // src/agents/reactive/plugins.ts
-export const plugins = (host: PluginHost): AgentPlugin[] => [
-  general({
-    primaryModelId: host.primaryModelId,
-    fallbackModelId: host.fallbackModelId
-  }),
-  browser({ binding: host.env.BROWSER }),
-  workspace(),
-  recall({
-    ai: host.env.AI,
-    index: host.env.VECTORIZE,
-    namespace: host.callerKey
-  })
+export const plugins = (env: Env): AgentPlugin<Env>[] => [
+  browser({ binding: env.BROWSER })
 ];
+```
+
+Files are Think's own workspace, in each object's SQLite, so nothing is installed for
+them. An agent whose files live in a container says so itself, next to its plugins:
+
+```ts
+// src/agents/cf-coder/agent.ts
+override workspace = computerWorkspace(this.#container);
 ```
 
 Nothing in core imports a plugin, and `@dynamicagents/plugins` has no root barrel — the bare
@@ -339,21 +329,21 @@ opinion. `npm run verify:isolation` asserts it on the built module graph.
 There is deliberately **no shared plugin list**: a single one would put every plugin in
 every agent and make the guarantee unmeasurable.
 
-`plugins` takes a host object rather than `env` because a plugin may need more than
-bindings — claude-coder's plugins need the DO's storage for their worktree pool, and
-`recall` needs the verified caller as a **thunk**, since that identity does not exist yet
-when `onStart` runs.
+A coder's list takes more than `env`: the agent's own repository selection, one
+instance shared with its `workspace`, because the selection caches what it last read
+and two instances would disagree about where the checkout is.
 
 ### Writing your own
 
-A plugin is not a package; it is an object satisfying a contract.
-[`src/agents/reactive/general.ts`](src/agents/reactive/general.ts) is one this repo writes
-rather than installs — the `general` catch-all subtask type, declared with `definePlugin`
-and indistinguishable from a published plugin at the seam.
+A plugin is not a package; it is an object satisfying a contract, declared with
+`definePlugin`. A sub-agent is the same: a `SubAgentSpec` bound to a `SubAgent` class.
+[`src/agents/reactive/children.ts`](src/agents/reactive/children.ts) binds one this repo
+writes — the `general` catch-all — and it is indistinguishable at the seam from the Claude
+Code specs `@dynamicagents/plugins` publishes.
 
-It is also _why_ there is no `@dynamicagents/plugins/general`: core's `validateRecipe` refuses
-a recipe with no soul rather than lending it one, so that no run ever executes under an
-identity nobody chose. That identity is yours to write.
+It is also _why_ there is no `@dynamicagents/plugins/general`: a spec must declare its soul,
+and core refuses to lend one, so that no run ever executes under an identity nobody chose.
+That identity is yours to write.
 
 ---
 
@@ -418,8 +408,8 @@ It needs a GitHub environment named `deployment` holding these secrets:
 - `CLOUDFLARE_ACCOUNT_ID`.
 - `CLOUDFLARE_API_TOKEN`, with Account › Workers Scripts › Edit, Account › Containers ›
   Edit for the images, and Zone › Workers Routes › Edit on the custom domain's zone, which
-  every deploy re-asserts. Bound resources such as Workers AI, Vectorize and Browser
-  Rendering need no scope of their own to deploy against.
+  every deploy re-asserts. Bound resources such as Workers AI and Browser Rendering need
+  no scope of their own to deploy against.
 
 The Worker's runtime secrets are not in GitHub. Set them once with `wrangler secret put`;
 they persist across deploys, and a deploy fails naming any in `secrets.required` that was
@@ -436,16 +426,17 @@ repository in `deploy.yml`'s `if:` and your origin in its URLs.
 ```bash
 cp .cf.env.example .cf.env    # an account-scoped API token + your account id
 npm run cf -- logs --since 2h --level error
-npm run cf -- wf handle-task
 npm run cf -- ai --since 2h
+npm run cf -- ai --task <taskId> --all
 ```
 
-[`scripts/cf.mjs`](scripts/cf.mjs) is a small Cloudflare API proxy for the three questions
-a deploy actually raises: what did it log, did the workflow finish its steps, and what did
-the model get asked. Each subcommand prints a digest rather than the raw envelope — `logs`
-a level-tallied timeline, `wf <name> <instance>` per-step pass/fail, `ai <logId>` the
-prompt and reply as text — with `--json` or `--raw` when you want the body. This Worker's
-workflows are `handle-task`, `cf-coder` and `claude-coder`.
+[`scripts/cf.mjs`](scripts/cf.mjs) is a small Cloudflare API proxy for the questions a
+deploy actually raises: what did it log, and what did the model get asked. Each subcommand
+prints a digest rather than the raw envelope — `logs` a level-tallied timeline, `ai <logId>`
+the prompt and reply as text — with `--json` or `--raw` when you want the body. Every model
+call is tagged with its agent, its task and its phase (`turn`, `subagent` or
+`compaction`), so `ai --task` gathers one task's calls across the agent and its
+sub-agents.
 
 The credentials go in `.cf.env`, not `.env`, because they are not bindings: they
 authenticate **you** to the Cloudflare API, not the Worker to anything. Keeping them in
@@ -457,7 +448,7 @@ of an agent's context, and it is redacted from the output as a safety net.
 Anything the subcommands don't cover falls through to a raw request:
 
 ```bash
-npm run cf -- GET workflows -q per_page=50
+npm run cf -- GET workers/scripts
 npm run cf -- help
 ```
 
@@ -491,13 +482,14 @@ on your machine once the temp dir is cleaned. The script now detects that and re
 src/
   index.ts              ← the agents this Worker mounts
   host-manifest.ts      ← the stub card served at the well-known path
-  config.ts             ← model ids, budgets, limits (values; core owns the shapes)
-  round-policy.ts       ← the round contract + user-facing copy (core ships no prompt copy)
+  config.ts             ← model ids and compaction (values; core ships no numbers)
+  copy.ts               ← user-facing copy + guidance every soul shares (core ships none)
+  model.ts              ← the one Workers AI model each class runs, tagged for AI Gateway
   workspace/            ← the container-backed workspace both coders share
   agents/
-    reactive/           ← definition, plugins, soul, manifest, the `general` plugin
-    cf-coder/           ← the same set, plus the `code` subtask type
-    claude-coder/       ← the same set, plus a subagent that drives the CLI
+    reactive/           ← agent, children (the `general` sub-agent), definition, plugins, soul, manifest
+    cf-coder/           ← the same set, plus the `code` spec and the workspace object
+    claude-coder/       ← the same set, plus the Claude Code sessions' report and the workspace object
 test/
 scripts/
 ```

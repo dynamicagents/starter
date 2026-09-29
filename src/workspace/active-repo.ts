@@ -1,5 +1,3 @@
-import type { PluginHost } from "@dynamicagents/core/host";
-
 /**
  * Which repository this caller is working on, and therefore which workspace
  * their commands reach.
@@ -21,7 +19,7 @@ import type { PluginHost } from "@dynamicagents/core/host";
  * falls back to a caller-level workspace and `repo_diff` reports an empty tree
  * for a checkout sitting right there. So it is persisted — but `workspaceName()`
  * is a **synchronous** thunk called on the path of every tool, inside
- * `computerExec`, where there is nowhere to await. `storage.get` is async;
+ * `workspaceExec`, where there is nowhere to await. `storage.get` is async;
  * `storage.sql` is not. Hence a one-row table, with an in-memory cache in front
  * so the common case touches no storage at all.
  *
@@ -31,16 +29,16 @@ import type { PluginHost } from "@dynamicagents/core/host";
  * is per caller, not per task. Two tasks from one caller cloning different
  * repositories overwrite each other: the later `set()` wins, and from then on the
  * earlier task's own tools (`repo_diff`, the reads, the commit and push that end
- * it) resolve to the *other* task's workspace, cancellation cleanup included.
+ * it) resolve to the *other* task's workspace.
  *
- * Delegated work is not exposed — a facet gets its workspace name on
- * `ctx.runtime`, resolved on the parent and pinned for the life of the subtask.
- * The exposure is the parent's own tool calls.
+ * A sub-agent is not exposed — it gets its workspace name from its spec's
+ * `prepare`, resolved on the parent and pinned for the life of the run. The
+ * exposure is the parent's own tool calls, and a background run widens it: the
+ * parent's turn ends when the run starts, so a second task can move the
+ * selection before the follow-up turn that reviews and pushes the work.
  *
- * **Not fixable in this file**, which is why it is documented rather than
- * patched: the fix is to key the selection by task, and core's `PluginHost`
- * exposes no task or context identity to key on. Closing it means adding that
- * upstream and threading it through `workspaceName()`, which must stay
+ * The fix is to key the selection by task, which every turn now carries
+ * (`A2AAgent.turnTaskId()`), threaded through `workspaceName()`, which must stay
  * synchronous. Until then, one task at a time per caller is a load-bearing
  * assumption.
  *
@@ -66,7 +64,7 @@ export interface ActiveRepo {
   /**
    * What the parent cloned, in the terms a second clone of the same thing needs.
    *
-   * A subtask that works in a container of its own starts with an empty
+   * A writing session that works in a container of its own starts with an empty
    * filesystem, so something has to clone into it — and the honest url to use is
    * **the one the parent actually cloned from**, already allowlist-checked by
    * `/repo`. Reconstructing one from `owner/repo` would mean this file deciding a
@@ -83,7 +81,7 @@ export interface ActiveRepo {
    * Add a name to the sweep's candidate list **without** routing anything to it.
    *
    * {@link set} does both, which is right for a clone: the parent is about to work
-   * in what it selected. A worktree a subtask is prepared in is the other case —
+   * in what it selected. A worktree a session is prepared in is the other case —
    * it must be swept, and it must not become what the parent's own tools address
    * until the parent switches into it, because this table holds one row and the
    * later write would win.
@@ -133,18 +131,17 @@ export interface ActiveCheckout {
   /**
    * Where it put the tree.
    *
-   * Reused verbatim for a subtask's own clone rather than derived again: each
+   * Reused verbatim for a worktree's own clone rather than derived again: each
    * container has its own filesystem, so the same path collides with nothing, and
-   * one spelling of a checkout directory is what keeps `discardWorkingTree`'s
-   * fallback and the facet's `checkoutDir()` answering about the same place.
+   * it is what lets the parent's tools move into a worktree at the paths they
+   * already use — see `@/workspace/worktrees`.
    */
   dir: string;
-  /** The branch the parent is on, so a subtask starts from the same commit. */
+  /** The branch the parent is on, so a session starts from the same commit. */
   branch: string;
 }
 
-export function activeRepo(host: PluginHost<Env>): ActiveRepo {
-  const storage = host.storage;
+export function activeRepo(storage: DurableObjectStorage): ActiveRepo {
   let cached: string | undefined;
   let ready = false;
 
@@ -179,11 +176,11 @@ export function activeRepo(host: PluginHost<Env>): ActiveRepo {
         cached = row?.repo;
         return cached;
       } catch {
-        // A subagent facet reaches this through the same plugin list but has no
-        // table of its own — and needs none, because its workspace name arrives
-        // on `ctx.runtime` from the parent and this is only ever the fallback.
-        // Returning undefined lets that fallback be a caller-level name rather
-        // than an exception thrown from inside a tool.
+        // A sub-agent reaches this through the same container config but has no
+        // selection of its own — and needs none, because its workspace name
+        // arrives on `runtime()` from the parent and this is only ever the
+        // fallback. Returning undefined lets that fallback be a caller-level
+        // name rather than an exception thrown from inside a tool.
         return undefined;
       }
     },
@@ -214,7 +211,7 @@ export function activeRepo(host: PluginHost<Env>): ActiveRepo {
           )
           .toArray()[0];
       } catch {
-        // A facet has no table of its own — the same reason `get()` swallows.
+        // A sub-agent has no selection of its own — the same reason `get()` swallows.
         return undefined;
       }
     },

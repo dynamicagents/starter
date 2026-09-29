@@ -7,34 +7,35 @@ foundation) and
 capabilities) into a deployable Worker.
 
 The single most useful thing to know: **almost nothing here is framework.** The
-round loop, the durable Subtask rows, the concurrent fan-out, the subagent execution,
-the Durable Object body and the task lifecycle are all in core. What lives here is
-what core deliberately refuses to ship — the words, the config values, and which
-plugins each agent installs.
+turn is `@cloudflare/think`'s; the A2A task around it, delegation to sub-agents —
+awaited or in the background — and the Durable Object body are core's. What lives
+here is what core deliberately refuses to ship — the words, the config values,
+which plugins each agent installs, and where each sub-agent works.
 
 If you find yourself writing durable-execution logic in this repo, that is the
 signal it belongs in core instead. If you find yourself writing the Durable
 Object a capability lives in — a container, its alarm, its install — that is the
 signal it belongs in plugins. `src/workspace/` holds only config, addresses and
 adapters for the workspace this Worker deploys; the object itself is
-`@dynamicagents/plugins/computer`.
+`@dynamicagents/plugins/workspace`.
 
 ---
 
 ## Where a thing goes
 
-| You are changing…                         | It goes in                              |
-| ----------------------------------------- | --------------------------------------- |
-| what the model is told about a domain     | the plugin that owns that domain        |
-| what the agent _is_                       | `src/agents/<tenant>/soul.ts`           |
-| how a round ends, or a user-facing string | `src/round-policy.ts`                   |
-| which capabilities an agent has           | `src/agents/<tenant>/plugins.ts`        |
-| model ids, budgets, limits                | `src/config.ts`                         |
-| the object a capability runs in           | **`@dynamicagents/plugins`** — not here |
-| cancellation, retries, idempotency, DAGs  | **`@dynamicagents/core`** — not here    |
+| You are changing…                                     | It goes in                              |
+| ----------------------------------------------------- | --------------------------------------- |
+| what the model is told about a domain                 | the plugin that owns that domain        |
+| what the agent _is_                                   | `src/agents/<tenant>/soul.ts`           |
+| a user-facing string, or guidance every soul shares   | `src/copy.ts`                           |
+| which capabilities an agent has                       | `src/agents/<tenant>/plugins.ts`        |
+| a sub-agent: its spec, where it works, what it leaves | `src/agents/<tenant>/children.ts`       |
+| model ids and compaction                              | `src/config.ts`                         |
+| the object a capability runs in                       | **`@dynamicagents/plugins`** — not here |
+| cancellation, recovery, idempotency, delegation       | **`@dynamicagents/core`** — not here    |
 
-`src/round-policy.ts` and `src/config.ts` sit at the top level because two agents
-share them. An agent importing a _sibling's_ module is what `npm run
+`src/copy.ts`, `src/config.ts` and `src/model.ts` sit at the top level because every
+agent shares them. An agent importing a _sibling's_ module is what `npm run
 verify:isolation` fails on, because the sibling's plugin list comes with it — even
 a type-only import, because the next person makes it a value import.
 
@@ -53,12 +54,14 @@ in a JWT claim, so renaming one is a re-registration, not a refactor.
 
 ## The two invariants that have already broken once
 
-**1. Cancellation is checked by the guarded write, never by a probe.**
-`saveTask` returns whether the write applied, and `markWorking` returns
-`"ok" | "canceled"`. Read those. Calling `getTask` first and acting second reopens
-a window in which a cancel lands and the gatekeeper still gets a `completed`
-callback. Core's round workflow reads them, and its specs pin both; a workflow
-written here has to do the same.
+**1. Cancellation is decided by the guarded write, never by a probe.**
+Core's task ledger flips a task to `canceled` in one guarded write, and every later
+write — `markWorking`, the settle that would report it done — is refused against
+it and says so. Read those answers. Calling `getTask` first and acting second
+reopens a window in which a cancel lands and the gatekeeper still gets a
+`completed` callback. `A2AAgent` reads them, and core's specs pin both. A hook
+written here — `onTaskCanceled`, `onTaskSettled`, a spec's `settle` — runs after
+the flip and acts on it; it never decides it.
 
 **2. `verify:isolation` is the check that survives a refactor.**
 This Worker deploys as one bundle containing every agent, so grepping `dist/`

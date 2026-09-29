@@ -1,8 +1,10 @@
 import { scratch, DEFAULT_SCRATCH_DIR } from "@dynamicagents/plugins/scratch";
 import type { AgentPlugin } from "@dynamicagents/core";
-import type { computerExec } from "@dynamicagents/plugins/computer";
+import type {
+  workspaceExec,
+  WorkspaceObjectBase
+} from "@dynamicagents/plugins/workspace";
 import type { ActiveRepo } from "./active-repo";
-import type { WorkspaceObjectBase } from "@dynamicagents/plugins/computer";
 
 /**
  * How *this* Worker addresses a scratchpad.
@@ -28,7 +30,7 @@ import type { WorkspaceObjectBase } from "@dynamicagents/plugins/computer";
  * with the `owner/repo` strings in {@link ActiveRepo}, so a sentinel a caller
  * could clone is a sentinel a caller could collide with — the same reasoning that
  * spells the pre-selection window `<unassigned>` — see `workspaceName` in
- * `@dynamicagents/plugins/computer`.
+ * `@dynamicagents/plugins/workspace`.
  */
 export const SCRATCH_REPO = "<scratch>";
 
@@ -56,12 +58,12 @@ export const SCRATCH_DIR = DEFAULT_SCRATCH_DIR;
  * nothing else that would
  * write one — a directory with no `package.json` is exactly what the install
  * resolver skips. The `present` it reports back is the same probe the delegation
- * will make, so a workspace that cannot see the tree says so in this tool'"'"'s own
- * result rather than in a subtask refusing a scratchpad the model was just told
- * it had opened.
+ * will make, so a workspace that cannot see the tree says so in this tool's own
+ * result rather than in a delegation refusing a scratchpad the model was just
+ * told it had opened.
  */
 export function hostScratch(config: {
-  exec: ReturnType<typeof computerExec>;
+  exec: ReturnType<typeof workspaceExec>;
   workspace: () => DurableObjectStub<WorkspaceObjectBase>;
   active: ActiveRepo;
   author: { name: string; email: string };

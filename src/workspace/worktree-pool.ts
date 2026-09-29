@@ -1,16 +1,16 @@
 /**
- * The worktrees a caller's writing subtasks run in, and which one holds what.
+ * The worktrees a caller's writing sessions run in, and which one holds what.
  *
  * A worktree is a workspace of its own — one Durable Object, one container — with
  * a full checkout of the parent's repository: the superproject and every
  * submodule, each cloned with its own objects, sharing nothing with another
- * worktree. A writing subtask's session runs in one, and the parent's own tools
+ * worktree. A writing session runs in one, and the parent's own tools
  * switch into the same one to review, push and open the pull request — see
  * `./worktrees.ts`. Nothing is copied between containers.
  *
  * **Kept and handed out again**, because a clone and its submodules cost minutes
  * and a fetch and a reset cost seconds. What decides whether one can go to the
- * next subtask is this map and never git: asking git means starting a container.
+ * next session is this map and never git: asking git means starting a container.
  *
  * Per caller and repository, in the parent's storage, for the reason
  * `./active-repo.ts` gives for its own table: the parent's tools resolve their
@@ -26,9 +26,9 @@ export interface PoolRepo {
   baseRef: string;
   /** The same, as a commit. Anything past it is the branch's work. */
   base: string;
-  /** Where the subtask holding it now started — what a cancellation resets to. */
+  /** Where the run holding it now started — what its kept work is counted from. */
   start: string;
-  /** Where the last subtask left it. Empty when something moved it unseen. */
+  /** Where the last run left it. Empty when something moved it unseen. */
   tip: string;
   /** The last commit the parent pushed from it. */
   pushed?: string;
@@ -40,15 +40,15 @@ export interface Worktree {
   slot: number;
   /** The branch it holds, or none when it has never held one or was released. */
   branch?: string;
-  /** The subtask working in it now. */
-  live?: { taskId: string; subtaskId: number };
+  /** The run working in it now: a sub-agent run id, which names its session. */
+  live?: { taskId: string; runId: string };
   /**
    * How {@link live} came to hold it, which decides what preparing it does: a
    * branch of its own, a branch this worktree already holds, or a pushed branch
    * brought into a worktree that does not.
    */
   mode?: "new" | "continue" | "adopt";
-  /** Set once the checkout is on the branch; a retried chunk finishes one that is not. */
+  /** Set once the checkout is on the branch; a later claim finishes one that is not. */
   ready?: boolean;
   /** The branch it held before, for preparing it to delete. */
   previous?: string;
@@ -62,7 +62,7 @@ export interface Worktree {
 export interface PoolStore {
   /** One repository's pool, by slot. */
   all(repo: string): Worktree[];
-  /** Every pool — a subtask's row is found by its ids, whichever repository it is in. */
+  /** Every pool — a run's row is found by its ids, whichever repository it is in. */
   every(): Worktree[];
   put(worktree: Worktree): void;
   delete(repo: string, slot: number): void;
@@ -87,16 +87,37 @@ export function parseWorktreeRepo(
   return match ? { repo: match[1]!, slot: Number(match[2]) } : undefined;
 }
 
-/** The branch a new writing subtask's work goes on. */
-export function subtaskBranch(ctx: {
-  taskId: string;
-  subtaskId: number;
-}): string {
-  return `claude-coder/${ctx.taskId}/${ctx.subtaskId}`;
+/**
+ * The branch a new writing session's work goes on.
+ *
+ * The run id is core's `detached:<tool call id>`, and `:` is one of the
+ * characters git refuses in a branch name, so the run is spelled by its tool
+ * call. One made only of letters, digits, `_` and `-` is used as it is. Any
+ * other has the rest replaced — dots included, since git refuses `..`, a
+ * leading `.` and a `.lock` suffix — and a hash of the whole run id appended,
+ * because the replacement alone would give two runs one branch.
+ */
+export function runBranch(ctx: { taskId: string; runId: string }): string {
+  const call = ctx.runId.replace(/^[a-z-]+:/, "");
+  if (/^[A-Za-z0-9_-]+$/.test(call) && !call.startsWith("-")) {
+    return `claude-coder/${ctx.taskId}/${call}`;
+  }
+  const slug = call.replace(/[^A-Za-z0-9_-]+/g, "-").replace(/^-+|-+$/g, "");
+  return `claude-coder/${ctx.taskId}/${slug ? `${slug}-` : ""}${fnv1a(ctx.runId)}`;
+}
+
+/** FNV-1a, 32-bit, as hex: stable and synchronous, for telling ids apart. */
+function fnv1a(text: string): string {
+  let hash = 0x811c9dc5;
+  for (let i = 0; i < text.length; i++) {
+    hash ^= text.charCodeAt(i);
+    hash = Math.imul(hash, 0x01000193) >>> 0;
+  }
+  return hash.toString(16).padStart(8, "0");
 }
 
 /**
- * Whether `continue` may name a branch: any git would accept as one — a subtask's
+ * Whether `continue` may name a branch: any git would accept as one — a session's
  * own, or a pull request's head branch somebody else pushed.
  *
  * Checked before a worktree is claimed, so a name git would refuse costs a
@@ -135,26 +156,25 @@ export function isFree(worktree: Worktree): boolean {
 }
 
 /**
- * The worktree a subtask works in, claimed for it.
+ * The worktree a run works in, claimed for it.
  *
- * - The one already live for this subtask, on every chunk after the first: core
- *   resolves the runtime per chunk, and a second answer would strand the work.
+ * - The one already live for this run: a `prepare` repeated for the same run
+ *   finishes the worktree it claimed, and a second answer would strand the work.
  * - For `continue`, the worktree holding that branch, unless a session is in it.
  *   When none holds it — it was pushed and released, or its worktree went to
- *   another subtask — a free one adopts it from the remote.
+ *   another run — a free one adopts it from the remote.
  * - Otherwise the free worktree used longest ago, or a new slot. The pool grows
  *   with concurrency and has no ceiling of its own.
  */
 export function claim(
   store: PoolStore,
   repo: string,
-  ctx: { taskId: string; subtaskId: number; continue?: string },
+  ctx: { taskId: string; runId: string; continue?: string },
   now: number
 ): Worktree {
   const rows = store.all(repo);
   const live = rows.find(
-    (row) =>
-      row.live?.taskId === ctx.taskId && row.live.subtaskId === ctx.subtaskId
+    (row) => row.live?.taskId === ctx.taskId && row.live.runId === ctx.runId
   );
   if (live) return live;
 
@@ -164,8 +184,8 @@ export function claim(
       : rows.find((row) => row.branch === ctx.continue);
   if (holder?.live) {
     throw new Error(
-      `claude-coder: ${ctx.continue} is being worked on by subtask ${holder.live.subtaskId} ` +
-        "right now. Wait for it to finish, then continue the branch."
+      `claude-coder: ${ctx.continue} is being worked on by another session ` +
+        "right now. Wait for its report, then continue the branch."
     );
   }
 
@@ -176,14 +196,14 @@ export function claim(
     rows.reduce((max, row) => Math.max(max, row.slot + 1), 0);
   const base = holder ?? free ?? { repo, slot, repos: [], usedAt: now };
 
-  const branch = ctx.continue ?? subtaskBranch(ctx);
+  const branch = ctx.continue ?? runBranch(ctx);
   const previous = base.branch ?? base.previous;
   const claimed: Worktree = {
     ...base,
     slot,
     branch,
     previous: previous === branch ? undefined : previous,
-    live: { taskId: ctx.taskId, subtaskId: ctx.subtaskId },
+    live: { taskId: ctx.taskId, runId: ctx.runId },
     mode: holder ? "continue" : ctx.continue ? "adopt" : "new",
     ready: false,
     usedAt: now
@@ -220,7 +240,7 @@ export function forgetWorktree(store: PoolStore, sentinel: string): void {
  * What that costs is not a stale entry. A row holding unpushed commits is never
  * free ({@link isFree}), and nothing here would ever make it free again, so
  * {@link claim} would pass over that slot for good and open a new one for every
- * later subtask — each a full clone of a checkout the pool exists to reuse.
+ * later session — each a full clone of a checkout the pool exists to reuse.
  *
  * So the checkout is asked about directly. `hasCheckout` answers for one
  * worktree, and a workspace that was reclaimed has no record of one — reading

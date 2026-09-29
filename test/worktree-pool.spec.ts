@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { env } from "cloudflare:workers";
 import { runInDurableObject } from "cloudflare:test";
-import { workspaceName } from "@dynamicagents/plugins/computer";
+import { workspaceName } from "@dynamicagents/plugins/workspace";
 import { SCRATCH_REPO } from "@/workspace/scratch";
 import {
   claim,
@@ -12,7 +12,7 @@ import {
   isBranchName,
   parseWorktreeRepo,
   sqlPoolStore,
-  subtaskBranch,
+  runBranch,
   worktreeRepo,
   type PoolRepo,
   type Worktree
@@ -58,13 +58,33 @@ describe("addressing a worktree", () => {
   });
 
   /**
-   * `continue` names a branch a subtask made or one somebody pushed for a pull
+   * `continue` names a branch a session made or one somebody pushed for a pull
    * request, so any branch git takes is accepted here; the default branch is
    * refused once the remote is read — see `subtask-workspace.spec.ts`.
    */
   it("derives a branch name, and lets `continue` name any branch git accepts", () => {
-    const branch = subtaskBranch({ taskId: "task-a", subtaskId: 3 });
+    const branch = runBranch({ taskId: "task-a", runId: "detached:3" });
     expect(branch).toBe("claude-coder/task-a/3");
+    // Core's run id carries a `:`, which git refuses; a tool call id may carry
+    // anything else a provider chose.
+    for (const runId of [
+      "detached:call_ab:c/../d",
+      "detached:.x.",
+      "detached:"
+    ]) {
+      expect(isBranchName(runBranch({ taskId: "task-a", runId }))).toBe(true);
+    }
+    // Replacing what git refuses must not give two runs one branch.
+    const branches = [
+      "detached:call:a",
+      "detached:call/a",
+      "detached:call-a"
+    ].map((runId) => runBranch({ taskId: "task-a", runId }));
+    expect(new Set(branches).size).toBe(branches.length);
+    expect(branches[2]).toBe("claude-coder/task-a/call-a");
+    expect(runBranch({ taskId: "t", runId: "detached::" })).not.toBe(
+      runBranch({ taskId: "t", runId: "detached:/" })
+    );
     for (const name of [branch, "feature/artifacts", "tiago/fix-1", "a.b/c"]) {
       expect(isBranchName(name)).toBe(true);
     }
@@ -96,7 +116,7 @@ describe("addressing a worktree", () => {
   });
 });
 
-describe("whether a worktree can go to the next subtask", () => {
+describe("whether a worktree can go to the next session", () => {
   const worktree = (over: Partial<Worktree> = {}): Worktree => ({
     repo: REPO,
     slot: 0,
@@ -121,17 +141,17 @@ describe("whether a worktree can go to the next subtask", () => {
     expect(
       isFree(worktree({ repos: [repo({ tip: "c2", pushed: "c1" })] }))
     ).toBe(false);
-    expect(isFree(worktree({ live: { taskId: "t", subtaskId: 2 } }))).toBe(
-      false
-    );
+    expect(
+      isFree(worktree({ live: { taskId: "t", runId: "detached:2" } }))
+    ).toBe(false);
     expect(isFree(worktree({ repos: [repo({ tip: "" })] }))).toBe(false);
   });
 });
 
 describe("claiming a worktree", () => {
-  const ctx = { taskId: "task-a", subtaskId: 1 };
+  const ctx = { taskId: "task-a", runId: "detached:1" };
 
-  it("makes the first one, on the subtask's own branch", () => {
+  it("makes the first one, on the run's own branch", () => {
     const pool = memoryPoolStore();
     const claimed = claim(pool, REPO, ctx, 10);
 
@@ -147,17 +167,17 @@ describe("claiming a worktree", () => {
     expect(pool.rows()).toEqual([claimed]);
   });
 
-  /** Core resolves runtime per chunk; a second answer strands the work. */
-  it("answers the same worktree on every chunk of one subtask", () => {
+  /** A repeated `prepare` for one run; a second answer strands the work. */
+  it("answers the same worktree every time for one run", () => {
     const pool = memoryPoolStore();
     const first = claim(pool, REPO, ctx, 10);
     expect(claim(pool, REPO, ctx, 20)).toEqual(first);
   });
 
-  it("gives concurrent subtasks separate worktrees", () => {
+  it("gives concurrent runs separate worktrees", () => {
     const pool = memoryPoolStore();
     claim(pool, REPO, ctx, 10);
-    expect(claim(pool, REPO, { ...ctx, subtaskId: 2 }, 11).slot).toBe(1);
+    expect(claim(pool, REPO, { ...ctx, runId: "detached:2" }, 11).slot).toBe(1);
   });
 
   it("reuses the free worktree used longest ago, and names what it held", () => {
@@ -194,7 +214,9 @@ describe("claiming a worktree", () => {
   it("keeps pools apart by repository", () => {
     const pool = memoryPoolStore();
     claim(pool, REPO, ctx, 10);
-    expect(claim(pool, "acme/cli", { ...ctx, subtaskId: 2 }, 11).slot).toBe(0);
+    expect(
+      claim(pool, "acme/cli", { ...ctx, runId: "detached:2" }, 11).slot
+    ).toBe(0);
   });
 
   it("continues a branch in the worktree that holds it", () => {
@@ -229,14 +251,14 @@ describe("claiming a worktree", () => {
       repo: REPO,
       slot: 0,
       branch: "claude-coder/t/1",
-      live: { taskId: "t", subtaskId: 1 },
+      live: { taskId: "t", runId: "detached:1" },
       repos: [],
       usedAt: 5
     });
 
     expect(() =>
       claim(pool, REPO, { ...ctx, continue: "claude-coder/t/1" }, 10)
-    ).toThrow(/claude-coder\/t\/1 is being worked on by subtask 1/);
+    ).toThrow(/claude-coder\/t\/1 is being worked on by another session/);
   });
 
   it("adopts a branch no worktree holds into a free one", () => {
@@ -263,7 +285,7 @@ describe("a worktree whose workspace was reclaimed", () => {
       repo: REPO,
       slot: 3,
       branch: "claude-coder/t/1",
-      live: { taskId: "t", subtaskId: 1 },
+      live: { taskId: "t", runId: "detached:1" },
       repos: [repo({ tip: "c1" })],
       usedAt: 7
     });
@@ -282,7 +304,7 @@ describe("a worktree whose workspace was reclaimed", () => {
     pool.put({
       repo: REPO,
       slot: 1,
-      live: { taskId: "t", subtaskId: 2 },
+      live: { taskId: "t", runId: "detached:2" },
       repos: [],
       usedAt: 1
     });
@@ -363,9 +385,9 @@ describe("reconciling the pool against the worktrees that are left", () => {
   });
 
   /** A session cannot be in a workspace that is gone, and is not asked about. */
-  it("leaves a worktree a subtask is working in alone", async () => {
+  it("leaves a worktree a session is working in alone", async () => {
     const store = memoryPoolStore();
-    store.put({ ...held(0), live: { taskId: "task-1", subtaskId: 1 } });
+    store.put({ ...held(0), live: { taskId: "task-1", runId: "detached:1" } });
     const asked: string[] = [];
 
     await reconcileWorktrees(store, async (sentinel) => {

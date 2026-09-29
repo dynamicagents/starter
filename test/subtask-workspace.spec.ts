@@ -3,7 +3,8 @@ import {
   parseGitmodules,
   readSubmodules,
   submoduleCloneUrl,
-  subtaskWorkspaces
+  subtaskWorkspaces,
+  type SessionPlace
 } from "@/workspace/subtask-workspace";
 import { SCRATCH_REPO } from "@/workspace/scratch";
 import { isFree, worktreeRepo, type Worktree } from "@/workspace/worktree-pool";
@@ -71,9 +72,9 @@ function harness(opts: {
   tipsThrow?: boolean;
   /** Repositories whose remote has the branch being placed. */
   remote?: string[];
-  /** Fail the reset an abort runs. */
-  resetFails?: boolean;
-  /** What keeping a failed subtask's work leaves each repository's HEAD at. */
+  /** Refuse every session at admission. */
+  refuse?: boolean;
+  /** What keeping a failed run's work leaves each repository's HEAD at. */
   kept?: Record<string, { head: string; wip?: boolean }>;
   /**
    * Fail the commit that keeps it. Every repository's HEAD is still reported,
@@ -81,6 +82,10 @@ function harness(opts: {
    * exits non-zero at the end.
    */
   keepFails?: boolean;
+  /** Throw from the command that keeps it: the container is unreachable. */
+  keepThrows?: boolean;
+  /** Throw from stopping the session. */
+  stopThrows?: boolean;
 }) {
   const calls: string[] = [];
   let cloneFails = opts.cloneFails;
@@ -90,9 +95,11 @@ function harness(opts: {
   const placed: Record<string, string>[] = [];
   const keeps: { cwd: string; env: Record<string, string> }[] = [];
   const stopped: string[] = [];
+  const admitted: string[] = [];
   let current = "";
   const stub = {
     checkoutDir: async () => dirs[current],
+    advisories: async () => [],
     gitClone: async (req: { dir: string; branch?: string }) => {
       calls.push(`clone ${req.dir}@${req.branch ?? ""}`);
       if (cloneFails && req.dir.endsWith(cloneFails.dir)) {
@@ -163,6 +170,7 @@ function harness(opts: {
         return { success: true, stdout: rows.join("\n"), stderr: "" };
       }
       if (command.includes("WORKTREE_KEEP_PATHS")) {
+        if (opts.keepThrows) throw new Error("container unreachable");
         keeps.push({ cwd: options.cwd, env });
         const paths = (env.WORKTREE_KEEP_PATHS ?? "").split("\n");
         calls.push(`keep ${paths.join(",")}`);
@@ -183,20 +191,15 @@ function harness(opts: {
           .map((path) => `${path}\t${opts.tips?.[path] ?? ""}`);
         return { success: true, stdout: rows.join("\n"), stderr: "" };
       }
-      if (
-        command.includes(
-          'git -C "$path" checkout -f -q -B "$WORKTREE_BRANCH" "$start"'
-        )
-      ) {
-        calls.push(`reset ${env.WORKTREE_REPOS?.replaceAll("\t", "@")}`);
-        if (opts.resetFails) {
-          return { success: false, stdout: "", stderr: "index.lock" };
-        }
-      }
       return { success: true, stdout: "", stderr: "" };
     },
-    stopSession: async (workspace, subtaskId) => {
-      stopped.push(`${workspace}#${subtaskId}`);
+    stopSession: async (workspace, runId) => {
+      stopped.push(`${workspace}#${runId}`);
+      if (opts.stopThrows) throw new Error("session unreachable");
+    },
+    admit: async (workspace) => {
+      admitted.push(workspace);
+      if (opts.refuse) throw new Error("no credential can pay for it");
     },
     active,
     pool,
@@ -207,21 +210,35 @@ function harness(opts: {
   const heal = () => {
     cloneFails = undefined;
   };
-  return { subtasks, calls, pool, active, placed, keeps, stopped, heal };
+  return {
+    subtasks,
+    calls,
+    pool,
+    active,
+    placed,
+    keeps,
+    stopped,
+    admitted,
+    heal
+  };
 }
 
-const ctx = { taskId: "task-a", subtaskId: 1 };
+const ctx = { taskId: "task-a", runId: "detached:1" };
+
+/** The workspace a session is handed, which is what most specs are about. */
+const nameOf = async (place: Promise<SessionPlace>) =>
+  (await place).workspaceName;
 const SLOT0 = `caller|${worktreeRepo("acme/api", 0)}`;
 const SLOT1 = `caller|${worktreeRepo("acme/api", 1)}`;
 
-describe("preparing a worktree for a writing subtask", () => {
+describe("preparing a worktree for a writing session", () => {
   it("clones, fetches, puts it on the branch and installs", async () => {
     const { subtasks, calls, pool, active, placed } = harness({
       selected: "acme/api",
       checkout: CHECKOUT
     });
 
-    expect(await subtasks.resolve(ctx)).toBe(SLOT0);
+    expect(await nameOf(subtasks.resolve(ctx))).toBe(SLOT0);
     expect(calls).toEqual([
       `clear ${CHECKOUT.dir}`,
       `clone ${CHECKOUT.dir}@main`,
@@ -265,8 +282,20 @@ describe("preparing a worktree for a writing subtask", () => {
     expect(active.get()).toBe("acme/api");
   });
 
-  /** Core resolves runtime per chunk; the second chunk must not redo anything. */
-  it("answers the same worktree on every chunk, preparing it once", async () => {
+  it("asks the worktree it claimed before cloning into it", async () => {
+    const { subtasks, calls, admitted } = harness({
+      selected: "acme/api",
+      checkout: CHECKOUT,
+      refuse: true
+    });
+
+    await expect(subtasks.resolve(ctx)).rejects.toThrow(/no credential/);
+    expect(admitted).toEqual([SLOT0]);
+    expect(calls).toEqual([]);
+  });
+
+  /** A repeated `prepare` for one run must not redo anything. */
+  it("answers the same worktree every time for one run, preparing it once", async () => {
     const { subtasks, calls } = harness({
       selected: "acme/api",
       checkout: CHECKOUT
@@ -274,15 +303,17 @@ describe("preparing a worktree for a writing subtask", () => {
 
     await subtasks.resolve(ctx);
     const before = calls.length;
-    expect(await subtasks.resolve(ctx)).toBe(SLOT0);
+    expect(await nameOf(subtasks.resolve(ctx))).toBe(SLOT0);
     expect(calls).toHaveLength(before);
   });
 
-  it("gives concurrent subtasks separate worktrees", async () => {
+  it("gives concurrent sessions separate worktrees", async () => {
     const { subtasks } = harness({ selected: "acme/api", checkout: CHECKOUT });
 
     await subtasks.resolve(ctx);
-    expect(await subtasks.resolve({ ...ctx, subtaskId: 2 })).toBe(SLOT1);
+    expect(
+      await nameOf(subtasks.resolve({ ...ctx, runId: "detached:2" }))
+    ).toBe(SLOT1);
   });
 
   /** The retry case: `ready` is only set once every step has finished. */
@@ -303,7 +334,7 @@ describe("preparing a worktree for a writing subtask", () => {
 
     first.heal();
     first.calls.length = 0;
-    expect(await first.subtasks.resolve(ctx)).toBe(SLOT0);
+    expect(await nameOf(first.subtasks.resolve(ctx))).toBe(SLOT0);
     // The superproject is there, so only what failed is cloned.
     expect(first.calls.filter((call) => call.startsWith("clone "))).toEqual([
       `clone ${CHECKOUT.dir}/core@`
@@ -331,14 +362,55 @@ describe("preparing a worktree for a writing subtask", () => {
    * provide. What must not happen is cloning the repository that was selected
    * *before* `scratch_open` ran, which `checkout()` still remembers.
    */
-  it("hands a scratchpad subtask the parent's own workspace", async () => {
+  it("hands a scratchpad session the parent's own workspace", async () => {
     const { subtasks, calls } = harness({
+      selected: SCRATCH_REPO,
+      checkout: CHECKOUT,
+      dirs: { [`caller|${SCRATCH_REPO}`]: "/workspace/scratch" }
+    });
+
+    expect(await subtasks.resolve(ctx)).toEqual({
+      workspaceName: `caller|${SCRATCH_REPO}`,
+      dir: "/workspace/scratch"
+    });
+    expect(calls).toEqual([]);
+  });
+
+  it("refuses a scratchpad the workspace cannot see, before claiming anything", async () => {
+    const { subtasks, pool } = harness({
       selected: SCRATCH_REPO,
       checkout: CHECKOUT
     });
 
-    expect(await subtasks.resolve(ctx)).toBe(`caller|${SCRATCH_REPO}`);
-    expect(calls).toEqual([]);
+    await expect(subtasks.resolve(ctx)).rejects.toThrow(
+      /Clone a repository with `repo_clone`, or open a scratchpad/
+    );
+    expect(pool.every()).toEqual([]);
+  });
+
+  it("answers a reading session with the parent's own checkout", async () => {
+    const { subtasks } = harness({
+      selected: "acme/api",
+      checkout: CHECKOUT,
+      dirs: { "caller|acme/api": "/workspace/api" }
+    });
+
+    expect(await subtasks.reading()).toEqual({
+      workspaceName: "caller|acme/api",
+      dir: "/workspace/api"
+    });
+  });
+
+  it("asks the workspace a reading session reads in", async () => {
+    const { subtasks, admitted } = harness({
+      selected: "acme/api",
+      checkout: CHECKOUT,
+      dirs: { "caller|acme/api": "/workspace/api" },
+      refuse: true
+    });
+
+    await expect(subtasks.reading()).rejects.toThrow(/no credential/);
+    expect(admitted).toEqual(["caller|acme/api"]);
   });
 
   it("delegates from the repository's pool while the parent is in one of its worktrees", async () => {
@@ -347,7 +419,7 @@ describe("preparing a worktree for a writing subtask", () => {
       checkout: CHECKOUT
     });
 
-    expect(await subtasks.resolve(ctx)).toBe(SLOT0);
+    expect(await nameOf(subtasks.resolve(ctx))).toBe(SLOT0);
   });
 
   /**
@@ -364,7 +436,7 @@ describe("preparing a worktree for a writing subtask", () => {
   });
 });
 
-describe("handing a worktree to the next subtask", () => {
+describe("handing a worktree to the next session", () => {
   it("resets a free worktree onto the new branch, without cloning", async () => {
     const { subtasks, calls, placed } = harness({
       selected: "acme/api",
@@ -376,7 +448,9 @@ describe("handing a worktree to the next subtask", () => {
     await subtasks.release(ctx);
     calls.length = 0;
 
-    expect(await subtasks.resolve({ ...ctx, subtaskId: 2 })).toBe(SLOT0);
+    expect(
+      await nameOf(subtasks.resolve({ ...ctx, runId: "detached:2" }))
+    ).toBe(SLOT0);
     expect(calls).not.toContain(`clone ${CHECKOUT.dir}@main`);
     expect(calls).toEqual([
       "noteCheckout",
@@ -405,7 +479,9 @@ describe("handing a worktree to the next subtask", () => {
       repos: [{ path: ".", tip: "c1" }]
     });
     expect(pool.rows()[0]?.live).toBeUndefined();
-    expect(await subtasks.resolve({ ...ctx, subtaskId: 2 })).toBe(SLOT1);
+    expect(
+      await nameOf(subtasks.resolve({ ...ctx, runId: "detached:2" }))
+    ).toBe(SLOT1);
   });
 
   /** Unknown tips hold the worktree rather than risk resetting commits. */
@@ -432,11 +508,13 @@ describe("handing a worktree to the next subtask", () => {
     calls.length = 0;
 
     expect(
-      await subtasks.resolve({
-        ...ctx,
-        subtaskId: 2,
-        continue: "claude-coder/task-a/1"
-      })
+      await nameOf(
+        subtasks.resolve({
+          ...ctx,
+          runId: "detached:2",
+          continue: "claude-coder/task-a/1"
+        })
+      )
     ).toBe(SLOT0);
     expect(calls).toContain("place continue");
     // Measured against where the branch started, not where the remote is now.
@@ -467,7 +545,7 @@ describe("handing a worktree to the next subtask", () => {
 
     await reclaimed.subtasks.resolve({
       ...ctx,
-      subtaskId: 2,
+      runId: "detached:2",
       continue: "claude-coder/task-a/1"
     });
     expect(reclaimed.calls).toContain(`clone ${CHECKOUT.dir}@main`);
@@ -490,7 +568,7 @@ describe("handing a worktree to the next subtask", () => {
     expect(pool.rows()[0]?.branch).toBeUndefined();
   });
 
-  it("adopts a pull request's branch no subtask made", async () => {
+  it("adopts a pull request's branch no session made", async () => {
     const { subtasks, placed } = harness({
       selected: "acme/api",
       checkout: CHECKOUT,
@@ -535,98 +613,12 @@ describe("handing a worktree to the next subtask", () => {
   });
 });
 
-describe("aborting a writing subtask", () => {
-  it("stops the session, then puts each repository back where it started", async () => {
-    const { subtasks, calls, stopped } = harness({
-      selected: "acme/api",
-      checkout: CHECKOUT
-    });
-    await subtasks.resolve(ctx);
-    calls.length = 0;
-
-    await subtasks.abort(ctx);
-
-    expect(stopped).toEqual([`${SLOT0}#1`]);
-    expect(calls).toEqual([`reset .@${sha("origin/main")}`]);
-  });
-
-  it("stops a session whose worktree never got ready, and resets nothing", async () => {
-    const { subtasks, calls, stopped } = harness({
-      selected: "acme/api",
-      checkout: CHECKOUT,
-      cloneFails: { dir: CHECKOUT.dir, message: "network" }
-    });
-    await expect(subtasks.resolve(ctx)).rejects.toThrow();
-    calls.length = 0;
-
-    await subtasks.abort(ctx);
-
-    expect(stopped).toEqual([`${SLOT0}#1`]);
-    expect(calls).toEqual([]);
-  });
-
-  it("does nothing for a subtask that holds no worktree", async () => {
-    const { subtasks, stopped } = harness({
-      selected: "acme/api",
-      checkout: CHECKOUT
-    });
-    await subtasks.abort(ctx);
-    await subtasks.release(ctx);
-    expect(stopped).toEqual([]);
-  });
-
-  /**
-   * `stopSession` delivers `SIGTERM` and returns, so a session can still commit
-   * while the reset runs — this path is reached with no drain left to wait on.
-   * The tips here are what such a commit would leave, and none of it may be
-   * recorded as the branch's: the row says where the reset put it.
-   */
-  it("records where the reset left it, not what a session committed after", async () => {
-    const { subtasks, calls, pool } = harness({
-      selected: "acme/api",
-      checkout: CHECKOUT,
-      tips: { ".": "committed-after-the-reset" }
-    });
-    await subtasks.resolve(ctx);
-    calls.length = 0;
-
-    await subtasks.abort(ctx);
-    // Core runs this next on the same path, and it must find nothing to do.
-    await subtasks.release(ctx);
-
-    const [row] = pool.all("acme/api");
-    expect(row?.live).toBeUndefined();
-    expect(row?.repos.map((repo) => repo.tip)).toEqual([sha("origin/main")]);
-    expect(isFree(row!)).toBe(true);
-    // Only the reset — `release` read no tips, because it found no live row.
-    expect(calls).toEqual([`reset .@${sha("origin/main")}`]);
-  });
-
-  /** A reset that failed proves nothing about the tree, so the row is not freed. */
-  it("leaves the worktree held when the reset failed", async () => {
-    const { subtasks, pool } = harness({
-      selected: "acme/api",
-      checkout: CHECKOUT,
-      resetFails: true,
-      tips: { ".": "unpushed" }
-    });
-    await subtasks.resolve(ctx);
-
-    await subtasks.abort(ctx);
-    await subtasks.release(ctx);
-
-    const [row] = pool.all("acme/api");
-    expect(row?.repos.map((repo) => repo.tip)).toEqual(["unpushed"]);
-    expect(isFree(row!)).toBe(false);
-  });
-});
-
 /**
- * A subtask the Workflow gave up on: its step ran out of retries, which says
- * nothing about the session. Every one lost this way was healthy, so its work is
- * kept where a `continue` will find it, and the failure says so.
+ * A run that did not complete — it failed, or its task was canceled — which
+ * says nothing about the session's work, so it is kept where a `continue` will
+ * find it. Why a cancel resets nothing is on `keep`.
  */
-describe("keeping what a failed writing subtask did", () => {
+describe("keeping what a session that did not complete did", () => {
   const BRANCH = "claude-coder/task-a/1";
 
   it("stops the session and commits what it left, resetting nothing", async () => {
@@ -638,9 +630,10 @@ describe("keeping what a failed writing subtask did", () => {
     await subtasks.resolve(ctx);
     calls.length = 0;
 
-    const note = await subtasks.fail(ctx);
+    const { note, settled } = await subtasks.keep(ctx);
 
-    expect(stopped).toEqual([`${SLOT0}#1`]);
+    expect(settled).toBe(true);
+    expect(stopped).toEqual([`${SLOT0}#detached:1`]);
     expect(calls).toEqual(["keep ."]);
     // From `/`, so the command's own shell is not a process it waits to leave
     // the worktree.
@@ -660,7 +653,7 @@ describe("keeping what a failed writing subtask did", () => {
     });
     await subtasks.resolve(ctx);
 
-    await subtasks.fail(ctx);
+    await subtasks.keep(ctx);
     // Core runs this next on the same path.
     await subtasks.release(ctx);
 
@@ -669,7 +662,9 @@ describe("keeping what a failed writing subtask did", () => {
     expect(isFree(row!)).toBe(false);
     calls.length = 0;
     expect(
-      await subtasks.resolve({ ...ctx, subtaskId: 2, continue: BRANCH })
+      await nameOf(
+        subtasks.resolve({ ...ctx, runId: "detached:2", continue: BRANCH })
+      )
     ).toBe(SLOT0);
     expect(calls).toContain("place continue");
   });
@@ -682,7 +677,7 @@ describe("keeping what a failed writing subtask did", () => {
     });
     await subtasks.resolve(ctx);
 
-    const note = await subtasks.fail(ctx);
+    const { note } = await subtasks.keep(ctx);
 
     expect(note).toContain(`\`${BRANCH}\``);
     expect(note).not.toContain("WIP");
@@ -698,7 +693,7 @@ describe("keeping what a failed writing subtask did", () => {
 
     // A branch with nothing on it is not worth continuing, and saying it is would
     // send the model to an empty branch.
-    expect(await subtasks.fail(ctx)).toBeUndefined();
+    expect(await subtasks.keep(ctx)).toEqual({ settled: true });
   });
 
   it("stops a session whose worktree never got ready, and keeps nothing", async () => {
@@ -710,8 +705,8 @@ describe("keeping what a failed writing subtask did", () => {
     await expect(subtasks.resolve(ctx)).rejects.toThrow();
     calls.length = 0;
 
-    expect(await subtasks.fail(ctx)).toBeUndefined();
-    expect(stopped).toEqual([`${SLOT0}#1`]);
+    expect(await subtasks.keep(ctx)).toEqual({ settled: true });
+    expect(stopped).toEqual([`${SLOT0}#detached:1`]);
     expect(calls).toEqual([]);
   });
 
@@ -727,7 +722,9 @@ describe("keeping what a failed writing subtask did", () => {
       });
       await subtasks.resolve(ctx);
 
-      expect(await subtasks.fail(ctx)).toContain(`\`${BRANCH}\``);
+      const kept = await subtasks.keep(ctx);
+      expect(kept.note).toContain(`\`${BRANCH}\``);
+      expect(kept.settled).toBe(false);
       expect(warn).toHaveBeenCalledWith(
         expect.stringContaining(
           "could not commit what an interrupted session left"
@@ -737,6 +734,58 @@ describe("keeping what a failed writing subtask did", () => {
     } finally {
       warn.mockRestore();
     }
+  });
+
+  /**
+   * A run whose work was not secured — its session would not stop, or what it
+   * left could not be committed — never goes back to the pool on tips that
+   * read as its base: the next claim's `clean` would take the edit.
+   */
+  it.each([
+    ["the WIP commit failed", { keepFails: true }],
+    ["the session would not stop", { stopThrows: true }],
+    ["the worktree could not be reached", { keepThrows: true }]
+  ] as const)(
+    "holds a worktree whose work it could not secure: %s",
+    async (_why, failure) => {
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+      try {
+        const { subtasks, pool } = harness({
+          selected: "acme/api",
+          checkout: CHECKOUT,
+          ...failure,
+          // Nothing committed: the tips read as the base.
+          kept: { ".": { head: sha("origin/main") } },
+          tips: { ".": sha("origin/main") }
+        });
+        await subtasks.resolve(ctx);
+
+        const kept = await subtasks.keep(ctx);
+        expect(kept.settled).toBe(false);
+        await subtasks.release(ctx, { hold: !kept.settled });
+
+        const [row] = pool.all("acme/api");
+        expect(row?.live).toBeUndefined();
+        expect(isFree(row!)).toBe(false);
+      } finally {
+        warn.mockRestore();
+      }
+    }
+  );
+
+  it("frees a worktree whose session did nothing, once it is secured", async () => {
+    const { subtasks, pool } = harness({
+      selected: "acme/api",
+      checkout: CHECKOUT,
+      kept: { ".": { head: sha("origin/main") } },
+      tips: { ".": sha("origin/main") }
+    });
+    await subtasks.resolve(ctx);
+
+    const kept = await subtasks.keep(ctx);
+    await subtasks.release(ctx, { hold: !kept.settled });
+
+    expect(isFree(pool.all("acme/api")[0]!)).toBe(true);
   });
 });
 
@@ -771,13 +820,13 @@ describe("a worktree of a superproject", () => {
     });
   }
 
-  it("keeps a failed subtask's work in every repository, leaving pins out of the superproject's", async () => {
+  it("keeps a failed session's work in every repository, leaving pins out of the superproject's", async () => {
     const { subtasks, keeps } = superHarness({
       kept: { core: { head: "core-wip", wip: true } }
     });
     await subtasks.resolve(ctx);
 
-    expect(await subtasks.fail(ctx)).toContain("WIP commit");
+    expect((await subtasks.keep(ctx)).note).toContain("WIP commit");
     expect(keeps[0]?.env.WORKTREE_KEEP_PATHS?.split("\n")).toEqual([
       ".",
       "core",
@@ -949,5 +998,29 @@ describe("which submodule paths are accepted", () => {
     ["one with an empty segment", "a//b"]
   ])("refuses %s", async (_label, path) => {
     await expect(read(path)).rejects.toThrow(/could leave the checkout/);
+  });
+});
+
+/**
+ * A task that has ended owes nothing a claim still holds. A claim whose run
+ * never started — the turn was cut between the claim and the dispatch — has no
+ * `settle` coming, and a claim left live is passed over for good.
+ */
+describe("releasing what an ended task still holds", () => {
+  it("frees every worktree the task claimed, and no other task's", async () => {
+    const { subtasks, pool } = harness({
+      selected: "acme/api",
+      checkout: CHECKOUT
+    });
+
+    await subtasks.resolve(ctx);
+    await subtasks.resolve({ taskId: "task-b", runId: "detached:9" });
+    await subtasks.releaseTask("task-a");
+
+    const live = pool
+      .all("acme/api")
+      .filter((row) => row.live)
+      .map((row) => row.live);
+    expect(live).toEqual([{ taskId: "task-b", runId: "detached:9" }]);
   });
 });

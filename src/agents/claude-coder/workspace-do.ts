@@ -10,20 +10,16 @@ import {
 import {
   WorkspaceObjectBase,
   type WorkspaceObjectConfig
-} from "@dynamicagents/plugins/computer";
+} from "@dynamicagents/plugins/workspace";
 import { CLAUDE_CODE_SESSION } from "@/config";
 import { INSTALL_PLAN } from "@/workspace/install-plan";
 import { gitIdentity } from "@/workspace/git-identity";
-import {
-  claudeCodeConfig,
-  noWorkspaceRouting,
-  CREDENTIALS_KEY
-} from "./claude-code";
+import { claudeCodeConfig, CREDENTIALS_KEY } from "./claude-code";
 
 /**
  * The claude-coder's workspace, bound as `CLAUDE_CODER_WORKSPACE`.
  *
- * Everything a workspace does is in `@dynamicagents/plugins/computer`,
+ * Everything a workspace does is in `@dynamicagents/plugins/workspace`,
  * shared with cf-coder. Two things are this agent's own, and both exist so that the container
  * never holds an Anthropic credential — see `./claude-code.ts`:
  *
@@ -38,8 +34,8 @@ import {
  * — `npm ci` fails with SELF_SIGNED_CERT_IN_CHAIN and the session reports
  * "Self-signed certificate detected", neither of which mentions egress.
  *
- * That trust is installed by the workspace host in
- * `@dynamicagents/plugins/computer`, whose `ca-trust` module carries the
+ * That trust is installed by the workspace object in
+ * `@dynamicagents/plugins/workspace`, whose `ca-trust` module carries the
  * full reasoning — including why it cannot live in the image's entrypoint, where
  * Cloudflare's own recipe puts it. Changing this mode means reading it.
  */
@@ -65,45 +61,28 @@ export class ClaudeCoderWorkspaceDO extends WorkspaceObjectBase {
 
   /**
    * Built once, and only for its `egress()` — this object never starts a
-   * session. The facet does that, over RPC, through the workspace runtime.
-   *
-   * The workspace name thunk is unused on this path and would be wrong here
-   * anyway: the name is resolved on the *parent*, from the verified caller, and
-   * this object already knows which workspace it is by being it.
+   * session. A sub-agent does that, over RPC, through the workspace runtime.
    */
-  readonly #session = claudeCodeSession(
-    claudeCodeConfig(
-      this.env,
-      noWorkspaceRouting(
-        "this object already knows which workspace it is by being it, and " +
-          "resolves nothing for anyone else"
-      )
-    )
-  );
+  readonly #session = claudeCodeSession(claudeCodeConfig(this.env));
 
   protected workspaceConfig(): WorkspaceObjectConfig {
     return {
       binding: "CLAUDE_CODER_WORKSPACE",
       label: "claude-coder-workspace",
       installPlan: INSTALL_PLAN,
-      // Above the whole session, not above one drain window.
+      // Above the whole session.
       //
       // The base's default is twenty minutes, and its rule is that the window
       // must exceed the longest command the shell allows — measured from when
       // that command *starts*, because nothing touches the object again while it
       // runs. This agent's longest command is a `claude -p` session that stays
       // detached for its entire timeout, so twenty minutes would put the idle
-      // alarm inside a live session.
-      //
-      // Chunk boundaries re-enter this object and `#touch()` roughly every
-      // `windowMs`, which does hide it almost always — but "almost always" is
-      // not what that rule promises, and one retried or delayed chunk is enough
-      // to stop the container under a running session and lose both the work and
-      // the cached prefix that bought it.
+      // alarm inside a live session and stop the container under it, losing both
+      // the work and the cached prefix that bought it.
       //
       // Derived from the session timeout rather than written out, so raising one
       // moves the other. The margin covers the gap between a session ending and
-      // the final chunk unwinding.
+      // its report being written.
       containerIdleMs: CLAUDE_CODE_SESSION.timeoutMs + 5 * 60_000,
       egress: {
         mode: "http-gateway",
@@ -115,8 +94,9 @@ export class ClaudeCoderWorkspaceDO extends WorkspaceObjectBase {
   }
 
   /**
-   * Is any credential usable right now, and if not, when? Asked by the facet
-   * before it starts a session — see `./subagent.ts`, which carries the reason.
+   * Is any credential usable right now, and if not, when? Asked before a
+   * session is dispatched — see `admitSession` in `./plugins.ts`, which carries
+   * the reason.
    */
   async claudeCredentials(): Promise<Lead> {
     return await this.#session.credentials(this.#credentials);
@@ -137,8 +117,8 @@ export class ClaudeCoderWorkspaceDO extends WorkspaceObjectBase {
    * and inert, waiting on a real refusal to name the status that fills it.
    *
    * **It marks whichever credential is leading now, which is an approximation.**
-   * The drain reports a reading only to the chunk that observed it, so this
-   * cannot be a stale one from an earlier window — but a pool that rotated
+   * The report carries the last reading the session made, so this cannot be a
+   * stale one from an earlier session — but a pool that rotated
    * between the reading and this call marks the wrong entry. That is bounded:
    * rotation only happens on a refusal, which is the gateway already retiring
    * the credential this would have retired, and `spend` takes the later of the
@@ -152,10 +132,7 @@ export class ClaudeCoderWorkspaceDO extends WorkspaceObjectBase {
     if (resetAt === undefined || resetAt <= Date.now()) return;
 
     const pool = credentialPool({
-      credentials: claudeCodeConfig(
-        this.env,
-        noWorkspaceRouting("the credential pool routes nothing")
-      ).credentials,
+      credentials: claudeCodeConfig(this.env).credentials,
       store: this.#credentials
     });
     // Whichever credential the gateway is handing out is the one this session's

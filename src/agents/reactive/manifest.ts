@@ -15,8 +15,8 @@ export const manifest: AgentManifest = {
   name: "Reactive Agent",
   description:
     "A delegating A2A agent. Verifies the gatekeeper identity JWT, then answers the " +
-    "caller via a Workers-AI round loop — handing work to isolated subagents when " +
-    "it helps — with a durable per-caller memory (one continuous, self-compacting " +
+    "caller on a Workers AI model — handing work to sub-agents when it helps — " +
+    "with a durable per-caller memory (one continuous, self-compacting " +
     "conversation).",
   version: "0.1.0",
   // `extensions` is a required (repeated) protobuf field in v1.0 — we declare no
@@ -43,7 +43,7 @@ export const manifest: AgentManifest = {
       id: "delegate",
       name: "Research and long-running work",
       description:
-        "Break a request into concurrent subtasks run by isolated subagents, then compose their results into one answer.",
+        "Hand self-contained pieces of a request to sub-agents, several at once when it splits cleanly, then compose their results into one answer.",
       tags: ["research", "delegation"],
       examples: [],
       inputModes: [],

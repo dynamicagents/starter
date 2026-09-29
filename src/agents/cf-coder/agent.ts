@@ -1,19 +1,26 @@
-import type { AgentPlugin, CoreConfigOverrides } from "@dynamicagents/core";
-import type { PluginHost } from "@dynamicagents/core/host";
-import {
-  RoundAgentBase,
-  type RoundPolicy,
-  type SubagentClass
-} from "@dynamicagents/core/round";
-import { CF_CODER_CONFIG } from "@/config";
-import { cfCoder } from "./definition";
-import { roundPolicy } from "@/round-policy";
+import type {
+  ThinkModel,
+  ThinkScheduledTasks,
+  TurnConfig,
+  TurnContext
+} from "@cloudflare/think";
+import type { AgentPlugin } from "@dynamicagents/core";
+import { A2AAgent } from "@dynamicagents/core/agent";
+import type { SubAgentClass } from "@dynamicagents/core/subagent";
+import { computerWorkspace } from "@dynamicagents/plugins/computer";
+import { workspaceName } from "@dynamicagents/plugins/workspace";
+import type { ContextConfig } from "agents/context";
+import type { LanguageModel, ToolSet } from "ai";
+import { CF_CODER } from "@/config";
+import { copy } from "@/copy";
+import { agentModel } from "@/model";
 import { activeRepo } from "@/workspace/active-repo";
-import { discardWorkingTree, sweepIdleWorkspaces } from "@/workspace/lifecycle";
-import { workspaceName } from "@dynamicagents/plugins/computer";
-import { parentPlugins } from "./plugins";
-import { soulPrompt } from "./soul";
-import { CfCoderSubagent } from "./subagent";
+import { WORKSPACE_WRITERS } from "@/workspace/container";
+import { sweepIdleWorkspaces } from "@/workspace/lifecycle";
+import { CfCoderCode } from "./children";
+import { cfCoder } from "./definition";
+import { container, parentPlugins } from "./plugins";
+import { MEMORY, SOUL } from "./soul";
 
 /** This agent's log prefix and workspace label. */
 const LABEL = "cf-coder";
@@ -21,115 +28,105 @@ const LABEL = "cf-coder";
 /**
  * The cf-coder agent.
  *
- * A delegating round agent like `reactive`: the loop, the durable Subtask rows
- * and the subagent execution are all `@dynamicagents/core/round`, and the model pair
- * is core's Workers AI default like every other agent here.
- *
- * What makes it the odd one out is the container underneath — so the overrides
- * below are all lifecycle, not inference: a weekly reclaim sweep for workspaces
- * nothing is calling into, and a working-tree reset when a task is cancelled.
+ * A delegating agent like `reactive`: the task, the turn and delegation are
+ * `@dynamicagents/core/agent`. What makes it the odd one out is the container
+ * underneath — so the members below are mostly lifecycle, not inference: a
+ * weekly reclaim sweep for workspaces nothing is calling into, and a parent that
+ * can read the checkout but not change it.
  */
-export class CfCoderAgent extends RoundAgentBase<Env> {
-  protected agentConfig(): CoreConfigOverrides {
-    return { ...CF_CODER_CONFIG, agentName: cfCoder.tenant };
-  }
+export class CfCoder extends A2AAgent<Env> {
+  protected readonly copy = copy;
+  protected readonly compactAfterTokens = CF_CODER.compactAfterTokens;
+  protected readonly keepRecentTokens = CF_CODER.keepRecentTokens;
 
   /**
-   * The **parent's** list, which is not the subagent's — see `plugins.ts`. This
-   * agent orchestrates and reviews; it has git, a browser and read-only eyes on
-   * the container, and no way to change a file.
+   * Which repository the caller is working on. One instance for the object:
+   * it caches what it last read, and the plugins and the workspace below must
+   * agree on it.
    */
-  protected agentPlugins(host: PluginHost<Env>): AgentPlugin[] {
-    return parentPlugins(host);
+  readonly #active = activeRepo(this.ctx.storage);
+  readonly #container = container(this.env, () =>
+    workspaceName(this.callerKey(), this.#active.get())
+  );
+
+  /** Think's file tools, over the checkout rather than this object's SQLite. */
+  override workspace = computerWorkspace(this.#container);
+  /**
+   * Off, because the parent has no shell: Think's own `bash` would run over the
+   * same workspace and could write anything the file tools are kept from.
+   */
+  override workspaceBash = false as const;
+
+  override getModel(): ThinkModel {
+    return agentModel(
+      this.env,
+      { modelId: CF_CODER.modelId, name: this.name },
+      { agent: cfCoder.tenant, taskId: this.turnTaskId(), phase: "turn" }
+    );
   }
 
-  protected agentSoul(capabilities: string): string {
-    return soulPrompt(capabilities);
+  /** Compaction runs over a history every task shares, so it has no task. */
+  protected override compactionModel(): LanguageModel {
+    return agentModel(
+      this.env,
+      { modelId: CF_CODER.modelId, name: this.name },
+      { agent: cfCoder.tenant, phase: "compaction" }
+    );
   }
 
-  /** The words the loop says — shared with the other round agents. */
-  protected roundPolicy(): RoundPolicy {
-    return roundPolicy;
+  override configureContext(): ContextConfig[] {
+    return [
+      { label: "soul", provider: { get: async () => SOUL } },
+      { label: "memory", description: MEMORY },
+      ...super.configureContext()
+    ];
   }
 
-  protected subagentClass(): SubagentClass {
-    return CfCoderSubagent;
+  override getPlugins(): AgentPlugin<Env>[] {
+    return parentPlugins(this.env, this.#active, this.#container);
+  }
+
+  override getSubAgents(): SubAgentClass[] {
+    return [CfCoderCode];
+  }
+
+  /** `check_back`, for the wait between opening a pull request and its review. */
+  override getTools(): ToolSet {
+    return { ...super.getTools(), check_back: this.checkBackTool() };
+  }
+
+  /** The turn core configures, minus Think's own file writers. */
+  override async beforeTurn(ctx: TurnContext): Promise<TurnConfig | void> {
+    const base = await super.beforeTurn(ctx);
+    return {
+      ...base,
+      activeTools: Object.keys(ctx.tools).filter(
+        (name) => !WORKSPACE_WRITERS.has(name)
+      )
+    };
   }
 
   /**
-   * Register the workspace reclaim sweep alongside core's own cleanup cron.
+   * The workspace reclaim sweep, beside core's own weekly cleanup and an hour
+   * after it, so the two never contend for the same instance.
    *
    * A **backstop**, not the mechanism. Each workspace arms its own `idle-reclaim`
-   * alarm on every use, and that is what normally fires — exactly seven days
-   * after the last touch, with no registry and no help from here.
-   *
-   * What this covers is the one case the workspace cannot cover itself. A
-   * throwing `alarm()` is retried a bounded number of times and then dropped
-   * permanently, and `idle-reclaim` is the only intent that cannot heal on the
-   * next RPC, because by definition nothing is calling in. So once a week this
-   * pokes every workspace this caller has ever used and lets each decide.
-   *
-   * `super.onStart()` first: core registers its own weekly task cleanup there,
-   * and both schedules coexist.
+   * alarm on every use, and that is what normally fires. The body is in
+   * `@/workspace/lifecycle.ts`, which carries the one case it covers.
    */
-  override async onStart(): Promise<void> {
-    await super.onStart();
-    const existing = await this.listSchedules({ type: "cron" });
-    if (!existing.some((s) => s.callback === "reclaimIdleWorkspaces")) {
-      // Sunday 02:00 UTC — an hour after core's, so the two never contend for
-      // the same instance.
-      await this.schedule("0 2 * * 0", "reclaimIdleWorkspaces", {});
-    }
-  }
-
-  /**
-   * Cron handler, delegating to the shared sweep.
-   *
-   * The body is in `@/workspace/lifecycle.ts` because `claude-coder` owes its
-   * workspaces exactly the same thing, and a sweep whose whole job is to decide
-   * *not* to act is the wrong code to have two copies of.
-   */
-  async reclaimIdleWorkspaces(): Promise<void> {
-    await sweepIdleWorkspaces({
-      host: this.pluginHost(),
-      binding: this.env.CF_CODER_WORKSPACE,
-      label: LABEL
-    });
-  }
-
-  /**
-   * Discard a cancelled task's half-finished edits — without discarding the
-   * workspace.
-   *
-   * The reasoning, and the reversal that produced it, is on
-   * `discardWorkingTree` in `@/workspace/lifecycle.ts`. All that belongs here is
-   * which workspace: the caller's, for the repository they were working on.
-   */
-  protected override async onTaskCanceled(taskId: string): Promise<void> {
-    await super.onTaskCanceled(taskId);
-    const active = activeRepo(this.pluginHost());
-    const repo = active.get();
-    await discardWorkingTree({
-      binding: this.env.CF_CODER_WORKSPACE,
-      name: workspaceName(this.identityKeyOrTask(taskId), repo),
-      repo,
-      label: LABEL
-    });
-  }
-
-  /**
-   * The caller key, resilient to being called before a caller is known.
-   *
-   * `plugins.ts` keys workspaces on the verified caller, and cancellation can
-   * arrive on an instance that has not served a turn yet — where `callerKey`
-   * throws. Falling back to the task id is wrong-but-harmless: it addresses a
-   * workspace nobody has ever used rather than someone else's.
-   */
-  private identityKeyOrTask(taskId: string): string {
-    try {
-      return this.pluginHost().callerKey();
-    } catch {
-      return taskId;
-    }
+  override getScheduledTasks(): ThinkScheduledTasks {
+    return {
+      ...super.getScheduledTasks(),
+      reclaimIdleWorkspaces: {
+        schedule: "every week on sunday at 02:00 in UTC",
+        handler: () =>
+          sweepIdleWorkspaces({
+            storage: this.ctx.storage,
+            callerKey: this.callerKey(),
+            binding: this.env.CF_CODER_WORKSPACE,
+            label: LABEL
+          })
+      }
+    };
   }
 }

@@ -1,145 +1,135 @@
 import { describe, it, expect } from "vitest";
 import { env } from "cloudflare:workers";
 import { runInDurableObject } from "cloudflare:test";
-import type { AgentPlugin } from "@dynamicagents/core";
-import type { PluginHost } from "@dynamicagents/core/host";
-import { sessionMessage } from "@dynamicagents/core/agent";
+import type { LanguageModel } from "ai";
 import { reactive } from "@/agents/reactive/definition";
 import { cfCoder } from "@/agents/cf-coder/definition";
 import { claudeCoder } from "@/agents/claude-coder/definition";
-import { plugins as reactivePlugins } from "@/agents/reactive/plugins";
 
 /**
- * What AI Gateway is told about this Worker's model calls, observed on the
- * agents themselves.
+ * What AI Gateway is told about this Worker's model calls, observed at the
+ * binding.
  *
- * Every agent shares one gateway and one model pair, so the `agent` key is the
- * only thing in a log row that says which of them spent it. Losing it breaks
- * nothing: calls still succeed and the rows simply stop being attributable. So
- * each link is asserted where it is made — the name each Durable Object builds,
- * and the plugins that forward it.
+ * Every agent shares one gateway, so the `agent` key is the only thing in a log
+ * row that says which of them spent it, and `phase` whether it was a turn, a
+ * sub-agent or compaction. Losing either breaks nothing: calls still succeed
+ * and the rows simply stop being attributable. So each class's real
+ * `getModel()` is driven against a binding that records what it was asked.
  */
 
-const TURN =
-  '<turn from="Ada" id="U1" channel="C1" at="2026-09-17T10:00:00Z">anyone around?</turn>';
+type V3 = Extract<LanguageModel, { specificationVersion: "v3" }>;
 
-/** The host a Durable Object hands its plugins. `pluginHost` is protected. */
-const hostOf = (instance: unknown) =>
-  (instance as { pluginHost(): PluginHost<Env> }).pluginHost();
-
-describe("the name each agent's calls are logged under", () => {
-  it.each([reactive, cfCoder, claudeCoder])(
-    "is $tenant's tenant",
-    async (definition) => {
-      const stub = definition.resolveAgent(env, {
-        key: `gateway-attribution:${definition.tenant}`
-      });
-      const name = await runInDurableObject(
-        stub,
-        (instance) => hostOf(instance).agentName
-      );
-
-      expect(name).toBe(definition.tenant);
-    }
-  );
-
-  /**
-   * A facet resolves its own config, and a subagent's calls are most of a
-   * delegating agent's spend. The facet bindings exist only in this pool — see
-   * `vitest.config.ts`.
-   */
-  it.each([
-    ["REACTIVE_SUBAGENT", reactive.tenant],
-    ["CF_CODER_SUBAGENT", cfCoder.tenant],
-    ["CLAUDE_CODER_SUBAGENT", claudeCoder.tenant]
-  ])("is the parent's tenant on %s", async (binding, tenant) => {
-    const namespace = (
-      env as unknown as Record<string, DurableObjectNamespace>
-    )[binding];
-    const stub = namespace.get(namespace.idFromName("gateway-attribution"));
-    const name = await runInDurableObject(
-      stub,
-      (instance) =>
-        (
-          instance as unknown as {
-            subagentRuntime(): { agentName?: string };
-          }
-        ).subagentRuntime().agentName
-    );
-
-    expect(name).toBe(tenant);
-  });
-});
-
-/**
- * A binding that records what each call asked of AI Gateway and answers like
- * the platform would for an embedding.
- */
-const recording = () => {
+/** A binding that records what each call asked of AI Gateway. */
+function recordingAI() {
   const gateways: unknown[] = [];
   const AI = {
     run: async (
       _model: string,
-      inputs: { text?: string[] },
+      _inputs: unknown,
       options: { gateway?: unknown }
     ) => {
       gateways.push(options.gateway);
-      return { data: (inputs.text ?? []).map(() => [0, 0, 0]) };
+      return {
+        response: "ok",
+        usage: { prompt_tokens: 1, completion_tokens: 1 }
+      };
     }
   } as unknown as Ai;
-  const VECTORIZE = {
-    upsert: async () => ({}),
-    query: async () => ({ count: 0, matches: [] })
+  return { AI, gateways };
+}
+
+/** Swap the object's `AI`, build a model with `build`, and make one call. */
+async function gatewayOf(
+  instance: unknown,
+  build: (instance: never) => LanguageModel
+): Promise<unknown> {
+  const seams = instance as { env: Env };
+  const real = seams.env;
+  const { AI, gateways } = recordingAI();
+  seams.env = { ...real, AI };
+  try {
+    const model = build(instance as never) as V3;
+    await model.doGenerate({
+      prompt: [{ role: "user", content: [{ type: "text", text: "hi" }] }]
+    });
+  } finally {
+    seams.env = real;
+  }
+  return gateways[0];
+}
+
+const PARENTS = [reactive, cfCoder, claudeCoder];
+
+/** An agent's own object, by tenant. `resolveAgent` hands back its RPC shape. */
+function parentStub(tenant: string, key: string) {
+  const namespaces: Record<string, DurableObjectNamespace> = {
+    [reactive.tenant]: env.Reactive as unknown as DurableObjectNamespace,
+    [cfCoder.tenant]: env.CfCoder as unknown as DurableObjectNamespace,
+    [claudeCoder.tenant]: env.ClaudeCoder as unknown as DurableObjectNamespace
   };
-  return { AI, VECTORIZE, gateways };
-};
+  const ns = namespaces[tenant]!;
+  return ns.get(ns.idFromName(key));
+}
+
+describe("an agent's calls", () => {
+  it.each(PARENTS)("are $tenant's turns", async (definition) => {
+    const stub = parentStub(
+      definition.tenant,
+      `gateway-attribution:${definition.tenant}`
+    );
+    const gateway = await runInDurableObject(stub, (instance) =>
+      gatewayOf(instance, (agent: { getModel(): LanguageModel }) =>
+        agent.getModel()
+      )
+    );
+    expect(gateway).toEqual({
+      id: "default",
+      metadata: { agent: definition.tenant, phase: "turn" }
+    });
+  });
+
+  it.each(PARENTS)(
+    "are $tenant's compaction, with no task",
+    async (definition) => {
+      const stub = parentStub(
+        definition.tenant,
+        `gateway-attribution:compaction:${definition.tenant}`
+      );
+      const gateway = await runInDurableObject(stub, (instance) =>
+        gatewayOf(instance, (agent: { compactionModel(): LanguageModel }) =>
+          agent.compactionModel()
+        )
+      );
+      expect(gateway).toEqual({
+        id: "default",
+        metadata: { agent: definition.tenant, phase: "compaction" }
+      });
+    }
+  );
+});
 
 /**
- * The agent's own host, over a recording `AI`. The pool's real binding cannot
- * reach a model and rejects outside any promise a spec can await, so nothing
- * here may touch it. The runtime is memoized over the host it was first built
- * with, hence the reset.
+ * A sub-agent's calls are most of a delegating agent's spend. The facet
+ * bindings exist only in this pool — see `vitest.config.ts`. The Claude Code
+ * sub-agents are absent: their model is a session, not a Workers AI call.
  */
-const recordOn = (
-  instance: unknown,
-  bindings: ReturnType<typeof recording>
-) => {
-  const seams = instance as {
-    pluginHost(): PluginHost<Env>;
-    _runtime?: unknown;
-  };
-  const host = seams.pluginHost();
-  const recorded: PluginHost<Env> = {
-    ...host,
-    env: {
-      ...host.env,
-      AI: bindings.AI,
-      VECTORIZE: bindings.VECTORIZE
-    } as unknown as Env,
-    // Recall's namespace; no caller is verified in this pool.
-    callerKey: () => "caller"
-  };
-  seams.pluginHost = () => recorded;
-  seams._runtime = undefined;
-  return recorded;
-};
-
-describe("the reactive agent's calls, at the binding", () => {
-  it("tags recall's embeddings through the host the agent builds", async () => {
-    const stub = reactive.resolveAgent(env, {
-      key: "gateway-attribution:recall"
+describe("a sub-agent's calls", () => {
+  it.each([
+    ["REACTIVE_GENERAL", "ReactiveGeneral", reactive.tenant],
+    ["CF_CODER_CODE", "CfCoderCode", cfCoder.tenant]
+  ])("are the parent's, as %s", async (binding, subAgent, tenant) => {
+    const namespace = (
+      env as unknown as Record<string, DurableObjectNamespace>
+    )[binding]!;
+    const stub = namespace.get(namespace.idFromName("gateway-attribution"));
+    const gateway = await runInDurableObject(stub, (instance) =>
+      gatewayOf(instance, (agent: { getModel(): LanguageModel }) =>
+        agent.getModel()
+      )
+    );
+    expect(gateway).toEqual({
+      id: "default",
+      metadata: { agent: tenant, phase: "subagent", subAgent }
     });
-    const gateways = await runInDurableObject(stub, async (instance) => {
-      const bindings = recording();
-      const recall = reactivePlugins(recordOn(instance, bindings)).find(
-        (p: AgentPlugin) => p.key === "recall"
-      );
-      await recall?.onMessagesDisplaced?.([sessionMessage("user", TURN)]);
-      return bindings.gateways;
-    });
-
-    expect(gateways).toEqual([
-      { id: "default", metadata: { agent: "reactive", phase: "embed" } }
-    ]);
   });
 });

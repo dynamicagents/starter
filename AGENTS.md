@@ -55,6 +55,25 @@ Scaffolding an agent belongs to `npm create dynamicagents`, not to a script here
 Deleting one never edits a deployed migration tag: its Durable Object class goes into
 `deleted_classes` in a new one — the `migrations` comments in `wrangler.jsonc` say why.
 
+**An agent is named for what it does:** `coding`, `anthropic-coding`. One with no
+specialty is named for its purpose instead: `generic`. Every tenant's classes then take
+one shape, each in the file named for it:
+
+| class               | file           |
+| ------------------- | -------------- |
+| `<Tenant>Host`      | `host.ts`      |
+| `<Tenant>Workflow`  | `workflow.ts`  |
+| `<Tenant>Agent`     | `agent.ts`     |
+| `<Tenant>Child`     | `children.ts`  |
+| `<Tenant>Workspace` | `workspace.ts` |
+
+An agent with more than one child names each by its role: `AnthropicCodingWriterChild`,
+`AnthropicCodingReaderChild`.
+
+**A new class takes a name no deployment has used.** A Durable Object namespace is keyed
+by class name, so a class under a live name inherits every object stored under it. An
+unused name lets one migration tag delete the old class and create the new one.
+
 **A tenant id is a public identifier.** A gatekeeper registers against it and it rides
 in a JWT claim, so renaming one is a re-registration, not a refactor.
 

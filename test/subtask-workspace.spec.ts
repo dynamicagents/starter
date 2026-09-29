@@ -82,6 +82,10 @@ function harness(opts: {
    * exits non-zero at the end.
    */
   keepFails?: boolean;
+  /** Throw from the command that keeps it: the container is unreachable. */
+  keepThrows?: boolean;
+  /** Throw from stopping the session. */
+  stopThrows?: boolean;
 }) {
   const calls: string[] = [];
   let cloneFails = opts.cloneFails;
@@ -166,6 +170,7 @@ function harness(opts: {
         return { success: true, stdout: rows.join("\n"), stderr: "" };
       }
       if (command.includes("WORKTREE_KEEP_PATHS")) {
+        if (opts.keepThrows) throw new Error("container unreachable");
         keeps.push({ cwd: options.cwd, env });
         const paths = (env.WORKTREE_KEEP_PATHS ?? "").split("\n");
         calls.push(`keep ${paths.join(",")}`);
@@ -190,6 +195,7 @@ function harness(opts: {
     },
     stopSession: async (workspace, runId) => {
       stopped.push(`${workspace}#${runId}`);
+      if (opts.stopThrows) throw new Error("session unreachable");
     },
     admit: async (workspace) => {
       admitted.push(workspace);
@@ -624,8 +630,9 @@ describe("keeping what a session that did not complete did", () => {
     await subtasks.resolve(ctx);
     calls.length = 0;
 
-    const note = await subtasks.keep(ctx);
+    const { note, settled } = await subtasks.keep(ctx);
 
+    expect(settled).toBe(true);
     expect(stopped).toEqual([`${SLOT0}#detached:1`]);
     expect(calls).toEqual(["keep ."]);
     // From `/`, so the command's own shell is not a process it waits to leave
@@ -670,7 +677,7 @@ describe("keeping what a session that did not complete did", () => {
     });
     await subtasks.resolve(ctx);
 
-    const note = await subtasks.keep(ctx);
+    const { note } = await subtasks.keep(ctx);
 
     expect(note).toContain(`\`${BRANCH}\``);
     expect(note).not.toContain("WIP");
@@ -686,7 +693,7 @@ describe("keeping what a session that did not complete did", () => {
 
     // A branch with nothing on it is not worth continuing, and saying it is would
     // send the model to an empty branch.
-    expect(await subtasks.keep(ctx)).toBeUndefined();
+    expect(await subtasks.keep(ctx)).toEqual({ settled: true });
   });
 
   it("stops a session whose worktree never got ready, and keeps nothing", async () => {
@@ -698,7 +705,7 @@ describe("keeping what a session that did not complete did", () => {
     await expect(subtasks.resolve(ctx)).rejects.toThrow();
     calls.length = 0;
 
-    expect(await subtasks.keep(ctx)).toBeUndefined();
+    expect(await subtasks.keep(ctx)).toEqual({ settled: true });
     expect(stopped).toEqual([`${SLOT0}#detached:1`]);
     expect(calls).toEqual([]);
   });
@@ -715,7 +722,9 @@ describe("keeping what a session that did not complete did", () => {
       });
       await subtasks.resolve(ctx);
 
-      expect(await subtasks.keep(ctx)).toContain(`\`${BRANCH}\``);
+      const kept = await subtasks.keep(ctx);
+      expect(kept.note).toContain(`\`${BRANCH}\``);
+      expect(kept.settled).toBe(false);
       expect(warn).toHaveBeenCalledWith(
         expect.stringContaining(
           "could not commit what an interrupted session left"
@@ -725,6 +734,58 @@ describe("keeping what a session that did not complete did", () => {
     } finally {
       warn.mockRestore();
     }
+  });
+
+  /**
+   * A run whose work was not secured — its session would not stop, or what it
+   * left could not be committed — never goes back to the pool on tips that
+   * read as its base: the next claim's `clean` would take the edit.
+   */
+  it.each([
+    ["the WIP commit failed", { keepFails: true }],
+    ["the session would not stop", { stopThrows: true }],
+    ["the worktree could not be reached", { keepThrows: true }]
+  ] as const)(
+    "holds a worktree whose work it could not secure: %s",
+    async (_why, failure) => {
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+      try {
+        const { subtasks, pool } = harness({
+          selected: "acme/api",
+          checkout: CHECKOUT,
+          ...failure,
+          // Nothing committed: the tips read as the base.
+          kept: { ".": { head: sha("origin/main") } },
+          tips: { ".": sha("origin/main") }
+        });
+        await subtasks.resolve(ctx);
+
+        const kept = await subtasks.keep(ctx);
+        expect(kept.settled).toBe(false);
+        await subtasks.release(ctx, { hold: !kept.settled });
+
+        const [row] = pool.all("acme/api");
+        expect(row?.live).toBeUndefined();
+        expect(isFree(row!)).toBe(false);
+      } finally {
+        warn.mockRestore();
+      }
+    }
+  );
+
+  it("frees a worktree whose session did nothing, once it is secured", async () => {
+    const { subtasks, pool } = harness({
+      selected: "acme/api",
+      checkout: CHECKOUT,
+      kept: { ".": { head: sha("origin/main") } },
+      tips: { ".": sha("origin/main") }
+    });
+    await subtasks.resolve(ctx);
+
+    const kept = await subtasks.keep(ctx);
+    await subtasks.release(ctx, { hold: !kept.settled });
+
+    expect(isFree(pool.all("acme/api")[0]!)).toBe(true);
   });
 });
 
@@ -765,7 +826,7 @@ describe("a worktree of a superproject", () => {
     });
     await subtasks.resolve(ctx);
 
-    expect(await subtasks.keep(ctx)).toContain("WIP commit");
+    expect((await subtasks.keep(ctx)).note).toContain("WIP commit");
     expect(keeps[0]?.env.WORKTREE_KEEP_PATHS?.split("\n")).toEqual([
       ".",
       "core",

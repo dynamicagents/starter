@@ -392,6 +392,18 @@ export interface SessionPlace {
   continues?: boolean;
 }
 
+/** What keeping a run's work found. */
+export interface KeptWork {
+  /** Where the work is, for the delegating model — nothing when it did nothing. */
+  note?: string;
+  /**
+   * Whether the session stopped and nothing it left is uncommitted. Until both
+   * hold, the worktree may be the only copy of an edit, or still be written to,
+   * so it is held whatever its tips read: see {@link SubtaskWorkspaces.release}.
+   */
+  settled: boolean;
+}
+
 export interface SubtaskWorkspaces {
   /**
    * Claim a worktree, put it on the run's branch, and answer where it is. A
@@ -400,13 +412,17 @@ export interface SubtaskWorkspaces {
   resolve(ctx: RunRef & { continue?: string }): Promise<SessionPlace>;
   /** A reading session: the parent's own checkout, read in a throwaway copy. */
   reading(): Promise<SessionPlace>;
-  /** The run is over: record where it left each repository and free it. */
-  release(ctx: RunRef): Promise<void>;
+  /**
+   * The run is over: record where it left each repository and free it. `hold`
+   * keeps it from the next session whatever its tips read — a run whose work
+   * {@link keep} could not secure — until a push says otherwise.
+   */
+  release(ctx: RunRef, options?: { hold?: boolean }): Promise<void>;
   /**
    * The run ended without completing — failed or canceled: stop it and keep
-   * what it did, answering where — or nothing, when it did nothing.
+   * what it did, answering where, and whether that is secured.
    */
-  keep(ctx: RunRef): Promise<string | undefined>;
+  keep(ctx: RunRef): Promise<KeptWork>;
   /**
    * Free every worktree still claimed for a task that has ended. A claim whose
    * run never started — the turn was cut between the two — has no `settle` to
@@ -772,11 +788,14 @@ export function subtaskWorkspaces(config: {
       return placeIn(workspaceName(config.callerKey(), config.active.get()));
     },
 
-    async release(ctx): Promise<void> {
+    async release(ctx, options = {}): Promise<void> {
       const row = liveRow(ctx);
       if (!row) return;
       let repos = row.repos;
-      if (row.ready && row.dir) {
+      if (options.hold) {
+        // An unknown tip is never free: held until a push says otherwise.
+        repos = repos.map((repo) => ({ ...repo, tip: "" }));
+      } else if (row.ready && row.dir) {
         try {
           const read = await config.exec(
             READ_TIPS,
@@ -840,15 +859,22 @@ export function subtaskWorkspaces(config: {
      * otherwise go with the next session to claim the slot.
      *
      * The row stays live: `release` runs next on the same path, reads the tips
-     * this left, and holds the worktree on them.
+     * this left, and holds the worktree on them. Both steps here are
+     * best-effort, so a session that would not stop, or a commit that failed,
+     * answers `settled: false`, and `release` then holds the worktree whatever
+     * its tips read: freed, a session that never committed reads as its base,
+     * and the next claim's `checkout -f` and `clean` would take the only copy
+     * of its edits, or run under a session still writing.
      */
-    async keep(ctx): Promise<string | undefined> {
+    async keep(ctx): Promise<KeptWork> {
       const row = liveRow(ctx);
-      if (!row) return undefined;
+      if (!row) return { settled: true };
       const name = nameOf(row);
+      let stopped = true;
       try {
         await config.stopSession(name, ctx.runId);
       } catch (err) {
+        stopped = false;
         console.warn(
           `[${config.label}] could not stop a session to keep its work`,
           {
@@ -857,31 +883,41 @@ export function subtaskWorkspaces(config: {
           }
         );
       }
-      if (!row.ready || !row.dir || !row.branch) return undefined;
+      if (!row.ready || !row.dir || !row.branch) return { settled: stopped };
       const paths = row.repos.map((repo) => repo.path);
-      const kept = await config.exec(
-        KEEP_INTERRUPTED,
-        {
-          cwd: "/",
-          env: {
-            WORKTREE_DIR: row.dir,
-            WORKTREE_KEEP_PATHS: paths.join("\n"),
-            WORKTREE_KEEP_SUBMODULES: paths
-              .filter((path) => path !== ".")
-              .join("\n"),
-            WIP_MESSAGE
-          }
-        },
-        name
-      );
+      let kept: { success: boolean; stdout: string; stderr: string };
+      try {
+        kept = await config.exec(
+          KEEP_INTERRUPTED,
+          {
+            cwd: "/",
+            env: {
+              WORKTREE_DIR: row.dir,
+              WORKTREE_KEEP_PATHS: paths.join("\n"),
+              WORKTREE_KEEP_SUBMODULES: paths
+                .filter((path) => path !== ".")
+                .join("\n"),
+              WIP_MESSAGE
+            }
+          },
+          name
+        );
+      } catch (err) {
+        console.warn(
+          `[${config.label}] could not reach a worktree to keep its work`,
+          { slot: row.slot, err: String(err) }
+        );
+        return { settled: false };
+      }
       if (!kept.success) {
-        // Nothing was reset, so the worktree holds whatever the session left;
-        // only an uncommitted edit is at risk, and only if the slot is freed.
+        // Nothing was reset, so the worktree holds whatever the session left,
+        // and holding it is what keeps an uncommitted edit.
         console.warn(
           `[${config.label}] could not commit what an interrupted session left`,
           { slot: row.slot, stderr: kept.stderr.trim().slice(0, 500) }
         );
       }
+      const settled = stopped && kept.success;
       const heads = new Map(
         kept.stdout
           .split("\n")
@@ -895,11 +931,14 @@ export function subtaskWorkspaces(config: {
         const head = heads.get(repo.path)?.head;
         return head !== undefined && head !== "" && head !== repo.start;
       });
-      if (moved.length === 0) return undefined;
-      return keptWorkNote(
-        row.branch,
-        moved.some((repo) => heads.get(repo.path)?.wip)
-      );
+      if (moved.length === 0) return { settled };
+      return {
+        note: keptWorkNote(
+          row.branch,
+          moved.some((repo) => heads.get(repo.path)?.wip)
+        ),
+        settled
+      };
     },
 
     async releaseTask(taskId): Promise<void> {

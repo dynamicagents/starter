@@ -180,7 +180,8 @@ export async function claimSession(
 /**
  * What a writing session leaves: a run that did not complete — failed or
  * canceled — keeps its work where a `continue` will find it, and every run's
- * worktree is recorded and freed. See `keep` in `@/workspace/subtask-workspace`.
+ * worktree is recorded and freed. One whose work could not be secured is held
+ * instead. See `keep` in `@/workspace/subtask-workspace`.
  */
 export async function settleSession(
   workspaces: SubtaskWorkspaces,
@@ -188,11 +189,10 @@ export async function settleSession(
   ctx: Pick<SubAgentSettleContext<Env>, "taskId" | "runId" | "result">
 ): Promise<void> {
   const run = { taskId: ctx.taskId, runId: ctx.runId };
-  if (ctx.result.status !== "completed") {
-    const note = await workspaces.keep(run);
-    if (note) keepNote(storage, ctx.taskId, ctx.runId, note);
-  }
-  await workspaces.release(run);
+  if (ctx.result.status === "completed") return workspaces.release(run);
+  const kept = await workspaces.keep(run);
+  if (kept.note) keepNote(storage, ctx.taskId, ctx.runId, kept.note);
+  await workspaces.release(run, { hold: !kept.settled });
 }
 
 const prepareWriter = (

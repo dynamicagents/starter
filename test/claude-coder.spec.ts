@@ -35,7 +35,10 @@ import {
 import { admitSession } from "@/agents/claude-coder/plugins";
 import { activeRepo } from "@/workspace/active-repo";
 import { gitIdentity } from "@/workspace/git-identity";
-import type { SubtaskWorkspaces } from "@/workspace/subtask-workspace";
+import type {
+  KeptWork,
+  SubtaskWorkspaces
+} from "@/workspace/subtask-workspace";
 
 /**
  * The claude-coder's wiring, pinned.
@@ -241,7 +244,13 @@ describe("preparing a session", () => {
 });
 
 /** A pool that records what a session's hooks asked of it. */
-function recordingPool(resolve?: () => Promise<never>) {
+function recordingPool(
+  resolve?: () => Promise<never>,
+  kept: KeptWork = {
+    note: "Its work up to that point is kept on `claude-coder/task-1/call_1`.",
+    settled: true
+  }
+) {
   const calls: string[] = [];
   const pool = {
     resolve:
@@ -252,12 +261,12 @@ function recordingPool(resolve?: () => Promise<never>) {
         branch: "claude-coder/task-1/call_1"
       })),
     reading: async () => ({ workspaceName: "w", dir: "/workspace/w" }),
-    release: async () => {
-      calls.push("release");
+    release: async (_ctx, options) => {
+      calls.push(options?.hold ? "release, held" : "release");
     },
     keep: async () => {
       calls.push("keep");
-      return "Its work up to that point is kept on `claude-coder/task-1/call_1`.";
+      return kept;
     },
     releaseTask: async () => {
       calls.push("releaseTask");
@@ -310,6 +319,18 @@ describe("a writing session's worktree", () => {
       })
     );
     expect(calls).toEqual(expected);
+  });
+
+  it("holds the worktree of a run whose work could not be secured", async () => {
+    const { pool, calls } = recordingPool(undefined, { settled: false });
+    await onParent((agent) =>
+      settleSession(pool, agent.ctx.storage, {
+        taskId: "task-1",
+        runId: "detached:call_1",
+        result: { status: "aborted" } as AgentToolLifecycleResult
+      })
+    );
+    expect(calls).toEqual(["keep", "release, held"]);
   });
 
   it("tells the parent where a failed run's work was kept, once, in its follow-up", async () => {

@@ -149,8 +149,8 @@ RUN if command -v corepack > /dev/null; then \
 # written against one version's traffic — `VERIFIED_CLAUDE_CODE_VERSION` in
 # `@dynamicagents/plugins/claude-code`. The version passed here is that one, and
 # `npm run check` fails when they differ. A newer CLI is verified in plugins
-# first, by its probe; its claude-code README's "Updating Claude Code" is the
-# procedure.
+# first, by its probe; the plugins repository's AGENTS.md ("Updating Claude
+# Code") is the procedure.
 #
 # `--no-fund --no-audit` for the same reason as the ENV block below: a build log
 # nobody reads is still a build log somebody has to scroll.

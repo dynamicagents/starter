@@ -259,6 +259,8 @@ export function sessionBrief(
     branch: string;
     submodules: readonly string[];
     continues: boolean;
+    /** The plan it carries out, as the caller was shown it. */
+    plan?: string;
   }
 ): string {
   const parts = [task, "", GH_NOTE];
@@ -270,11 +272,106 @@ export function sessionBrief(
       "",
       branchNote(writing.branch, writing.submodules, writing.continues)
     );
+    if (writing.plan) parts.push("", planNote(writing.plan));
   }
   if (note) {
     parts.push("", "## The state of this workspace", "", note);
   }
   return parts.join("\n");
+}
+
+/**
+ * The plan a writing session carries out, whole: the text the caller read, not
+ * the parent's account of it — see `./plans.ts`.
+ */
+function planNote(plan: string): string {
+  return `## The plan
+
+This is the plan for the work above, as the person who asked for it read it. Carry it
+out. Where the work shows it is wrong, say so in your reply rather than quietly doing
+something else.
+
+${plan}`;
+}
+
+/**
+ * What a **planning** session is told about its answer and, for an edit, about
+ * the plan it changes. What each field of the answer is for is in the schema
+ * the CLI hands it, so it is not said twice here.
+ */
+export function planBrief(
+  task: string,
+  note?: string,
+  editing?: { plan?: string; said: readonly string[] }
+): string {
+  const parts = [
+    task,
+    "",
+    GH_NOTE,
+    "",
+    `## Your answer
+
+You are writing a plan, not making the change: this is a copy of the checkout, and nothing
+you change in it is kept. Read what the change will touch, run what tells you how it
+behaves, and answer through the StructuredOutput tool.`
+  ];
+  if (editing?.plan) {
+    parts.push("", "## The plan you are changing", "", editing.plan);
+  }
+  if (editing && editing.said.length > 0) {
+    parts.push(
+      "",
+      "## What the person said about it, oldest first",
+      "",
+      ...editing.said.map((line) => `- ${line}`)
+    );
+  }
+  if (note) {
+    parts.push("", "## The state of this workspace", "", note);
+  }
+  return parts.join("\n");
+}
+
+/**
+ * What the parent is told of a planning session: the plan's id, title and link,
+ * and what the session had to say about it — never the plan, which the parent
+ * hands on by its id.
+ */
+export function planReport(
+  outcome: SessionOutcome,
+  filed:
+    | {
+        kind: "filed";
+        id: string;
+        title: string;
+        lastReply: string;
+        link?: string;
+      }
+    | { kind: "unanswered" }
+    | { kind: "locked"; id: string; lastReply: string }
+): string {
+  const result = outcome.session.result;
+  const footer = result ? `_${sessionFooter(result)}_` : "";
+  if (filed.kind === "filed") {
+    return [
+      `**Plan \`${filed.id}\`: ${filed.title}**`,
+      filed.lastReply,
+      filed.link ? `Its page: ${filed.link}` : "",
+      footer
+    ]
+      .filter(Boolean)
+      .join("\n\n");
+  }
+  if (filed.kind === "locked") {
+    return [
+      `**The plan \`${filed.id}\` was not changed**: it was approved while the session ran, or it is gone. Write a new plan if it still needs one.`,
+      filed.lastReply,
+      footer
+    ]
+      .filter(Boolean)
+      .join("\n\n");
+  }
+  return `**The planning session returned no plan, so nothing was filed.**\n\n${sessionReport(outcome)}`;
 }
 
 /** Each listed repository and the commit it is on. */

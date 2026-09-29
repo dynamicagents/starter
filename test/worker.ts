@@ -1,4 +1,4 @@
-import type { ThinkModel, TurnConfig, TurnContext } from "@cloudflare/think";
+import type { ThinkModel } from "@cloudflare/think";
 import type { WorkflowEvent, WorkflowStep } from "cloudflare:workers";
 import type { SubAgentSpec } from "@dynamicagents/core";
 import { handleArtifactRoute } from "@dynamicagents/core/artifacts";
@@ -27,12 +27,14 @@ import { manifest as codingManifest } from "@/agents/coding/manifest";
 import { CodingWorkflow } from "@/agents/coding/workflow";
 import { AnthropicCodingAgent } from "@/agents/anthropic-coding/agent";
 import {
+  AnthropicCodingPlannerChild,
   AnthropicCodingReaderChild,
   AnthropicCodingWriterChild
 } from "@/agents/anthropic-coding/children";
 import { AnthropicCodingHost } from "@/agents/anthropic-coding/host";
 import { manifest as anthropicCodingManifest } from "@/agents/anthropic-coding/manifest";
-import { RETRY_WORK, ROLE_BRIEFS } from "@/agents/anthropic-coding/soul";
+import { createPlan } from "@/agents/anthropic-coding/plans";
+import { RETRY_WORK } from "@/agents/anthropic-coding/soul";
 import { AnthropicCodingWorkflow } from "@/agents/anthropic-coding/workflow";
 
 /**
@@ -110,6 +112,12 @@ function parentRule(
       return view.answered
         ? { text: "asked" }
         : call("ask_user", { question: ask, options: ["Yes", "No"] });
+    }
+    // An approval of an artifact; its answer arrives as the next message, and
+    // is echoed as the reply.
+    const artifact = after(text, "approve:");
+    if (artifact !== undefined) {
+      return call("ask_user", { question: "Approve the plan?", artifact });
     }
     const wait = after(text, "wait:");
     if (wait !== undefined) {
@@ -267,6 +275,37 @@ export class TestAnthropicCodingWriterChild extends AnthropicCodingWriterChild {
   }
 }
 
+/**
+ * The planner's spec: the real `prepare` — which refuses what it must before
+ * any workspace is needed — with the stand-in workspace in place of a reading
+ * copy, and the real `settle`.
+ */
+const PLANNER_SPEC = {
+  ...AnthropicCodingPlannerChild.spec,
+  prepare: async (ctx: {
+    input: { plan?: string };
+    parent: { env: Env; storage: DurableObjectStorage };
+  }) => {
+    const id =
+      ctx.input.plan ?? (await createPlan(ctx.parent.env, ctx.parent.storage));
+    return {
+      workspaceName: "test-workspace",
+      dir: "/workspace/t",
+      plan: { id, isNew: ctx.input.plan === undefined }
+    };
+  }
+} as SubAgentSpec<never, never>;
+
+export class TestAnthropicCodingPlannerChild extends AnthropicCodingPlannerChild {
+  static override spec = PLANNER_SPEC;
+  override getModel(): ThinkModel {
+    return scriptedModel(childRule);
+  }
+  override getTools(): ToolSet {
+    return { ...super.getTools(), child_sleep: sleepTool("child") };
+  }
+}
+
 /** The reader's spec, with the same stand-in workspace as the writer's. */
 const READER_SPEC = {
   ...AnthropicCodingReaderChild.spec,
@@ -287,54 +326,44 @@ export class TestAnthropicCodingReaderChild extends AnthropicCodingReaderChild {
   }
 }
 
-/**
- * What a job's first message scripts, less what AnthropicCodingAgent adds and the
- * pipeline frames: where a retry's work is, and the role's brief, in front;
- * and for the code step, the approved plan is the script.
- */
+/** What a job's first message scripts, less where a retry's work is. */
 function anthropicCodingScript(text: string): string {
-  const script = unbrief(text, [RETRY_WORK, ...Object.values(ROLE_BRIEFS)]);
-  const plan =
-    /^The approved plan:\n\n([\s\S]*?)\n\nThe original request:/.exec(script);
-  return plan ? plan[1]! : script;
+  return unbrief(text, [RETRY_WORK]);
 }
 
+/**
+ * The real agent on a scripted model. `delegate:` starts a writing session and
+ * `plan:` a planning one; `approve:<id>` asks the caller to approve a plan.
+ */
 export class TestAnthropicCodingAgent extends AnthropicCodingAgent {
   override getModel(): ThinkModel {
-    return scriptedModel((view) =>
-      parentRule(
-        this.turnStepJob()?.role === "plan"
-          ? "claude_code_read"
-          : "claude_code",
-        anthropicCodingScript
-      )(view)
-    );
+    return scriptedModel((view) => {
+      const plan = after(
+        unbrief(view.lastUserText, [RETRY_BRIEF, RETRY_WORK]),
+        "plan:"
+      );
+      if (plan !== undefined) {
+        return view.answered
+          ? { text: lastToolOutput(view) }
+          : call("claude_code_plan", { task: plan }, "Planning.");
+      }
+      return parentRule("claude_code", anthropicCodingScript)(view);
+    });
   }
   override getSubAgents(): SubAgentClass[] {
-    return [TestAnthropicCodingWriterChild, TestAnthropicCodingReaderChild];
+    return [
+      TestAnthropicCodingWriterChild,
+      TestAnthropicCodingPlannerChild,
+      TestAnthropicCodingReaderChild
+    ];
   }
   override getTools(): ToolSet {
     return { ...super.getTools(), test_wait: sleepTool("parent") };
   }
 
-  /** Every turn's role and active tools, durably, for the surface spec. */
-  override async beforeTurn(ctx: TurnContext): Promise<TurnConfig | void> {
-    const config = await super.beforeTurn(ctx);
-    this.sql`CREATE TABLE IF NOT EXISTS test_turns (role TEXT, active TEXT)`;
-    this.sql`INSERT INTO test_turns VALUES (${this.turnStepJob()?.role ?? null},
-      ${JSON.stringify(config?.activeTools ?? null)})`;
-    return config;
-  }
-
-  async debugTurns(): Promise<string> {
-    this.sql`CREATE TABLE IF NOT EXISTS test_turns (role TEXT, active TEXT)`;
-    return JSON.stringify(
-      this.sql<{ role: string | null; active: string }>`
-        SELECT role, active FROM test_turns`.map((r) => ({
-        role: r.role,
-        active: JSON.parse(r.active) as string[] | null
-      }))
-    );
+  /** Open a plan for this caller, as a planning session's `prepare` does. */
+  async openPlan(): Promise<string> {
+    return createPlan(this.env, this.ctx.storage);
   }
 }
 

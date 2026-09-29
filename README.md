@@ -194,28 +194,30 @@ request body, and a token minted for one agent would work against any sibling.
 Each is a task host, a pipeline and a step agent, all three from
 [`@dynamicagents/core`](https://github.com/dynamicagents/core): the host owns the A2A
 task, the pipeline runs it as steps, and the step agent — on `@cloudflare/think` —
-runs a step's job. `generic` and `coding` are one-step pipelines. A sub-agent that may
-run past the fifteen minutes a turn can last runs **in the background**: the job stays
-open, and its result arrives as a later turn.
+runs a step's job. Each is a one-step pipeline. A sub-agent that may run past the
+fifteen minutes a turn can last runs **in the background**: the job stays open, and its
+result arrives as a later turn. A step whose job fails runs once more, told it is a
+retry.
 
-### `anthropic-coding` plans before it builds
+### `anthropic-coding` plans with tools, and a plan is a link
 
-Its pipeline ([`workflow.ts`](src/agents/anthropic-coding/workflow.ts)) is plan → approve → code,
-both jobs on the caller's own AnthropicCodingAgent, so the plan and the work share its checkout
-and conversation:
+Planning, approving and building are the agent's own tool calls, so whether a change
+gets a plan — and whether the caller approves it first — is the agent's to judge and the
+caller's to set, in what the agent remembers about them:
 
-1. **The plan** reads — through a Claude Code reading session for anything beyond a
-   quick look — and changes nothing. Its turns can call only the tools
-   [`roles.ts`](src/agents/anthropic-coding/roles.ts) names: no writing session, commit,
-   push, pull request or file write.
-2. **The approval** is the pipeline's own question. Approve it to have it built;
-   answer in words and it is written again with them, as often as it takes; reject
-   it and the task stops at the plan. A question that needs no change is a plan the
-   caller stops at: the plan is the findings.
-3. **The code step** carries out the approved plan to a pull request.
+1. **`claude_code_plan`** runs a Claude Code session in a throwaway copy of the checkout,
+   which answers through `--json-schema`: a title, the plan, and a short account for the
+   agent. The plan is filed as an [artifact](https://github.com/dynamicagents/core) — a
+   page anyone with its link can read, kept 30 days — and the agent gets its **id**,
+   never its text. Called again with the id, it edits the plan on the same page.
+2. **`ask_user`** with the plan's id asks the caller to approve it, with its link:
+   Approve, Reject, or a comment, which the agent turns into an edit. Approving locks
+   the plan. A caller whose memory says they do not approve plans is not asked.
+3. **`claude_code`** with the plan's id gives the writing session the plan whole — the
+   text the caller read, not the agent's account of it.
 
-A step whose job fails runs once more, told it is a retry and where the first
-attempt's work was kept.
+A plan is the caller's that opened it ([`plans.ts`](src/agents/anthropic-coding/plans.ts)):
+a link is shared by design, but only the caller's own agent edits, approves or builds it.
 
 ### The two coders need one thing the others do not
 

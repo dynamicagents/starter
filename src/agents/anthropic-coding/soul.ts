@@ -80,6 +80,11 @@ const LINES: string[] = [
   // tens of minutes and reports a summary of its own work.
   "A writing session works in a worktree of its own and commits to a branch its report names — in each repository it changed, a submodule included. Nothing is pushed: **the branch is the deliverable, and it is in that worktree, not your checkout.** Switch your tools there with `repo_worktree`, read each changed repository's diff with `repo_diff` and `base`, push that branch, under the name the report gives it, with `repo_push` and open the pull request from the same directory, then switch back — `repo_push` cannot rename a branch, and a name of your own publishes nothing. The session tells you what it did; the diff tells you what happened. Where they disagree, the diff is right — delegate a correction with `continue` set to the branch, rather than proposing something you cannot explain. On a large change, size it up first and then read the parts that matter.",
 
+  // A session commits on the branch it was put on and is told not to rename it,
+  // so a branch named in a brief is one nobody pushes: the name has to reach
+  // the host, which places the session on it.
+  "A session's branch is chosen before it starts, never by the session. When the caller wants the work on a branch of a given name, pass that name to `claude_code` as `branch`. Never ask a session in its brief to create, switch or name a branch.",
+
   // A cancel is no verdict on the work, so nothing decides it for the model:
   // see `keep` in `@/workspace/subtask-workspace`.
   "A canceled task stops its sessions and keeps what they did: each writing session's work is committed on its branch, and `repo_worktrees` lists it. Nothing is reset for you. When a later request touches that work, decide from it whether to continue the branch, review and push it, or release it — and when the request does not say, ask.",

@@ -7,7 +7,12 @@ import {
   type SessionPlace
 } from "@/workspace/subtask-workspace";
 import { SCRATCH_REPO } from "@/workspace/scratch";
-import { isFree, worktreeRepo, type Worktree } from "@/workspace/worktree-pool";
+import {
+  isFree,
+  runBranch,
+  worktreeRepo,
+  type Worktree
+} from "@/workspace/worktree-pool";
 import type { ActiveCheckout, ActiveRepo } from "@/workspace/active-repo";
 import { memoryPoolStore } from "./support/memory-pool";
 
@@ -224,6 +229,9 @@ function harness(opts: {
 }
 
 const ctx = { taskId: "task-a", runId: "detached:1" };
+/** The branches `ctx`'s run and the task's second run start. */
+const BRANCH_1 = runBranch(ctx);
+const BRANCH_2 = runBranch({ ...ctx, runId: "detached:2" });
 
 /** The workspace a session is handed, which is what most specs are about. */
 const nameOf = async (place: Promise<SessionPlace>) =>
@@ -251,7 +259,7 @@ describe("preparing a worktree for a writing session", () => {
     ]);
     // The branch and the base reach git as values, never as command text.
     expect(placed[0]).toMatchObject({
-      WORKTREE_BRANCH: "anthropic-coding/task-a/1",
+      WORKTREE_BRANCH: BRANCH_1,
       WORKTREE_MODE: "new",
       WORKTREE_REPOS: ".\torigin/main"
     });
@@ -259,7 +267,7 @@ describe("preparing a worktree for a writing session", () => {
       {
         repo: "acme/api",
         slot: 0,
-        branch: "anthropic-coding/task-a/1",
+        branch: BRANCH_1,
         live: ctx,
         mode: "new",
         ready: true,
@@ -460,8 +468,8 @@ describe("handing a worktree to the next session", () => {
     ]);
     // The branch it held is deleted as it moves on.
     expect(placed[1]).toMatchObject({
-      WORKTREE_BRANCH: "anthropic-coding/task-a/2",
-      WORKTREE_PREVIOUS: "anthropic-coding/task-a/1"
+      WORKTREE_BRANCH: BRANCH_2,
+      WORKTREE_PREVIOUS: BRANCH_1
     });
   });
 
@@ -475,7 +483,7 @@ describe("handing a worktree to the next session", () => {
     await subtasks.release(ctx);
 
     expect(pool.rows()[0]).toMatchObject({
-      branch: "anthropic-coding/task-a/1",
+      branch: BRANCH_1,
       repos: [{ path: ".", tip: "c1" }]
     });
     expect(pool.rows()[0]?.live).toBeUndefined();
@@ -512,14 +520,14 @@ describe("handing a worktree to the next session", () => {
         subtasks.resolve({
           ...ctx,
           runId: "detached:2",
-          continue: "anthropic-coding/task-a/1"
+          continue: BRANCH_1
         })
       )
     ).toBe(SLOT0);
     expect(calls).toContain("place continue");
     // Measured against where the branch started, not where the remote is now.
     expect(placed[1]).toMatchObject({
-      WORKTREE_BRANCH: "anthropic-coding/task-a/1",
+      WORKTREE_BRANCH: BRANCH_1,
       WORKTREE_MODE: "continue",
       WORKTREE_PREVIOUS: "",
       WORKTREE_REPOS: `.\t${sha("origin/main")}`
@@ -546,7 +554,7 @@ describe("handing a worktree to the next session", () => {
     await reclaimed.subtasks.resolve({
       ...ctx,
       runId: "detached:2",
-      continue: "anthropic-coding/task-a/1"
+      continue: BRANCH_1
     });
     expect(reclaimed.calls).toContain(`clone ${CHECKOUT.dir}@main`);
     expect(reclaimed.placed[0]?.WORKTREE_MODE).toBe("adopt");
@@ -595,6 +603,40 @@ describe("handing a worktree to the next session", () => {
     expect(pool.rows()).toEqual([]);
   });
 
+  it("starts new work on the branch the caller named", async () => {
+    const { subtasks, placed } = harness({
+      selected: "acme/api",
+      checkout: CHECKOUT
+    });
+
+    const place = await subtasks.resolve({ ...ctx, branch: "docs/readme" });
+    expect(place).toMatchObject({ branch: "docs/readme", continues: false });
+    // The placing script refuses it there if the remote already has it.
+    expect(placed[0]).toMatchObject({
+      WORKTREE_BRANCH: "docs/readme",
+      WORKTREE_MODE: "new"
+    });
+  });
+
+  it.each([
+    [{ branch: "docs/readme", continue: "feature/artifacts" }, /not both/],
+    [{ branch: "main..next" }, /git would not take as a branch name/]
+  ])(
+    "refuses a `branch` it cannot use, before claiming a worktree: %j",
+    async (input, message) => {
+      const { subtasks, calls, pool } = harness({
+        selected: "acme/api",
+        checkout: CHECKOUT
+      });
+
+      await expect(subtasks.resolve({ ...ctx, ...input })).rejects.toThrow(
+        message
+      );
+      expect(calls).toEqual([]);
+      expect(pool.rows()).toEqual([]);
+    }
+  );
+
   it("frees a worktree that never got onto its new branch", async () => {
     const { subtasks, pool } = harness({
       selected: "acme/api",
@@ -606,7 +648,7 @@ describe("handing a worktree to the next session", () => {
 
     expect(pool.rows()[0]).toMatchObject({
       slot: 0,
-      previous: "anthropic-coding/task-a/1"
+      previous: BRANCH_1
     });
     expect(pool.rows()[0]?.branch).toBeUndefined();
     expect(pool.rows()[0]?.live).toBeUndefined();
@@ -619,7 +661,7 @@ describe("handing a worktree to the next session", () => {
  * find it. Why a cancel resets nothing is on `keep`.
  */
 describe("keeping what a session that did not complete did", () => {
-  const BRANCH = "anthropic-coding/task-a/1";
+  const BRANCH = BRANCH_1;
 
   it("stops the session and commits what it left, resetting nothing", async () => {
     const { subtasks, calls, stopped, keeps } = harness({

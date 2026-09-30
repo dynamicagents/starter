@@ -10,7 +10,6 @@ import {
   CLAUDE_CODE_AGENT,
   CLAUDE_CODE_READER_AGENT,
   claudeCodeModel,
-  type ClaudeCodeInput,
   type RateLimitInfo,
   type SessionEnd,
   type SessionOutcome,
@@ -40,7 +39,8 @@ import {
   PLANNER_DESCRIPTION,
   planText,
   WRITE_INPUT,
-  type PlanInput
+  type PlanInput,
+  type WriteInput
 } from "./plans";
 import { container, sessionWorkspaces, stopSession } from "./plugins";
 import {
@@ -172,14 +172,17 @@ function placeOf(runtime: Record<string, unknown> | undefined): SessionPlace {
  */
 export async function claimSession(
   workspaces: SubtaskWorkspaces,
-  ctx: { input: ClaudeCodeInput; taskId: string; runId: string }
+  ctx: { input: WriteInput; taskId: string; runId: string }
 ): Promise<Record<string, unknown>> {
   const run = { taskId: ctx.taskId, runId: ctx.runId };
   try {
     return runtimeOf(
       await workspaces.resolve({
         ...run,
-        ...(ctx.input.continue ? { continue: ctx.input.continue } : {})
+        // An empty name is no name: a model may fill an optional string with
+        // one, and refusing it would fail a call that asked for nothing.
+        ...(ctx.input.continue ? { continue: ctx.input.continue } : {}),
+        ...(ctx.input.branch ? { branch: ctx.input.branch } : {})
       })
     );
   } catch (err) {
@@ -217,7 +220,7 @@ export async function settleSession(
  * the caller's refuses the run with nothing to release.
  */
 export async function prepareWriter(
-  ctx: SubAgentPrepareContext<ClaudeCodeInput & { plan?: string }, Env>
+  ctx: SubAgentPrepareContext<WriteInput, Env>
 ): Promise<Record<string, unknown>> {
   const plan = ctx.input.plan;
   if (plan !== undefined) {

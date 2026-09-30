@@ -88,37 +88,34 @@ export function parseWorktreeRepo(
 }
 
 /**
- * The branch a new writing session's work goes on.
+ * The branch a new writing session's work goes on when the caller named none.
  *
- * The run id is core's `detached:<tool call id>`, and `:` is one of the
- * characters git refuses in a branch name, so the run is spelled by its tool
- * call. One made only of letters, digits, `_` and `-` is used as it is. Any
- * other has the rest replaced — dots included, since git refuses `..`, a
- * leading `.` and a `.lock` suffix — and a hash of the whole run id appended,
- * because the replacement alone would give two runs one branch.
+ * It becomes the pull request's head, so it is short: five base-36 characters
+ * hashed from the task and the run. The task is in the hash because a tool
+ * call id is unique only within its conversation — some providers number their
+ * calls — and nothing else in the name scopes it. A collision is refused, never
+ * overwritten: by {@link claim} for a branch a worktree holds, and by the
+ * placing script in `./subtask-workspace.ts` for one the remote has.
  */
 export function runBranch(ctx: { taskId: string; runId: string }): string {
-  const call = ctx.runId.replace(/^[a-z-]+:/, "");
-  if (/^[A-Za-z0-9_-]+$/.test(call) && !call.startsWith("-")) {
-    return `anthropic-coding/${ctx.taskId}/${call}`;
-  }
-  const slug = call.replace(/[^A-Za-z0-9_-]+/g, "-").replace(/^-+|-+$/g, "");
-  return `anthropic-coding/${ctx.taskId}/${slug ? `${slug}-` : ""}${fnv1a(ctx.runId)}`;
+  const hash = fnv1a(`${ctx.taskId}:${ctx.runId}`) % 36 ** 5;
+  return `anthropic-coding/${hash.toString(36).padStart(5, "0")}`;
 }
 
-/** FNV-1a, 32-bit, as hex: stable and synchronous, for telling ids apart. */
-function fnv1a(text: string): string {
+/** FNV-1a, 32-bit: stable and synchronous, for telling ids apart. */
+function fnv1a(text: string): number {
   let hash = 0x811c9dc5;
   for (let i = 0; i < text.length; i++) {
     hash ^= text.charCodeAt(i);
     hash = Math.imul(hash, 0x01000193) >>> 0;
   }
-  return hash.toString(16).padStart(8, "0");
+  return hash;
 }
 
 /**
- * Whether `continue` may name a branch: any git would accept as one — a session's
- * own, or a pull request's head branch somebody else pushed.
+ * Whether `continue` or `branch` may name a branch: any git would accept as one —
+ * a session's own, a pull request's head branch somebody else pushed, or the
+ * caller's name for new work.
  *
  * Checked before a worktree is claimed, so a name git would refuse costs a
  * sentence rather than a clone. Which branch it must not be — a repository's
@@ -164,12 +161,13 @@ export function isFree(worktree: Worktree): boolean {
  *   When none holds it — it was pushed and released, or its worktree went to
  *   another run — a free one adopts it from the remote.
  * - Otherwise the free worktree used longest ago, or a new slot. The pool grows
- *   with concurrency and has no ceiling of its own.
+ *   with concurrency and has no ceiling of its own. Its branch is `branch`, or
+ *   {@link runBranch}, and never one a worktree already holds.
  */
 export function claim(
   store: PoolStore,
   repo: string,
-  ctx: { taskId: string; runId: string; continue?: string },
+  ctx: { taskId: string; runId: string; continue?: string; branch?: string },
   now: number
 ): Worktree {
   const rows = store.all(repo);
@@ -189,6 +187,14 @@ export function claim(
     );
   }
 
+  const branch = ctx.continue ?? ctx.branch ?? runBranch(ctx);
+  if (ctx.continue === undefined && rows.some((row) => row.branch === branch)) {
+    throw new Error(
+      `anthropic-coding: a worktree already holds ${branch}. Delegate with ` +
+        "`continue` set to it to add to that work, or name another branch."
+    );
+  }
+
   const free = rows.filter(isFree).sort((a, b) => a.usedAt - b.usedAt)[0];
   const slot =
     holder?.slot ??
@@ -196,7 +202,6 @@ export function claim(
     rows.reduce((max, row) => Math.max(max, row.slot + 1), 0);
   const base = holder ?? free ?? { repo, slot, repos: [], usedAt: now };
 
-  const branch = ctx.continue ?? runBranch(ctx);
   const previous = base.branch ?? base.previous;
   const claimed: Worktree = {
     ...base,

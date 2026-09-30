@@ -400,6 +400,7 @@ abstract class ClaudeCodeRun extends SubAgent<Env> {
         openWorkspace(
           this.#stub(place.workspaceName)
         ) as Promise<SessionWorkspace>,
+      advisories: () => this.#stub(place.workspaceName).advisories(),
       storage: this.ctx.storage,
       runId: this.name,
       // A plan is written in a reading session's copy.

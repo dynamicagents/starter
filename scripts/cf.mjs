@@ -23,6 +23,8 @@
 //   --app                 only this Worker's own log lines, dropping the
 //                         container egress that is ~95% of events while a
 //                         session runs
+//   --container <app>     a container application's own stdout and stderr
+//                         instead (its name or id, as `containers` lists it)
 //   --limit <N>           max matching events (default 100, max 2000)
 //   --json | --raw        full pretty JSON / verbatim body instead of the digest
 //
@@ -36,6 +38,7 @@
 //   npm run cf -- logs --since 2h --level error
 //   npm run cf -- logs --worker da-starter --grep "[agent]"
 //   npm run cf -- logs --worker da-starter --app --since 30m
+//   npm run cf -- logs --container da-starter-anthropiccodingworkspace --since 2h
 //   npm run cf -- ai --since 2h
 //   npm run cf -- ai --task <taskId> --all
 //   npm run cf -- ai --agent generic --phase turn --since 1d
@@ -71,6 +74,8 @@ const USAGE = `cf.mjs — Cloudflare API proxy (credentials from ${ENV_FILE})
   logs [--since 1h] [--worker <name>]    historical Worker logs, as a digest
        [--level error] [--grep <text>]
        [--app] [--limit 100] [--json|--raw]
+  logs --container <app> [--since 1h]    a container app's own output, its long
+       [--grep <text>] [--limit 100]     lines reassembled
   ai [--since 2h] [--model <m>]          AI Gateway calls, as a digest
      [--task <id>] [--agent <name>]      …selected by what core tags a call with
      [--phase <turn|subagent|compaction>]
@@ -189,13 +194,13 @@ function ensureOk(res, text) {
   }
 }
 
-async function telemetryQuery({ from, to, filters, limit }) {
+async function telemetryQuery({ from, to, filters, limit, dataset = DATASET }) {
   const body = {
     queryId: "cf-cli",
     timeframe: { from, to },
     view: "events",
     limit,
-    parameters: { datasets: [DATASET], ...(filters.length ? { filters } : {}) }
+    parameters: { datasets: [dataset], ...(filters.length ? { filters } : {}) }
   };
   return request("POST", acct("workers/observability/telemetry/query"), {
     body
@@ -205,7 +210,15 @@ async function telemetryQuery({ from, to, filters, limit }) {
 async function cmdLogs(args) {
   const { flags } = parseFlags(args, {
     bool: ["--json", "--raw", "--app"],
-    value: ["--since", "--worker", "--service", "--level", "--grep", "--limit"]
+    value: [
+      "--since",
+      "--worker",
+      "--service",
+      "--level",
+      "--grep",
+      "--limit",
+      "--container"
+    ]
   });
   const sinceLabel = flags.since ?? "1h";
   const to = Date.now();
@@ -214,6 +227,8 @@ async function cmdLogs(args) {
   // The API rejects anything above this with a validation body nobody can read.
   if (limit > MAX_LIMIT)
     die(`--limit ${limit} is above the API maximum of ${MAX_LIMIT}`);
+  if (flags.container)
+    return cmdContainerLogs(flags, { from, to, limit, sinceLabel });
   const worker = flags.worker ?? flags.service;
 
   const filters = [];
@@ -329,6 +344,143 @@ async function cmdLogs(args) {
       `\n⚠ hit limit ${limit} — older matches are cut off; narrow --since or raise --limit (max ${MAX_LIMIT})`
     );
 }
+
+/**
+ * One container application, by its name — exact, or unambiguous — or its id.
+ * An id nothing lists is taken as given: a deleted application's output
+ * outlives it.
+ */
+async function containerApp(nameOrId) {
+  const { res, text } = await request("GET", acct("containers/applications"), {
+    query: [["per_page", "50"]]
+  });
+  ensureOk(res, text);
+  const apps = parseJson(text)?.result ?? [];
+  const exact = apps.find((a) => a.id === nameOrId || a.name === nameOrId);
+  if (exact) return exact;
+  if (/^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(nameOrId))
+    return { id: nameOrId, name: nameOrId };
+  const partial = apps.filter((a) => String(a.name ?? "").includes(nameOrId));
+  if (partial.length === 1) return partial[0];
+  return die(
+    partial.length === 0
+      ? `no container application matching "${nameOrId}"`
+      : `"${nameOrId}" matches ${partial.map((a) => a.name).join(", ")} — name one`
+  );
+}
+
+/**
+ * `logs --container` — a container application's own stdout and stderr.
+ *
+ * Its own dataset, keyed by the application's id rather than a script name, so
+ * no Worker filter reaches it. It is where a container that dies says why:
+ * computerd's `uncaughtException` is here, while the Worker's logs record only
+ * that the container exited.
+ *
+ * `--grep` matches records, not lines, so a long line shows only the record
+ * that matched.
+ */
+async function cmdContainerLogs(flags, { from, to, limit, sinceLabel }) {
+  for (const flag of ["worker", "service", "level", "app"])
+    if (flags[flag])
+      die(`--${flag} filters Worker logs, which --container does not read`);
+  const app = await containerApp(flags.container);
+  const filters = [
+    {
+      key: "$metadata.service",
+      operation: "eq",
+      value: app.id,
+      type: "string"
+    }
+  ];
+  if (flags.grep)
+    filters.push({
+      key: "$metadata.message",
+      operation: "includes",
+      value: String(flags.grep),
+      type: "string"
+    });
+
+  const { res, text } = await telemetryQuery({
+    from,
+    to,
+    filters,
+    limit,
+    dataset: "containers"
+  });
+  ensureOk(res, text);
+  if (flags.json || flags.raw) return void printBody(text, { raw: flags.raw });
+
+  const records = parseJson(text)?.result?.events?.events ?? [];
+  if (records.length === 0)
+    return void out(
+      `no output from ${app.name} in last ${sinceLabel}${flags.grep ? ` matching "${flags.grep}"` : ""}`
+    );
+  const lines = containerLines(records);
+  const containers = new Set(lines.map((l) => l.container)).size;
+  const count = (n, noun) => `${n} ${noun}${n === 1 ? "" : "s"}`;
+  out(
+    `${app.name} · last ${sinceLabel} · ${count(lines.length, "line")} from ${count(records.length, "record")} · ${count(containers, "container")}`
+  );
+  out(`${hhmmss(lines[0].at)} → ${hhmmss(lines.at(-1).at)}`);
+  out("");
+  for (const l of lines)
+    out(
+      `${hhmmss(l.at)}  ${l.container.slice(0, 8)}  ${elideDataUrls(l.text).replace(/\s+/g, " ").slice(0, 200)}`
+    );
+  if (records.length >= limit)
+    out(
+      `\n⚠ hit limit ${limit} records — older output is cut off; narrow --since or raise --limit (max ${MAX_LIMIT})`
+    );
+}
+
+/**
+ * Records back into lines, oldest first so a stack reads top to bottom. The
+ * container is the workspace object's id, as the Worker's logs name it.
+ *
+ * A long line arrives across consecutive `processId`s, cut wherever the pipe
+ * was read — mid-line, and at no fixed size, so nothing in a record says it ends
+ * one. The long line that matters is computerd's uncaught-exception stack, whose
+ * frames embed its whole bundle as a `data:` URL: a record opening on a long
+ * base64 run, after a line whose `data:` URL is still open, is that URL going
+ * on. Every other record is a line of its own.
+ */
+function containerLines(records) {
+  const sorted = [...records].sort(
+    (a, b) =>
+      a.timestamp - b.timestamp ||
+      Number(a.$containers?.processId) - Number(b.$containers?.processId)
+  );
+  const open = new Map();
+  const lines = [];
+  for (const r of sorted) {
+    const container =
+      r.$containers?.container?.id ?? r.$containers?.applicationId ?? "?";
+    const seq = Number(r.$containers?.processId);
+    const message = r.source?.message ?? "";
+    const last = open.get(container);
+    if (
+      last?.seq + 1 === seq &&
+      /;base64,[A-Za-z0-9+/=]*$/.test(last.text) &&
+      /^[A-Za-z0-9+/=]{64}/.test(message)
+    ) {
+      last.text += message;
+      last.seq = seq;
+      continue;
+    }
+    const line = { at: r.timestamp, container, text: message, seq };
+    lines.push(line);
+    open.set(container, line);
+  }
+  return lines;
+}
+
+/** A `data:` URL, as its type and size — a stack frame can carry a bundle. */
+const elideDataUrls = (s) =>
+  s.replace(
+    /data:([\w/+.-]+);base64,[A-Za-z0-9+/=]+/g,
+    (url, type) => `data:${type};base64,<${Math.round(url.length / 1024)} KB>`
+  );
 
 async function cmdFields(args) {
   const { flags } = parseFlags(args, {

@@ -385,7 +385,6 @@ abstract class ClaudeCodeRun extends SubAgent<Env> {
   override getModel(): ThinkModel {
     const runtime = this.pluginContext().runtime();
     const place = placeOf(runtime);
-    const stub = this.#stub(place.workspaceName);
     const writes = this.kind === "write" && place.branch !== undefined;
     const plan = this.kind === "plan" ? planPlaceOf(runtime) : undefined;
     if (this.kind === "plan" && !plan) {
@@ -395,7 +394,12 @@ abstract class ClaudeCodeRun extends SubAgent<Env> {
     }
     return claudeCodeModel({
       config: claudeCodeConfig(this.env),
-      workspace: () => openWorkspace(stub) as Promise<SessionWorkspace>,
+      // A new stub per open: a re-attach after a cut stream opens it again, and
+      // the stub that stream came over may not have survived it.
+      workspace: () =>
+        openWorkspace(
+          this.#stub(place.workspaceName)
+        ) as Promise<SessionWorkspace>,
       storage: this.ctx.storage,
       runId: this.name,
       // A plan is written in a reading session's copy.

@@ -6,6 +6,7 @@
 // Subcommands (preferred — they build the request + a readable digest for you):
 //   verify                     GET /accounts/{id}/tokens/verify
 //   logs   [flags]             historical Worker logs (Observability telemetry)
+//   spans  [flags]             the Worker's traces: instance starts, RPCs, turns, tools
 //   ai     [flags | <logId>]   AI Gateway calls: digest, or one call's prompt + reply
 //                              --task/--agent/--phase/--subagent/--event select by
 //                              what core tags each call with; --all totals every match
@@ -28,6 +29,14 @@
 //   --limit <N>           max matching events (default 100, max 2000)
 //   --json | --raw        full pretty JSON / verbatim body instead of the digest
 //
+// spans flags (and --since, --limit, --json, --raw as for logs):
+//   --object <id>         one Durable Object, by its id or a part of it
+//   --entrypoint <class>  spans of the classes whose name contains <class>
+//   --name <span>         span names containing <span>; `agent_start` lists
+//                         every Agent instance start
+//   --trace <traceId>     one trace, by its id or a part of it
+//   --app                 drop the container egress spans
+//
 // Raw passthrough (anything the subcommands don't cover):
 //   [METHOD] <path> [-d <json|@file>] [-q <k=v>]... [--raw]
 //   path starting with "/"  → verbatim under https://api.cloudflare.com/client/v4
@@ -39,6 +48,8 @@
 //   npm run cf -- logs --worker da-starter --grep "[agent]"
 //   npm run cf -- logs --worker da-starter --app --since 30m
 //   npm run cf -- logs --container da-starter-anthropiccodingworkspace --since 2h
+//   npm run cf -- spans --name agent_start --since 6h
+//   npm run cf -- spans --object 8e4d430c --app --since 1h
 //   npm run cf -- ai --since 2h
 //   npm run cf -- ai --task <taskId> --all
 //   npm run cf -- ai --agent generic --phase turn --since 1d
@@ -76,6 +87,9 @@ const USAGE = `cf.mjs — Cloudflare API proxy (credentials from ${ENV_FILE})
        [--app] [--limit 100] [--json|--raw]
   logs --container <app> [--since 1h]    a container app's own output, its long
        [--grep <text>] [--limit 100]     lines reassembled
+  spans [--since 1h] [--object <id>]     the Worker's traces, oldest first
+        [--entrypoint <class>] [--name <span>] [--trace <id>]
+        [--app] [--limit 100] [--json|--raw]
   ai [--since 2h] [--model <m>]          AI Gateway calls, as a digest
      [--task <id>] [--agent <name>]      …selected by what core tags a call with
      [--phase <turn|subagent|compaction>]
@@ -488,6 +502,116 @@ const elideDataUrls = (s) =>
     /data:([\w/+.-]+);base64,[A-Za-z0-9+/=]+/g,
     (url, type) => `data:${type};base64,<${Math.round(url.length / 1024)} KB>`
   );
+
+/**
+ * `spans` — the Worker's traces, from the telemetry API's `otel` dataset, which
+ * `logs` does not read.
+ *
+ * It is where a Durable Object's lifecycle shows. An Agent object's
+ * `agent_start` span marks a new instance, not a call, so two whose lifetimes
+ * overlap are the platform replacing a live one: the old instance runs on until
+ * its next storage call fails with "this Durable Object instance is no longer
+ * active", and no log line says why. A turn's GenAI spans are here too —
+ * `chat_turn`, `chat <model>`, `execute_tool <name>` — with their durations.
+ *
+ * A span's attributes filter without the `source.` prefix the events carry them
+ * under, as `cloudflare.durable_object.id` (verified). Storage calls are a
+ * zero-length span each and the bulk of any window, so they are left out
+ * unless `--name` asks for one.
+ */
+async function cmdSpans(args) {
+  const { flags } = parseFlags(args, {
+    bool: ["--json", "--raw", "--app"],
+    value: [
+      "--since",
+      "--object",
+      "--entrypoint",
+      "--name",
+      "--trace",
+      "--limit"
+    ]
+  });
+  const sinceLabel = flags.since ?? "1h";
+  const to = Date.now();
+  const from = to - parseSince(sinceLabel);
+  const limit = parseLimit(flags.limit, 100);
+  if (limit > MAX_LIMIT)
+    die(`--limit ${limit} is above the API maximum of ${MAX_LIMIT}`);
+
+  const filter = (key, operation, value) => ({
+    key,
+    operation,
+    value: String(value),
+    type: "string"
+  });
+  const filters = [];
+  if (flags.object)
+    filters.push(
+      filter("cloudflare.durable_object.id", "includes", flags.object)
+    );
+  if (flags.entrypoint)
+    filters.push(filter("cloudflare.entrypoint", "includes", flags.entrypoint));
+  if (flags.name)
+    filters.push(filter("$metadata.spanName", "includes", flags.name));
+  if (flags.trace)
+    filters.push(filter("$metadata.traceId", "includes", flags.trace));
+  if (!String(flags.name ?? "").includes("storage"))
+    filters.push(
+      filter("$metadata.spanName", "not_includes", "durable_object_storage")
+    );
+  /**
+   * `--app` — without the container's egress, as `logs --app`. Every request a
+   * container makes is traced on the workspace path as a `fetch`, a
+   * `durable_object_subrequest` or a span named for its HTTP method: 98% of one
+   * window's spans while an install ran. Genuine inbound requests go too, the
+   * A2A POST among them, so it is a flag.
+   */
+  if (flags.app)
+    for (const name of ["fetch", "durable_object_subrequest", ...METHODS])
+      filters.push(filter("$metadata.spanName", "neq", name));
+
+  const { res, text } = await telemetryQuery({
+    from,
+    to,
+    filters,
+    limit,
+    dataset: "otel"
+  });
+  ensureOk(res, text);
+  if (flags.json || flags.raw) return void printBody(text, { raw: flags.raw });
+
+  const started = (e) => e.source?.startTime ?? e.timestamp;
+  const spans = [...(parseJson(text)?.result?.events?.events ?? [])].sort(
+    (a, b) => started(a) - started(b)
+  );
+  if (spans.length === 0) return void out(`no spans in last ${sinceLabel}`);
+  const at = (ms) => new Date(ms).toISOString().slice(11, 23);
+  const took = (ms) =>
+    ms === undefined
+      ? "?"
+      : ms < 1000
+        ? `${ms}ms`
+        : `${(ms / 1000).toFixed(1)}s`;
+  out(`last ${sinceLabel} · ${spans.length} spans, oldest first`);
+  out(`${at(started(spans[0]))} → ${at(started(spans.at(-1)))}`);
+  out("");
+  for (const e of spans) {
+    const s = e.source ?? {};
+    const cf = s.cloudflare ?? {};
+    const detail = String(s.jsrpc?.method ?? s.url?.full ?? "").slice(0, 100);
+    const error = e.$metadata?.error;
+    out(
+      `${at(started(e))}  ${took(s.durationMS).padStart(8)}  ${(cf.entrypoint ?? "-").padEnd(28)} ${(cf.durable_object?.id ?? "").slice(0, 8).padEnd(8)}  ${String(s.traceId ?? "").slice(0, 8)}  ${s.name ?? "?"}` +
+        (detail ? `  ${detail}` : "") +
+        (cf.outcome && cf.outcome !== "ok" ? `  [${cf.outcome}]` : "") +
+        (error ? `  ⚠ ${String(error).slice(0, 160)}` : "")
+    );
+  }
+  if (spans.length >= limit)
+    out(
+      `\n⚠ hit limit ${limit} — older spans are cut off; narrow --since, --object or --name, or raise --limit (max ${MAX_LIMIT})`
+    );
+}
 
 async function cmdFields(args) {
   const { flags } = parseFlags(args, {
@@ -1088,6 +1212,8 @@ if (!cmd || cmd === "help" || cmd === "--help" || cmd === "-h") {
   if (!res.ok) process.exit(1);
 } else if (cmd === "logs") {
   await cmdLogs(argv.slice(1));
+} else if (cmd === "spans") {
+  await cmdSpans(argv.slice(1));
 } else if (cmd === "ai") {
   await cmdAi(argv.slice(1));
 } else if (cmd === "fields") {

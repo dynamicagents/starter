@@ -465,6 +465,12 @@ A container's own stdout and stderr are not in the Worker's logs, which record o
 it exited. `logs --container <app>` reads them — `npm run cf -- containers` lists the
 application names — and that is where a container that dies says why.
 
+`spans` reads the Worker's traces, which neither log shows: each turn's model calls and
+tool calls with their durations, and each Durable Object's lifecycle. An agent object's
+`agent_start` marks a new instance, so `spans --name agent_start` is how you see the
+platform replace one mid-turn — the old instance's next storage call then fails with "this
+Durable Object instance is no longer active".
+
 The credentials go in `.cf.env`, not `.env`, because they are not bindings: they
 authenticate **you** to the Cloudflare API, not the Worker to anything. Keeping them in
 their own file also keeps the token off wrangler's dotenv path, so it is never loaded into

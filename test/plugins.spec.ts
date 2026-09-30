@@ -12,7 +12,9 @@ import {
   AnthropicCodingReaderChild,
   AnthropicCodingWriterChild
 } from "@/agents/anthropic-coding/children";
+import { resolveInstallCommand } from "@dynamicagents/plugins/workspace";
 import { CODING, ANTHROPIC_CODING, GENERIC } from "@/config";
+import { INSTALL_PLAN } from "@/workspace/install-plan";
 
 /**
  * The seam between this repo and the packages it composes: what happens when
@@ -100,4 +102,41 @@ describe("tuning", () => {
       expect(tuning.keepRecentTokens).toBeLessThan(tuning.compactAfterTokens);
     }
   );
+});
+
+describe("install plan", () => {
+  /** A checkout with npm's lockfile at its root, as dev-agents has. */
+  const checkout = {
+    exists: async (path: string) =>
+      path.endsWith("/package.json") || path.endsWith("/package-lock.json"),
+    readFile: async () => "{}"
+  };
+
+  it("bootstraps dev-agents, whose code is in its submodules", async () => {
+    const resolved = await resolveInstallCommand(
+      checkout,
+      "/workspace/dev-agents",
+      INSTALL_PLAN,
+      "dynamicagents/dev-agents"
+    );
+
+    expect(resolved).toMatchObject({
+      kind: "run",
+      command: "npm ci --no-audit --no-fund && npm run bootstrap"
+    });
+  });
+
+  it("installs any other repository by its lockfile", async () => {
+    const resolved = await resolveInstallCommand(
+      checkout,
+      "/workspace/core",
+      INSTALL_PLAN,
+      "dynamicagents/core"
+    );
+
+    expect(resolved).toMatchObject({
+      kind: "run",
+      command: "npm ci --no-audit --no-fund"
+    });
+  });
 });

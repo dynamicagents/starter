@@ -93,7 +93,7 @@ export class AnthropicCodingAgent extends StepAgent<Env> {
   protected override compactionModel(): LanguageModel {
     return agentModel(
       this.env,
-      { modelId: ANTHROPIC_CODING.modelId, name: this.name },
+      { modelId: ANTHROPIC_CODING.compactionModelId, name: this.name },
       { agent: anthropicCoding.tenant, phase: "compaction" }
     );
   }

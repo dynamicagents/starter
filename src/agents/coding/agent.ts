@@ -69,7 +69,7 @@ export class CodingAgent extends StepAgent<Env> {
   protected override compactionModel(): LanguageModel {
     return agentModel(
       this.env,
-      { modelId: CODING.modelId, name: this.name },
+      { modelId: CODING.compactionModelId, name: this.name },
       { agent: coding.tenant, phase: "compaction" }
     );
   }

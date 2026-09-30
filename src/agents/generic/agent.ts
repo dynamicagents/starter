@@ -38,7 +38,7 @@ export class GenericAgent extends StepAgent<Env> {
   protected override compactionModel(): LanguageModel {
     return agentModel(
       this.env,
-      { modelId: GENERIC.modelId, name: this.name },
+      { modelId: GENERIC.compactionModelId, name: this.name },
       { agent: generic.tenant, phase: "compaction" }
     );
   }

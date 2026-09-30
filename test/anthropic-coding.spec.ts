@@ -579,6 +579,26 @@ describe("a writing session's worktree", () => {
     ]);
   });
 
+  it("reads an empty `branch` or `continue` as none", async () => {
+    const { pool } = recordingPool();
+    const asked: unknown[] = [];
+    await claimSession(
+      {
+        ...pool,
+        resolve: async (ctx) => {
+          asked.push(ctx);
+          return pool.resolve();
+        }
+      },
+      {
+        input: { task: TASK, branch: "", continue: "" },
+        taskId: "task-1",
+        runId: "detached:call_1"
+      }
+    );
+    expect(asked).toEqual([{ taskId: "task-1", runId: "detached:call_1" }]);
+  });
+
   it.each([
     ["completed", ["release"]],
     ["aborted", ["keep", "release"]],

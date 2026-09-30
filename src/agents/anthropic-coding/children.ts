@@ -179,6 +179,8 @@ export async function claimSession(
     return runtimeOf(
       await workspaces.resolve({
         ...run,
+        // An empty name is no name: a model may fill an optional string with
+        // one, and refusing it would fail a call that asked for nothing.
         ...(ctx.input.continue ? { continue: ctx.input.continue } : {}),
         ...(ctx.input.branch ? { branch: ctx.input.branch } : {})
       })

@@ -5,6 +5,7 @@ import type { LanguageModel } from "ai";
 import { generic } from "@/agents/generic/definition";
 import { coding } from "@/agents/coding/definition";
 import { anthropicCoding } from "@/agents/anthropic-coding/definition";
+import { ANTHROPIC_CODING, CODING, GENERIC } from "@/config";
 
 /**
  * What AI Gateway is told about this Worker's model calls, observed at the
@@ -107,6 +108,23 @@ describe("an agent's calls", () => {
       });
     }
   );
+});
+
+describe("an agent's compaction", () => {
+  it.each([
+    [generic.tenant, GENERIC],
+    [coding.tenant, CODING],
+    [anthropicCoding.tenant, ANTHROPIC_CODING]
+  ])("runs %s on its compaction model", async (tenant, tuning) => {
+    const stub = parentStub(tenant, `compaction-model:${tenant}`);
+    const modelId = await runInDurableObject(
+      stub,
+      (instance) =>
+        (instance as unknown as { compactionModel(): V3 }).compactionModel()
+          .modelId
+    );
+    expect(modelId).toBe(tuning.compactionModelId);
+  });
 });
 
 /**

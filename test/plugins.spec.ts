@@ -88,6 +88,13 @@ describe("tuning", () => {
   });
 
   it.each([GENERIC, CODING, ANTHROPIC_CODING])(
+    "compacts on the flash model",
+    (tuning) => {
+      expect(tuning.compactionModelId).toBe("@cf/zai-org/glm-5.3-flash");
+    }
+  );
+
+  it.each([GENERIC, CODING, ANTHROPIC_CODING])(
     "keeps a recent tail inside the compaction threshold",
     (tuning) => {
       expect(tuning.keepRecentTokens).toBeLessThan(tuning.compactAfterTokens);

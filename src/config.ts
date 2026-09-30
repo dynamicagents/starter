@@ -20,6 +20,12 @@ export interface AgentTuning {
    * because a turn ends when the model stops calling them.
    */
   modelId: string;
+  /**
+   * The model compaction summarizes with. A summary is a paraphrase rather
+   * than a decision, and the turn waits for it, so this is the flash model even
+   * where `modelId` is not.
+   */
+  compactionModelId: string;
   /** Compact once the conversation's estimate crosses this. */
   compactAfterTokens: number;
   /** The recent tail compaction keeps verbatim. */
@@ -32,6 +38,7 @@ export interface AgentTuning {
  */
 export const GENERIC: AgentTuning = {
   modelId: "@cf/zai-org/glm-5.3-flash",
+  compactionModelId: "@cf/zai-org/glm-5.3-flash",
   compactAfterTokens: 16_000,
   keepRecentTokens: 5_000
 };
@@ -46,17 +53,18 @@ export const GENERIC: AgentTuning = {
  */
 export const CODING: AgentTuning = {
   modelId: "@cf/zai-org/glm-5.3-flash",
-  compactAfterTokens: 60_000,
+  compactionModelId: "@cf/zai-org/glm-5.3-flash",
+  compactAfterTokens: 240_000,
   keepRecentTokens: 12_000
 };
 
 /**
  * `anthropic-coding`: `coding`'s shape, with the work done elsewhere.
  *
- * **The full-size model, not the flash one.** The parent does no work of its
- * own: it reads diffs and decides what to delegate, so every turn it spends is a
- * decision about a container boot and a Claude Code session, paid for at that
- * price rather than a retry's.
+ * **The full-size model for its turns, not the flash one.** The parent does no
+ * work of its own: it reads diffs and decides what to delegate, so every turn it
+ * spends is a decision about a container boot and a Claude Code session, paid
+ * for at that price rather than a retry's. Compaction keeps `coding`'s.
  *
  * **The fan-out is bounded by containers, not by this file.** A writing session
  * works in a worktree of its own, so N writers cost N+1 container instances,

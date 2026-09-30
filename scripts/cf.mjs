@@ -346,16 +346,23 @@ async function cmdLogs(args) {
 }
 
 /**
+ * Every container application, and the body they came in. No `per_page`: with
+ * one the endpoint pages by `next_page_token`, and without one it returns them
+ * all (verified).
+ */
+async function listContainerApps() {
+  const { res, text } = await request("GET", acct("containers/applications"));
+  ensureOk(res, text);
+  return { apps: parseJson(text)?.result ?? [], text };
+}
+
+/**
  * One container application, by its name — exact, or unambiguous — or its id.
  * An id nothing lists is taken as given: a deleted application's output
  * outlives it.
  */
 async function containerApp(nameOrId) {
-  const { res, text } = await request("GET", acct("containers/applications"), {
-    query: [["per_page", "50"]]
-  });
-  ensureOk(res, text);
-  const apps = parseJson(text)?.result ?? [];
+  const { apps } = await listContainerApps();
   const exact = apps.find((a) => a.id === nameOrId || a.name === nameOrId);
   if (exact) return exact;
   if (/^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(nameOrId))
@@ -921,14 +928,8 @@ async function cmdContainers(args) {
   const { flags, pos } = parseFlags(args, { bool: ["--json", "--raw"] });
   const [name] = pos;
 
-  const { res, text } = await request("GET", acct("containers/applications"), {
-    query: [["per_page", "50"]]
-  });
-  ensureOk(res, text);
-
-  const apps = (parseJson(text)?.result ?? []).filter(
-    (a) => !name || String(a.name ?? "").includes(name)
-  );
+  const { apps: all, text } = await listContainerApps();
+  const apps = all.filter((a) => !name || String(a.name ?? "").includes(name));
   // Fetched per app rather than in one call because the API has no bulk
   // rollout endpoint. There are a handful of apps; this is a debugging tool.
   const fetched = [];

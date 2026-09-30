@@ -90,7 +90,7 @@ describe("tuning", () => {
   it.each([GENERIC, CODING, ANTHROPIC_CODING])(
     "compacts on the flash model",
     (tuning) => {
-      expect(tuning.compactionModelId).toBe(CODING.modelId);
+      expect(tuning.compactionModelId).toBe("@cf/zai-org/glm-5.3-flash");
     }
   );
 

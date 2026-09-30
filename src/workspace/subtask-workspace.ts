@@ -214,7 +214,9 @@ EOF`,
  * script as values, never as command text.
  *
  * - `new` starts the branch at the base, discarding whatever the worktree held
- *   before: that was pushed, or released, or it would not have been free.
+ *   before: that was pushed, or released, or it would not have been free. It
+ *   refuses a name the remote already has, the default branch included: work
+ *   started beside that branch could never be pushed onto it.
  * - `continue` keeps the branch this worktree already holds, and only a
  *   repository that lacks it — a submodule added since — starts one at its base.
  * - `adopt` takes the branch from the remote where it is there — a session's
@@ -234,6 +236,9 @@ while IFS="$tab" read -r path base; do
   [ -n "$path" ] || continue
   if [ "$WORKTREE_MODE" != new ] && [ "$(git -C "$path" symbolic-ref --short -q refs/remotes/origin/HEAD 2>/dev/null)" = "origin/$WORKTREE_BRANCH" ]; then
     echo "$WORKTREE_BRANCH is the default branch of the repository at $path — work goes on a branch a pull request proposes, never onto the one it is proposed against" >&2; exit 1
+  fi
+  if [ "$WORKTREE_MODE" = new ] && git -C "$path" rev-parse --verify --quiet "refs/remotes/origin/$WORKTREE_BRANCH" >/dev/null; then
+    echo "$WORKTREE_BRANCH is already on the remote of the repository at $path — continue it to add to it, or name another branch for new work" >&2; exit 1
   fi
   if [ "$base" = "@pinned" ]; then
     base="$(git rev-parse "HEAD:$path")" || { echo "the superproject records no commit for $path" >&2; exit 1; }
@@ -409,7 +414,9 @@ export interface SubtaskWorkspaces {
    * Claim a worktree, put it on the run's branch, and answer where it is. A
    * scratchpad is the parent's own, and answers that.
    */
-  resolve(ctx: RunRef & { continue?: string }): Promise<SessionPlace>;
+  resolve(
+    ctx: RunRef & { continue?: string; branch?: string }
+  ): Promise<SessionPlace>;
   /** A reading session: the parent's own checkout, read in a throwaway copy. */
   reading(): Promise<SessionPlace>;
   /**
@@ -763,6 +770,18 @@ export function subtaskWorkspaces(config: {
             "not a branch name. Pass the branch to add to — the one an earlier " +
             "session's report named, or a pull request's head branch — or leave " +
             "it out to start a new one."
+        );
+      }
+      if (ctx.branch !== undefined && ctx.continue !== undefined) {
+        throw new Error(
+          "anthropic-coding: pass `continue` to add to a branch, or `branch` to " +
+            "name a new one — not both."
+        );
+      }
+      if (ctx.branch !== undefined && !isBranchName(ctx.branch)) {
+        throw new Error(
+          `anthropic-coding: \`branch\` names ${JSON.stringify(ctx.branch)}, which ` +
+            "git would not take as a branch name. Pass another, or leave it out."
         );
       }
 

@@ -59,32 +59,31 @@ describe("addressing a worktree", () => {
 
   /**
    * `continue` names a branch a session made or one somebody pushed for a pull
-   * request, so any branch git takes is accepted here; the default branch is
-   * refused once the remote is read — see `subtask-workspace.spec.ts`.
+   * request, and `branch` the caller's name for new work, so any branch git
+   * takes is accepted here; the remote's own branches are refused once it is
+   * read — see `subtask-workspace.spec.ts`.
    */
-  it("derives a branch name, and lets `continue` name any branch git accepts", () => {
+  it("derives a short branch name, and lets a caller name any branch git accepts", () => {
     const branch = runBranch({ taskId: "task-a", runId: "detached:3" });
-    expect(branch).toBe("anthropic-coding/task-a/3");
-    // Core's run id carries a `:`, which git refuses; a tool call id may carry
-    // anything else a provider chose.
+    expect(branch).toBe("anthropic-coding/vx78x");
+    expect(runBranch({ taskId: "task-a", runId: "detached:3" })).toBe(branch);
+    // A tool call id is unique only within its conversation, so the same one
+    // in another task is another branch.
+    expect(runBranch({ taskId: "task-b", runId: "detached:3" })).not.toBe(
+      branch
+    );
+    // Core's run id carries a `:`, and a tool call id anything a provider
+    // chose; none of it reaches the name.
     for (const runId of [
       "detached:call_ab:c/../d",
       "detached:.x.",
-      "detached:"
+      "detached:",
+      "detached:call_b976fe13cad640a786e155df::cf-wai-tool-call::1TgarImMx5TqDqJF"
     ]) {
-      expect(isBranchName(runBranch({ taskId: "task-a", runId }))).toBe(true);
+      expect(runBranch({ taskId: "task-a", runId })).toMatch(
+        /^anthropic-coding\/[0-9a-z]{5}$/
+      );
     }
-    // Replacing what git refuses must not give two runs one branch.
-    const branches = [
-      "detached:call:a",
-      "detached:call/a",
-      "detached:call-a"
-    ].map((runId) => runBranch({ taskId: "task-a", runId }));
-    expect(new Set(branches).size).toBe(branches.length);
-    expect(branches[2]).toBe("anthropic-coding/task-a/call-a");
-    expect(runBranch({ taskId: "t", runId: "detached::" })).not.toBe(
-      runBranch({ taskId: "t", runId: "detached:/" })
-    );
     for (const name of [branch, "feature/artifacts", "tiago/fix-1", "a.b/c"]) {
       expect(isBranchName(name)).toBe(true);
     }
@@ -158,7 +157,7 @@ describe("claiming a worktree", () => {
     expect(claimed).toMatchObject({
       repo: REPO,
       slot: 0,
-      branch: "anthropic-coding/task-a/1",
+      branch: runBranch(ctx),
       live: ctx,
       mode: "new",
       ready: false,
@@ -274,6 +273,33 @@ describe("claiming a worktree", () => {
       branch: "anthropic-coding/t/1",
       mode: "adopt"
     });
+  });
+
+  it("starts new work on the branch the caller named", () => {
+    const pool = memoryPoolStore();
+    const claimed = claim(pool, REPO, { ...ctx, branch: "docs/readme" }, 10);
+    expect(claimed).toMatchObject({
+      slot: 0,
+      branch: "docs/readme",
+      mode: "new"
+    });
+  });
+
+  /** Starting it again at the base would put two lines of work under one name. */
+  it("refuses new work on a branch a worktree already holds", () => {
+    const pool = memoryPoolStore();
+    pool.put({
+      repo: REPO,
+      slot: 0,
+      branch: "docs/readme",
+      repos: [repo()],
+      usedAt: 5
+    });
+
+    expect(() =>
+      claim(pool, REPO, { ...ctx, branch: "docs/readme" }, 10)
+    ).toThrow(/a worktree already holds docs\/readme/);
+    expect(pool.rows()[0]?.live).toBeUndefined();
   });
 });
 

@@ -44,15 +44,23 @@ export const PLAN_INPUT = z.object({
 
 export type PlanInput = z.infer<typeof PLAN_INPUT>;
 
-/** The writer's input, and the plan it carries out. */
+/** The writer's input, the plan it carries out, and the name of a new branch. */
 export const WRITE_INPUT = CLAUDE_CODE_WRITE_INPUT.extend({
   plan: z
     .string()
     .optional()
     .describe(
       "The id of a plan to carry out — one claude_code_plan returned. The session is given the plan whole, so brief it on the work rather than restating the plan."
+    ),
+  branch: z
+    .string()
+    .optional()
+    .describe(
+      "A name for the new branch, when the caller asked for the work on one. It must not exist yet; to add to a branch that does, use `continue`. Omit it and the session's branch is named for you."
     )
 });
+
+export type WriteInput = z.infer<typeof WRITE_INPUT>;
 
 /** What the parent model is told `claude_code_plan` does. */
 export const PLANNER_DESCRIPTION = [
@@ -86,7 +94,7 @@ export const PLAN_OUTPUT = {
     plan: {
       type: "string",
       description:
-        "The plan, in Markdown, for the person who approves it: what will change and where, what stays as it is, and how the result will be checked. Complete on its own — the session that carries it out is given this, and nothing of your investigation."
+        "The plan, in Markdown, for the person who approves it: what will change and where, what stays as it is, and how the result will be checked. Complete on its own — the session that carries it out is given this, and nothing of your investigation. Name no branch: that session is given one, and it is the pull request's head."
     },
     lastReply: {
       type: "string",

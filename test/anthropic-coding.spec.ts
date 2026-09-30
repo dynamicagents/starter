@@ -333,6 +333,46 @@ describe("a plan", () => {
     expect(owned).toBe(true);
   });
 
+  /**
+   * A planning session runs detached in the parent's own container, which the
+   * task that started it releases when it settles.
+   */
+  it("holds its container from prepare until its settle", async () => {
+    const key = `anthropic-coding-spec:${crypto.randomUUID()}`;
+    await checkedOut(key);
+    const ctx = planning();
+    const runtime = await onParent(async (agent) => {
+      activeRepo(agent.ctx.storage).set("acme/plan");
+      return preparePlanner({ ...ctx, parent: agent.pluginContext() });
+    }, key);
+    const workspace = env.ANTHROPIC_CODING_WORKSPACE.get(
+      env.ANTHROPIC_CODING_WORKSPACE.idFromName(workspaceName(key, "acme/plan"))
+    );
+    const holds = () =>
+      runInDurableObject(workspace, async (_instance, state) =>
+        Object.keys(
+          (await state.storage.get<Record<string, number>>(
+            "container-holds"
+          )) ?? {}
+        )
+      );
+
+    expect(await holds()).toEqual([ctx.runId]);
+
+    await onParent(
+      (agent) =>
+        settlePlanner({
+          runId: ctx.runId,
+          taskId: ctx.taskId,
+          runtime,
+          result: { status: "completed" } as never,
+          parent: agent.pluginContext()
+        }),
+      key
+    );
+    expect(await holds()).toEqual([]);
+  });
+
   it("opens the plan it opened before when prepare runs again for the same run", async () => {
     const key = `anthropic-coding-spec:${crypto.randomUUID()}`;
     await checkedOut(key);

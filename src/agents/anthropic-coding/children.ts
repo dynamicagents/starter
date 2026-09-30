@@ -27,6 +27,7 @@ import {
   type SessionPlace,
   type SubtaskWorkspaces
 } from "@/workspace/subtask-workspace";
+import { CLAUDE_CODE_SESSION } from "@/config";
 import { claudeCodeConfig } from "./claude-code";
 import {
   createPlan,
@@ -239,17 +240,48 @@ export async function prepareWriter(
 const settleWriter = (ctx: SubAgentSettleContext<Env>): Promise<void> =>
   settleSession(sessionWorkspaces(ctx.parent), ctx.parent.storage, ctx);
 
-/** A reading session works in a throwaway copy of the parent's own checkout. */
-async function prepareReader({
-  parent
-}: SubAgentPrepareContext<unknown, Env>): Promise<Record<string, unknown>> {
-  return runtimeOf(await sessionWorkspaces(parent).reading());
+/**
+ * How long a reading session holds its container: the install it may wait out
+ * first and the session itself, each bounded by the session's timeout.
+ */
+const READING_HOLD_MS = 2 * CLAUDE_CODE_SESSION.timeoutMs + 5 * 60_000;
+
+function workspaceStub(env: Env, name: string) {
+  const binding = env.ANTHROPIC_CODING_WORKSPACE;
+  return binding.get(binding.idFromName(name));
 }
 
 /**
- * A reading session holds no worktree. One that did not complete is stopped
- * here too, which also deletes its copy: a run that errored has no drain left
- * to do either.
+ * A reading session runs detached in the parent's own container, and the task
+ * that started it can settle first, releasing that container. The hold defers
+ * the release to the session's `settle`; `hold` on the workspace object has the
+ * rest.
+ */
+async function holdForReading(
+  env: Env,
+  place: SessionPlace,
+  runId: string
+): Promise<void> {
+  await workspaceStub(env, place.workspaceName).hold(
+    runId,
+    Date.now() + READING_HOLD_MS
+  );
+}
+
+/** A reading session works in a throwaway copy of the parent's own checkout. */
+async function prepareReader({
+  parent,
+  runId
+}: SubAgentPrepareContext<unknown, Env>): Promise<Record<string, unknown>> {
+  const place = await sessionWorkspaces(parent).reading();
+  await holdForReading(parent.env, place, runId);
+  return runtimeOf(place);
+}
+
+/**
+ * A reading session holds no worktree, only its container, which it lets go of
+ * here. One that did not complete is stopped first, which also deletes its copy:
+ * a run that errored has no drain left to do either.
  */
 async function settleReader({
   runId,
@@ -257,9 +289,14 @@ async function settleReader({
   result,
   parent
 }: SubAgentSettleContext<Env>): Promise<void> {
-  if (result.status === "completed") return;
   const name = workspaceNameFromRuntime(runtime);
-  if (name) await stopSession(parent.env, name, runId);
+  if (!name) return;
+  try {
+    if (result.status !== "completed")
+      await stopSession(parent.env, name, runId);
+  } finally {
+    await workspaceStub(parent.env, name).unhold(runId);
+  }
 }
 
 /**
@@ -283,6 +320,7 @@ export async function preparePlanner(
     }
   }
   const place = await sessionWorkspaces(ctx.parent).reading();
+  await holdForReading(env, place, ctx.runId);
   const id =
     edits ?? (await createPlan(env, storage, `${ctx.taskId}:${ctx.runId}`));
   const plan: PlanPlace = { id, isNew: edits === undefined };
@@ -423,8 +461,7 @@ abstract class ClaudeCodeRun extends SubAgent<Env> {
   }
 
   #stub(name: string) {
-    const binding = this.env.ANTHROPIC_CODING_WORKSPACE;
-    return binding.get(binding.idFromName(name));
+    return workspaceStub(this.env, name);
   }
 
   /** A shell in a named workspace, under the settings every tool uses. */

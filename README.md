@@ -467,9 +467,11 @@ application names — and that is where a container that dies says why.
 
 `spans` reads the Worker's traces, which neither log shows: each turn's model calls and
 tool calls with their durations, and each Durable Object's lifecycle. An agent object's
-`agent_start` marks a new instance, so `spans --name agent_start` is how you see the
-platform replace one mid-turn — the old instance's next storage call then fails with "this
-Durable Object instance is no longer active".
+`agent_start` marks a new instance, and most are ordinary — after an idle eviction or a
+deploy. One that lands while the same object's earlier `alarm` or `chat_turn` is still
+open (`spans --object <id> --name alarm`) is the platform replacing a live instance
+mid-turn: the old one's next storage call then fails with "this Durable Object instance is
+no longer active".
 
 The credentials go in `.cf.env`, not `.env`, because they are not bindings: they
 authenticate **you** to the Cloudflare API, not the Worker to anything. Keeping them in

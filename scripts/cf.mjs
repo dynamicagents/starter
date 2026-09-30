@@ -29,7 +29,7 @@
 //   --limit <N>           max matching events (default 100, max 2000)
 //   --json | --raw        full pretty JSON / verbatim body instead of the digest
 //
-// spans flags (and --since, --limit, --json, --raw as for logs):
+// spans flags (and --since, --worker, --limit, --json, --raw as for logs):
 //   --object <id>         one Durable Object, by its id or a part of it
 //   --entrypoint <class>  spans of the classes whose name contains <class>
 //   --name <span>         span names containing <span>; `agent_start` lists
@@ -87,8 +87,8 @@ const USAGE = `cf.mjs — Cloudflare API proxy (credentials from ${ENV_FILE})
        [--app] [--limit 100] [--json|--raw]
   logs --container <app> [--since 1h]    a container app's own output, its long
        [--grep <text>] [--limit 100]     lines reassembled
-  spans [--since 1h] [--object <id>]     the Worker's traces, oldest first
-        [--entrypoint <class>] [--name <span>] [--trace <id>]
+  spans [--since 1h] [--worker <name>]   traces, oldest first
+        [--object <id>] [--entrypoint <class>] [--name <span>] [--trace <id>]
         [--app] [--limit 100] [--json|--raw]
   ai [--since 2h] [--model <m>]          AI Gateway calls, as a digest
      [--task <id>] [--agent <name>]      …selected by what core tags a call with
@@ -508,11 +508,13 @@ const elideDataUrls = (s) =>
  * `logs` does not read.
  *
  * It is where a Durable Object's lifecycle shows. An Agent object's
- * `agent_start` span marks a new instance, not a call, so two whose lifetimes
- * overlap are the platform replacing a live one: the old instance runs on until
- * its next storage call fails with "this Durable Object instance is no longer
- * active", and no log line says why. A turn's GenAI spans are here too —
- * `chat_turn`, `chat <model>`, `execute_tool <name>` — with their durations.
+ * `agent_start` span marks a new instance, not a call — and most starts are
+ * ordinary, after an idle eviction or a deploy. A start while the same object's
+ * earlier `alarm` or `chat_turn` span is still open is the platform replacing a
+ * live instance: the old one runs on until its next storage call fails with
+ * "this Durable Object instance is no longer active", and no log line says why.
+ * A turn's GenAI spans are here too — `chat_turn`, `chat <model>`,
+ * `execute_tool <name>` — with their durations.
  *
  * A span's attributes filter without the `source.` prefix the events carry them
  * under, as `cloudflare.durable_object.id` (verified). Storage calls are a
@@ -524,6 +526,8 @@ async function cmdSpans(args) {
     bool: ["--json", "--raw", "--app"],
     value: [
       "--since",
+      "--worker",
+      "--service",
       "--object",
       "--entrypoint",
       "--name",
@@ -537,14 +541,16 @@ async function cmdSpans(args) {
   const limit = parseLimit(flags.limit, 100);
   if (limit > MAX_LIMIT)
     die(`--limit ${limit} is above the API maximum of ${MAX_LIMIT}`);
+  const worker = flags.worker ?? flags.service;
 
   const filter = (key, operation, value) => ({
     key,
     operation,
-    value: String(value),
+    ...(value === undefined ? {} : { value: String(value) }),
     type: "string"
   });
   const filters = [];
+  if (worker) filters.push(filter("$metadata.service", "eq", worker));
   if (flags.object)
     filters.push(
       filter("cloudflare.durable_object.id", "includes", flags.object)
@@ -561,14 +567,17 @@ async function cmdSpans(args) {
     );
   /**
    * `--app` — without the container's egress, as `logs --app`. Every request a
-   * container makes is traced on the workspace path as a `fetch`, a
-   * `durable_object_subrequest` or a span named for its HTTP method: 98% of one
-   * window's spans while an install ran. Genuine inbound requests go too, the
-   * A2A POST among them, so it is a flag.
+   * container makes is traced as an HTTP span on the workspace object, and again
+   * on `WorkspaceProxy`: 98% of one window's spans while an install ran. So any
+   * span carrying an HTTP method goes, whatever the method, and every span on the
+   * proxy. The Worker's own HTTP requests go too, the A2A POST among them, so it
+   * is a flag.
    */
   if (flags.app)
-    for (const name of ["fetch", "durable_object_subrequest", ...METHODS])
-      filters.push(filter("$metadata.spanName", "neq", name));
+    filters.push(
+      filter("http.request.method", "is_null"),
+      filter("cloudflare.entrypoint", "neq", "WorkspaceProxy")
+    );
 
   const { res, text } = await telemetryQuery({
     from,
@@ -604,7 +613,7 @@ async function cmdSpans(args) {
       `${at(started(e))}  ${took(s.durationMS).padStart(8)}  ${(cf.entrypoint ?? "-").padEnd(28)} ${(cf.durable_object?.id ?? "").slice(0, 8).padEnd(8)}  ${String(s.traceId ?? "").slice(0, 8)}  ${s.name ?? "?"}` +
         (detail ? `  ${detail}` : "") +
         (cf.outcome && cf.outcome !== "ok" ? `  [${cf.outcome}]` : "") +
-        (error ? `  ⚠ ${String(error).slice(0, 160)}` : "")
+        (error ? `  ⚠ ${String(error).replace(/\s+/g, " ").slice(0, 160)}` : "")
     );
   }
   if (spans.length >= limit)

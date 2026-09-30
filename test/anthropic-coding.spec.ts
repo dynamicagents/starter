@@ -12,15 +12,27 @@ import { openWorkspace, workspaceName } from "@dynamicagents/plugins/workspace";
 import type { AgentToolLifecycleResult, AgentToolRunInfo } from "agents";
 import type { ContextConfig } from "agents/context";
 import type { AnthropicCodingWorkspace } from "@/index";
+import { requireArtifactsStub } from "@dynamicagents/core/artifacts";
 import {
+  AnthropicCodingPlannerChild,
   AnthropicCodingReaderChild,
   AnthropicCodingWriterChild,
   claimSession,
   forgetKept,
   keepNote,
+  preparePlanner,
+  prepareWriter,
+  reportPlan,
+  settlePlanner,
   settleSession
 } from "@/agents/anthropic-coding/children";
 import {
+  createPlan,
+  ownsPlan,
+  PLAN_LABEL
+} from "@/agents/anthropic-coding/plans";
+import {
+  planBrief,
   sessionBrief,
   sessionFooter,
   warningPrompt,
@@ -106,6 +118,7 @@ describe("the parent's surface", () => {
       "browser_scrape",
       "check_back",
       "claude_code",
+      "claude_code_plan",
       "claude_code_read",
       "grep",
       "repo_clone",
@@ -155,12 +168,13 @@ describe("the parent's surface", () => {
     }
   });
 
-  it("offers the writing session first, then the reading one", async () => {
+  it("offers the writing session first, then the planning and reading ones", async () => {
     const names = await onParent((agent) =>
       agent.getSubAgents().map((Cls) => Cls.name)
     );
     expect(names).toEqual([
       "AnthropicCodingWriterChild",
+      "AnthropicCodingPlannerChild",
       "AnthropicCodingReaderChild"
     ]);
   });
@@ -169,11 +183,13 @@ describe("the parent's surface", () => {
 describe("the sessions", () => {
   it("run in the background, because a session outlasts a turn", () => {
     expect(AnthropicCodingWriterChild.spec.detached).toBe(true);
+    expect(AnthropicCodingPlannerChild.spec.detached).toBe(true);
     expect(AnthropicCodingReaderChild.spec.detached).toBe(true);
   });
 
   it.each([
     ["ANTHROPIC_CODING_WRITER_CHILD"],
+    ["ANTHROPIC_CODING_PLANNER_CHILD"],
     ["ANTHROPIC_CODING_READER_CHILD"]
   ])("install no tools on %s: the session brings its own", async (binding) => {
     const ns = (env as unknown as Record<string, DurableObjectNamespace>)[
@@ -196,6 +212,7 @@ describe("the sessions", () => {
 describe("preparing a session", () => {
   it.each([
     ["writing", AnthropicCodingWriterChild],
+    ["planning", AnthropicCodingPlannerChild],
     ["reading", AnthropicCodingReaderChild]
   ])(
     "refuses a %s session in a workspace with nothing checked out",
@@ -241,6 +258,241 @@ describe("preparing a session", () => {
       });
     }, key);
     expect(runtime).toEqual({ workspaceName: name, dir });
+  });
+});
+
+/**
+ * A plan: opened on the parent for this caller, written by a planning session,
+ * put to the caller by id, and carried out by a writing session given it whole.
+ * What travels between them is the id — see `@/agents/anthropic-coding/plans`.
+ */
+describe("a plan", () => {
+  /** A checkout the reading copy can be made from, as a clone leaves one. */
+  async function checkedOut(key: string): Promise<string> {
+    const dir = "/workspace/plan";
+    const name = workspaceName(key, "acme/plan");
+    const workspace = env.ANTHROPIC_CODING_WORKSPACE.get(
+      env.ANTHROPIC_CODING_WORKSPACE.idFromName(name)
+    );
+    using ws = await openWorkspace(workspace);
+    await ws.fs.mkdir(`${dir}/.git`, { recursive: true });
+    await ws.fs.writeFile(`${dir}/.git/HEAD`, "ref: refs/heads/main\n");
+    await workspace.noteCheckout({ dir, kind: "repo", repo: "acme/plan" });
+    await workspace.startInstall({ dir });
+    return dir;
+  }
+
+  const planning = (plan?: string) =>
+    ({
+      input: { task: TASK, ...(plan ? { plan } : {}) },
+      taskId: "task-1",
+      runId: `detached:${crypto.randomUUID()}`
+    }) as const;
+
+  /** A planning session's outcome: its answer through `--json-schema`, or none. */
+  const outcome = (structured?: unknown) => ({
+    session: {
+      exitCode: 0,
+      result: {
+        subtype: "success",
+        isError: false,
+        text: structured ? JSON.stringify(structured) : "I looked around.",
+        sessionId: "s1",
+        numTurns: 3,
+        durationMs: 12_000,
+        apiErrorStatus: null,
+        costUsd: 0.2,
+        usage: { input: 1, output: 2, cacheRead: 3, cacheWrite: 4 },
+        permissionDenials: 0,
+        ...(structured ? { structured } : {})
+      }
+    }
+  });
+
+  const ANSWER = {
+    title: "Add a --json flag",
+    plan: "Change `cli.ts` to print JSON when `--json` is given, and test it.",
+    lastReply:
+      "Adds --json to the list command; assumes the output shape stays."
+  };
+
+  it("opens a new plan for this caller, once a workspace has admitted the run", async () => {
+    const key = `anthropic-coding-spec:${crypto.randomUUID()}`;
+    await checkedOut(key);
+    const { runtime, owned } = await onParent(async (agent) => {
+      activeRepo(agent.ctx.storage).set("acme/plan");
+      const runtime = await preparePlanner({
+        ...planning(),
+        parent: agent.pluginContext()
+      });
+      const plan = runtime.plan as { id: string };
+      return { runtime, owned: ownsPlan(agent.ctx.storage, plan.id) };
+    }, key);
+
+    expect(runtime).toMatchObject({ plan: { isNew: true } });
+    expect(owned).toBe(true);
+  });
+
+  it("opens the plan it opened before when prepare runs again for the same run", async () => {
+    const key = `anthropic-coding-spec:${crypto.randomUUID()}`;
+    await checkedOut(key);
+    const ids = await onParent(async (agent) => {
+      activeRepo(agent.ctx.storage).set("acme/plan");
+      const ctx = { ...planning(), parent: agent.pluginContext() };
+      const first = await preparePlanner(ctx);
+      const again = await preparePlanner(ctx);
+      return [first, again].map((r) => (r.plan as { id: string }).id);
+    }, key);
+
+    expect(ids[1]).toBe(ids[0]);
+  });
+
+  it.each([
+    ["one another caller opened", "foreign"],
+    ["one that was approved", "locked"]
+  ])("refuses to edit %s, before any workspace", async (_label, which) => {
+    const refused = await onParent(async (agent) => {
+      const id =
+        which === "foreign"
+          ? await requireArtifactsStub(env).createArtifact("plan")
+          : await createPlan(env, agent.ctx.storage);
+      if (which === "locked") {
+        await requireArtifactsStub(env).lock(id, "approved");
+      }
+      return preparePlanner({
+        ...planning(id),
+        parent: agent.pluginContext()
+      }).then(
+        () => "",
+        (err: unknown) => String(err)
+      );
+    });
+    expect(refused).toMatch(
+      which === "foreign" ? /is not a plan of yours/ : /is locked \(approved\)/
+    );
+  });
+
+  it("files the session's answer as the plan, and tells the parent its id, not its text", async () => {
+    const id = await requireArtifactsStub(env).createArtifact("plan");
+    const report = await reportPlan(
+      env,
+      { id, isNew: true },
+      "run-1",
+      outcome(ANSWER) as never
+    );
+
+    expect(report).toContain(`\`${id}\``);
+    expect(report).toContain(ANSWER.title);
+    expect(report).toContain(ANSWER.lastReply);
+    expect(report).not.toContain(`/a/${id}`);
+    expect(report).not.toContain(ANSWER.plan);
+    expect(
+      (await requireArtifactsStub(env).readArtifact(id))?.entries
+    ).toMatchObject([
+      { label: PLAN_LABEL, text: `# ${ANSWER.title}\n\n${ANSWER.plan}` }
+    ]);
+  });
+
+  it("files nothing for a session that did not answer through the schema", async () => {
+    const id = await requireArtifactsStub(env).createArtifact("plan");
+    const report = await reportPlan(
+      env,
+      { id, isNew: true },
+      "run-1",
+      outcome() as never
+    );
+    expect(report).toMatch(/returned no plan, so nothing was filed/);
+    expect((await requireArtifactsStub(env).readArtifact(id))?.entries).toEqual(
+      []
+    );
+  });
+
+  it("does not change a plan that was approved while its session ran", async () => {
+    const artifacts = requireArtifactsStub(env);
+    const id = await artifacts.createArtifact("plan");
+    await artifacts.addEntry(id, { label: PLAN_LABEL, text: "the plan" });
+    await artifacts.lock(id, "approved");
+
+    const report = await reportPlan(
+      env,
+      { id, isNew: false },
+      "run-2",
+      outcome(ANSWER) as never
+    );
+    expect(report).toMatch(/was not changed/);
+    expect((await artifacts.readArtifact(id))?.entries).toHaveLength(1);
+  });
+
+  it("marks a new plan its session never wrote as failed, and leaves a written one open", async () => {
+    const artifacts = requireArtifactsStub(env);
+    const settle = (id: string, isNew: boolean) =>
+      onParent((agent) =>
+        settlePlanner({
+          runId: "run-1",
+          taskId: "task-1",
+          runtime: { workspaceName: "w", dir: "/d", plan: { id, isNew } },
+          result: { status: "completed" } as never,
+          parent: agent.pluginContext()
+        })
+      );
+
+    const empty = await artifacts.createArtifact("plan");
+    await settle(empty, true);
+    expect(await artifacts.artifactState(empty)).toMatchObject({
+      status: "failed",
+      locked: true
+    });
+
+    const written = await artifacts.createArtifact("plan");
+    await artifacts.addEntry(written, { label: PLAN_LABEL, text: "a plan" });
+    await settle(written, true);
+    expect(await artifacts.artifactState(written)).toMatchObject({
+      locked: false
+    });
+  });
+
+  it.each([
+    ["one another caller opened", "foreign", /is not a plan of yours/],
+    ["one with nothing on it yet", "empty", /has nothing on it yet/]
+  ])(
+    "refuses a writing session given %s, before claiming a worktree",
+    async (_label, which, message) => {
+      const refused = await onParent(async (agent) => {
+        const id =
+          which === "foreign"
+            ? await requireArtifactsStub(env).createArtifact("plan")
+            : await createPlan(env, agent.ctx.storage);
+        return prepareWriter({
+          ...planning(id),
+          parent: agent.pluginContext()
+        }).then(
+          () => "",
+          (err: unknown) => String(err)
+        );
+      });
+      expect(refused).toMatch(message);
+    }
+  );
+
+  it("is given whole to the writing session that carries it out", () => {
+    const brief = sessionBrief(TASK, undefined, {
+      branch: "anthropic-coding/t/c",
+      submodules: [],
+      continues: false,
+      plan: "# The plan\n\nDo the thing."
+    });
+    expect(brief).toContain("## The plan");
+    expect(brief).toContain("Do the thing.");
+  });
+
+  it("is edited with its latest version and what was said about it in the brief", () => {
+    const brief = planBrief(TASK, undefined, {
+      plan: "# v1\n\nthe first plan",
+      said: ["Comment: smaller, please"]
+    });
+    expect(brief).toContain("## The plan you are changing");
+    expect(brief).toContain("the first plan");
+    expect(brief).toContain("- Comment: smaller, please");
   });
 });
 

@@ -17,6 +17,7 @@ import { ANTHROPIC_CODING } from "@/config";
 import { RETRY_BRIEF } from "@/copy";
 import { agentModel } from "@/model";
 import { activeRepo } from "@/workspace/active-repo";
+import { WORKSPACE_WRITERS } from "@/workspace/container";
 import { sweepIdleWorkspaces } from "@/workspace/lifecycle";
 import {
   forgetWorktree,
@@ -26,6 +27,7 @@ import {
   sqlPoolStore
 } from "@/workspace/worktree-pool";
 import {
+  AnthropicCodingPlannerChild,
   AnthropicCodingReaderChild,
   AnthropicCodingWriterChild,
   forgetKept,
@@ -33,8 +35,8 @@ import {
 } from "./children";
 import { anthropicCoding } from "./definition";
 import { container, parentPlugins, sessionWorkspaces } from "./plugins";
-import { activeToolsFor } from "./roles";
-import { MEMORY, RETRY_WORK, ROLE_BRIEFS, SOUL } from "./soul";
+import { ownsPlan } from "./plans";
+import { MEMORY, RETRY_WORK, SOUL } from "./soul";
 
 /** This agent's log prefix and workspace label. */
 const LABEL = "anthropic-coding";
@@ -113,9 +115,21 @@ export class AnthropicCodingAgent extends StepAgent<Env> {
     );
   }
 
-  /** Writing first: the order the delegating model is shown them. */
+  /** Writing first, then planning: the order the delegating model is shown them. */
   override getSubAgents(): SubAgentClass[] {
-    return [AnthropicCodingWriterChild, AnthropicCodingReaderChild];
+    return [
+      AnthropicCodingWriterChild,
+      AnthropicCodingPlannerChild,
+      AnthropicCodingReaderChild
+    ];
+  }
+
+  /**
+   * Only a plan this caller's agent opened is put to the caller — a link is
+   * shared by design, and approving one locks it. See `./plans.ts`.
+   */
+  protected override async mayAskApproval(id: string): Promise<boolean> {
+    return ownsPlan(this.ctx.storage, id) && (await super.mayAskApproval(id));
   }
 
   /** `check_back`, for the wait between opening a pull request and its review. */
@@ -124,9 +138,10 @@ export class AnthropicCodingAgent extends StepAgent<Env> {
   }
 
   /**
-   * The turn core configures, minus Think's own file writers — and for a plan,
-   * minus everything that writes: see `./roles.ts`. Core's own list wins where
-   * it sets one: a turn for a job that has ended gets no tools.
+   * The turn core configures, minus Think's own file writers: the parent has
+   * no editor, and those would write the checkout the sessions' work lands in.
+   * Core's own list wins where it sets one: a turn for a job that has ended gets
+   * no tools.
    */
   override async beforeTurn(ctx: TurnContext): Promise<TurnConfig | void> {
     const base = await super.beforeTurn(ctx);
@@ -134,25 +149,15 @@ export class AnthropicCodingAgent extends StepAgent<Env> {
       ...base,
       activeTools:
         base?.activeTools ??
-        activeToolsFor(this.turnStepJob()?.role, Object.keys(ctx.tools))
+        Object.keys(ctx.tools).filter((name) => !WORKSPACE_WRITERS.has(name))
     };
   }
 
-  /**
-   * A job starts with a retry's note, what its role asks, then its input. Where
-   * a first attempt's work was kept is a writing session's, which a plan can
-   * neither start nor look for.
-   */
+  /** A retry starts with where its first attempt's work was kept. */
   protected override formatStepJobInput(job: StepJob): string {
-    const retry =
-      job.attempt > 1
-        ? job.role === "plan"
-          ? RETRY_BRIEF
-          : `${RETRY_BRIEF} ${RETRY_WORK}`
-        : undefined;
-    return [retry, job.role ? ROLE_BRIEFS[job.role] : undefined, job.input]
-      .filter((part): part is string => Boolean(part))
-      .join("\n\n");
+    return job.attempt > 1
+      ? `${RETRY_BRIEF} ${RETRY_WORK}\n\n${job.input}`
+      : job.input;
   }
 
   /** A failed run's report, with where its work was kept — see `./children.ts`. */

@@ -34,7 +34,6 @@ adapters for the workspace this Worker deploys; the object itself is
 | what the model is told about a domain                 | the plugin that owns that domain        |
 | what the agent _is_                                   | `src/agents/<tenant>/soul.ts`           |
 | a step in a tenant's pipeline                         | `src/agents/<tenant>/workflow.ts`       |
-| what a job's role lets the agent do                   | `src/agents/<tenant>/roles.ts`          |
 | a user-facing string, or guidance every soul shares   | `src/copy.ts`                           |
 | which capabilities an agent has                       | `src/agents/<tenant>/plugins.ts`        |
 | a sub-agent: its spec, where it works, what it leaves | `src/agents/<tenant>/children.ts`       |
@@ -67,8 +66,8 @@ one shape, each in the file named for it:
 | `<Tenant>Child`     | `children.ts`  |
 | `<Tenant>Workspace` | `workspace.ts` |
 
-An agent with more than one child names each by its role: `AnthropicCodingWriterChild`,
-`AnthropicCodingReaderChild`.
+An agent with more than one child names each by what it does: `AnthropicCodingWriterChild`,
+`AnthropicCodingPlannerChild`, `AnthropicCodingReaderChild`.
 
 **A new class takes a name no deployment has used.** A Durable Object namespace is keyed
 by class name, so a class under a live name inherits every object stored under it. An

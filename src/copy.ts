@@ -6,8 +6,8 @@ import type { A2ACopy } from "@dynamicagents/core/task";
 
 /**
  * The words this Worker's agents say that core refuses to write: what a person
- * reads when a task ends without an answer or between a pipeline's steps, and
- * the parts of each soul and each job's first message that every agent shares.
+ * reads when a task ends without an answer, and the parts of each soul and each
+ * job's first message that every agent shares.
  *
  * Shared at the top level rather than in one agent's directory, because an
  * agent importing a sibling's module is what `npm run verify:isolation` fails
@@ -65,20 +65,3 @@ Act, don't announce. If your next step is a tool call, make the call in this tur
  */
 export const RETRY_BRIEF =
   "Your previous attempt at this stopped before it finished. Its work is kept: what it said and did is above. Look at what it left first, and carry on from there rather than starting again.";
-
-/**
- * What a person reads between a pipeline's steps. A step agent's own words
- * reach them as its progress; these are the pipeline's.
- */
-export const PIPELINE_COPY = {
-  /** Under the plan, in the question that asks to approve it. */
-  approveHint:
-    "Approve to start the work, reply with what to change and I'll revise the plan, or reject it to stop here.",
-  /** Once a plan was commented on, while the next is written. */
-  replanning: "Revising the plan.",
-  /** An answer that neither approved nor rejected, and said nothing. */
-  noComment: "Revise the plan; no comment given.",
-  /** The reply to a rejected plan. The plan itself is already in the thread. */
-  stopped:
-    "Stopped at the plan: nothing was changed. Ask again whenever you want it built or planned afresh."
-};

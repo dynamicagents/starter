@@ -4,6 +4,7 @@ import type {
   SubAgentSettleContext,
   SubAgentSpec
 } from "@dynamicagents/core";
+import { requireArtifactsStub } from "@dynamicagents/core/artifacts";
 import { SubAgent } from "@dynamicagents/core/subagent";
 import {
   CLAUDE_CODE_AGENT,
@@ -28,6 +29,19 @@ import {
   type SubtaskWorkspaces
 } from "@/workspace/subtask-workspace";
 import { claudeCodeConfig } from "./claude-code";
+import {
+  createPlan,
+  latestPlan,
+  lookUpPlan,
+  PLAN_INPUT,
+  PLAN_LABEL,
+  PLAN_OUTPUT,
+  PlanAnswer,
+  PLANNER_DESCRIPTION,
+  planText,
+  WRITE_INPUT,
+  type PlanInput
+} from "./plans";
 import { container, sessionWorkspaces, stopSession } from "./plugins";
 import {
   COUNT_COMMITS,
@@ -36,6 +50,8 @@ import {
   READ_HEADS,
   STOPPED_EXIT,
   needsWarning,
+  planBrief,
+  planReport,
   sessionBrief,
   sessionReport,
   tabbed,
@@ -195,10 +211,27 @@ export async function settleSession(
   await workspaces.release(run, { hold: !kept.settled });
 }
 
-const prepareWriter = (
-  ctx: SubAgentPrepareContext<ClaudeCodeInput, Env>
-): Promise<Record<string, unknown>> =>
-  claimSession(sessionWorkspaces(ctx.parent), ctx);
+/**
+ * A writing session gets a worktree of its own, and the plan it carries out if
+ * it names one — checked before the worktree is claimed, so a plan that is not
+ * the caller's refuses the run with nothing to release.
+ */
+export async function prepareWriter(
+  ctx: SubAgentPrepareContext<ClaudeCodeInput & { plan?: string }, Env>
+): Promise<Record<string, unknown>> {
+  const plan = ctx.input.plan;
+  if (plan !== undefined) {
+    const found = await lookUpPlan(ctx.parent.env, ctx.parent.storage, plan);
+    if (!found.ok) throw new Error(`claude_code: ${found.reason}`);
+    if (found.plan === undefined) {
+      throw new Error(
+        `claude_code: the plan \`${plan}\` has nothing on it yet — its planning session wrote no plan.`
+      );
+    }
+  }
+  const runtime = await claimSession(sessionWorkspaces(ctx.parent), ctx);
+  return plan === undefined ? runtime : { ...runtime, [PLAN_KEY]: plan };
+}
 
 const settleWriter = (ctx: SubAgentSettleContext<Env>): Promise<void> =>
   settleSession(sessionWorkspaces(ctx.parent), ctx.parent.storage, ctx);
@@ -226,27 +259,158 @@ async function settleReader({
   if (name) await stopSession(parent.env, name, runId);
 }
 
-/** A Claude Code session as a sub-agent; the writer and the reader below. */
+/**
+ * A planning session works where a reading one does, on a plan of this
+ * caller's: a new one, opened only once the workspace has admitted the run, or
+ * one it names, which must not be locked — approved, or failed before it was
+ * written, a locked plan does not change.
+ */
+export async function preparePlanner(
+  ctx: SubAgentPrepareContext<PlanInput, Env>
+): Promise<Record<string, unknown>> {
+  const { env, storage } = ctx.parent;
+  const edits = ctx.input.plan;
+  if (edits !== undefined) {
+    const found = await lookUpPlan(env, storage, edits);
+    if (!found.ok) throw new Error(`claude_code_plan: ${found.reason}`);
+    if (found.locked) {
+      throw new Error(
+        `claude_code_plan: the plan \`${edits}\` is locked (${found.status ?? "locked"}), and a locked plan does not change. Write a new plan instead.`
+      );
+    }
+  }
+  const place = await sessionWorkspaces(ctx.parent).reading();
+  const id =
+    edits ?? (await createPlan(env, storage, `${ctx.taskId}:${ctx.runId}`));
+  const plan: PlanPlace = { id, isNew: edits === undefined };
+  return { ...runtimeOf(place), [PLAN_KEY]: plan };
+}
+
+/**
+ * A planning session's end. A new plan its session never wrote is locked as
+ * `failed`, so its page says so rather than waiting on a plan nobody will write
+ * — whether or not stopping the session worked; an edit that failed leaves the
+ * plan as it was.
+ */
+export async function settlePlanner(
+  ctx: SubAgentSettleContext<Env>
+): Promise<void> {
+  try {
+    await settleReader(ctx);
+  } finally {
+    await closeUnwritten(ctx);
+  }
+}
+
+async function closeUnwritten(ctx: SubAgentSettleContext<Env>): Promise<void> {
+  const plan = planPlaceOf(ctx.runtime);
+  if (!plan?.isNew) return;
+  const artifacts = requireArtifactsStub(ctx.parent.env);
+  const page = await artifacts.readArtifact(plan.id);
+  if (page && !page.locked && latestPlan(page.entries) === undefined) {
+    await artifacts.lock(plan.id, "failed");
+  }
+}
+
+/**
+ * What the parent is told of a planning session, having filed its plan: the
+ * plan's id and title, and the session's account — see `./plans.ts`.
+ * The session answers through `--json-schema`; one that did not files nothing.
+ */
+export async function reportPlan(
+  env: Env,
+  plan: PlanPlace,
+  runId: string,
+  outcome: SessionOutcome
+): Promise<string> {
+  const result = outcome.session.result;
+  const answer = PlanAnswer.safeParse(result?.structured);
+  if (!result || result.isError || !answer.success) {
+    return planReport(outcome, { kind: "unanswered" });
+  }
+  const filed = await requireArtifactsStub(env).addEntry(plan.id, {
+    label: PLAN_LABEL,
+    text: planText(answer.data),
+    key: runId
+  });
+  if (filed === null) {
+    return planReport(outcome, {
+      kind: "locked",
+      id: plan.id,
+      lastReply: answer.data.lastReply
+    });
+  }
+  return planReport(outcome, {
+    kind: "filed",
+    id: plan.id,
+    title: answer.data.title.trim(),
+    lastReply: answer.data.lastReply
+  });
+}
+
+/** Where a run's plan is kept in what `prepare` hands it. */
+const PLAN_KEY = "plan";
+
+/** A planning session's plan, as `prepare` hands it over. */
+export interface PlanPlace {
+  id: string;
+  /** Opened for this run, rather than an edit of one that was there. */
+  isNew: boolean;
+}
+
+function planPlaceOf(
+  runtime: Record<string, unknown> | undefined
+): PlanPlace | undefined {
+  const plan = runtime?.[PLAN_KEY];
+  return plan && typeof plan === "object" && "id" in plan
+    ? (plan as PlanPlace)
+    : undefined;
+}
+
+/** The plan a writing session carries out, if it names one. */
+function writerPlanOf(
+  runtime: Record<string, unknown> | undefined
+): string | undefined {
+  const plan = runtime?.[PLAN_KEY];
+  return typeof plan === "string" ? plan : undefined;
+}
+
+/** A Claude Code session as a sub-agent: the writer, the planner and the reader below. */
 abstract class ClaudeCodeRun extends SubAgent<Env> {
-  protected abstract readonly kind: "write" | "read";
+  protected abstract readonly kind: "write" | "read" | "plan";
 
   override getModel(): ThinkModel {
-    const place = placeOf(this.pluginContext().runtime());
+    const runtime = this.pluginContext().runtime();
+    const place = placeOf(runtime);
     const stub = this.#stub(place.workspaceName);
     const writes = this.kind === "write" && place.branch !== undefined;
+    const plan = this.kind === "plan" ? planPlaceOf(runtime) : undefined;
+    if (this.kind === "plan" && !plan) {
+      throw new Error(
+        "anthropic-coding: this planning run carries no plan; its spec's prepare opens one"
+      );
+    }
     return claudeCodeModel({
       config: claudeCodeConfig(this.env),
       workspace: () => openWorkspace(stub) as Promise<SessionWorkspace>,
       storage: this.ctx.storage,
       runId: this.name,
-      kind: this.kind,
+      // A plan is written in a reading session's copy.
+      kind: this.kind === "write" ? "write" : "read",
       dir: place.dir,
+      ...(plan ? { jsonSchema: PLAN_OUTPUT } : {}),
       note: (key, text) => this.note(key, text),
-      brief: (task) => this.#brief(task, place, writes),
+      brief: (task) =>
+        plan
+          ? this.#planBrief(task, place, plan)
+          : this.#brief(task, place, writes, writerPlanOf(runtime)),
       ...(writes
         ? { followUp: (session: SessionEnd) => this.#followUp(session, place) }
         : {}),
-      report: (outcome) => this.#report(outcome, place, writes)
+      report: (outcome) =>
+        plan
+          ? reportPlan(this.env, plan, this.name, outcome)
+          : this.#report(outcome, place, writes)
     });
   }
 
@@ -274,18 +438,57 @@ abstract class ClaudeCodeRun extends SubAgent<Env> {
   async #brief(
     task: string,
     place: SessionPlace,
-    writes: boolean
+    writes: boolean,
+    planId?: string
   ): Promise<string> {
     const note = sessionAdvisory(
       await this.#stub(place.workspaceName).advisories()
     );
     if (!writes) return sessionBrief(task, note);
+    const plan = planId ? await this.#plan(planId) : undefined;
     const submodules = await this.#submodules(place);
     await this.#recordStarts(place, [".", ...submodules]);
     return sessionBrief(task, note, {
       branch: place.branch as string,
       submodules,
-      continues: place.continues ?? false
+      continues: place.continues ?? false,
+      ...(plan ? { plan } : {})
+    });
+  }
+
+  /** The latest version of a plan `prepare` checked; gone since is a refusal. */
+  async #plan(id: string): Promise<string> {
+    const page = await requireArtifactsStub(this.env).readArtifact(id);
+    const plan = page ? latestPlan(page.entries) : undefined;
+    if (plan === undefined) {
+      throw new Error(
+        `claude_code: the plan \`${id}\` is gone. Write it again.`
+      );
+    }
+    return plan;
+  }
+
+  /**
+   * A planning session's prompt: the task and, for an edit, the plan it changes
+   * with everything said about it since — the person's comments are on the
+   * plan's page, and the session has no other view of them.
+   */
+  async #planBrief(
+    task: string,
+    place: SessionPlace,
+    plan: PlanPlace
+  ): Promise<string> {
+    const note = sessionAdvisory(
+      await this.#stub(place.workspaceName).advisories()
+    );
+    if (plan.isNew) return planBrief(task, note);
+    const page = await requireArtifactsStub(this.env).readArtifact(plan.id);
+    const entries = page?.entries ?? [];
+    return planBrief(task, note, {
+      ...(page ? { plan: latestPlan(entries) } : {}),
+      said: entries
+        .filter((entry) => entry.label !== PLAN_LABEL)
+        .map((entry) => entry.text)
     });
   }
 
@@ -519,14 +722,31 @@ abstract class ClaudeCodeRun extends SubAgent<Env> {
   }
 }
 
-/** A writing session, in a worktree of its own. */
+/** A writing session, in a worktree of its own, carrying out a plan if given one. */
 export class AnthropicCodingWriterChild extends ClaudeCodeRun {
   static override spec = {
     ...CLAUDE_CODE_AGENT,
+    inputSchema: WRITE_INPUT,
     prepare: prepareWriter,
     settle: settleWriter
   } as SubAgentSpec<never, never>;
   protected readonly kind = "write";
+}
+
+/**
+ * A planning session: a reading session that answers through `--json-schema`,
+ * and whose answer is filed as a plan — see `./plans.ts`.
+ */
+export class AnthropicCodingPlannerChild extends ClaudeCodeRun {
+  static override spec = {
+    ...CLAUDE_CODE_READER_AGENT,
+    name: "claude_code_plan",
+    description: PLANNER_DESCRIPTION,
+    inputSchema: PLAN_INPUT,
+    prepare: preparePlanner,
+    settle: settlePlanner
+  } as SubAgentSpec<never, never>;
+  protected readonly kind = "plan";
 }
 
 /** A reading session, in a throwaway copy of the parent's checkout. */

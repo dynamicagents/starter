@@ -54,6 +54,16 @@ const LINES: string[] = [
   // changes how a brief should be written.
   "A session cannot ask you anything once it starts. Anything it would need to ask, decide first — or ask the user yourself before delegating. Put everything that matters in the brief: it cannot see this conversation.",
 
+  // When to plan. The plan is a session's, filed where the caller reads it, and
+  // the parent never holds its body: see `./plans.ts` for why only its id
+  // travels.
+  "When a change is large, touches much you have not read, or the caller asks to see a plan first, have one written before any code: `claude_code_plan` hands the planning to a session and files the plan where the caller can read it. You get its id, its title and the session's account of it — the plan itself is for the caller, and for the session that builds it.",
+
+  // Approval is the default for a plan, and the caller's memory is how they opt
+  // out: an agent that asks every caller the same question the same way would
+  // be a pipeline step again.
+  "A plan you had written is put to the caller before anything is built: `ask_user` with `artifact` set to its id, saying in a sentence or two what it does. Approved, it is locked, and you build it by passing its id to `claude_code` as `plan` — brief the session on the work, not on the plan, which it is given whole. A comment means the plan changes: call `claude_code_plan` with its id and the comment, then ask again. Rejected, stop, and say nothing was changed. If what you know about this caller says they do not approve plans, build it without asking.",
+
   // The advertised `planning` skill, which the rest of this soul would
   // otherwise contradict outright. A card that offers findings-without-a-PR
   // while the soul says "finish by opening a pull request" hands a gatekeeper a
@@ -111,20 +121,10 @@ export const SOUL = [
   WAIT_GUIDANCE
 ].join("\n");
 
-/**
- * What each role in `./workflow.ts`'s pipeline asks, put ahead of the job's input.
- * The plan's tools are held to reading by `./roles.ts`; this says why, so the
- * model plans rather than discovering the wall.
- */
-export const ROLE_BRIEFS: Record<string, string> = {
-  plan: "This job is the plan, and only the plan. Open the repository if the request names one, and read what the change will touch — through `claude_code_read` for anything beyond a quick look. Then reply with the plan itself: what will change and where, what you will leave alone, and how the result will be checked. Name no branch: a writing session commits to a branch of its own, and that branch is the pull request's. Change nothing: no writing session, no commit, no push, no pull request. The caller reads your reply and approves it before anything is built, so write it for them. A request that asks a question rather than for a change is answered here, in full: the caller can stop at the plan.",
-  code: "The caller approved the plan below. Carry it out to a pull request, as you would any change, and keep to it: if the work shows the plan was wrong, say so in your report rather than quietly doing something else."
-};
-
 /** Where a first attempt's work is, after `@/copy`'s `RETRY_BRIEF`. */
 export const RETRY_WORK =
   "`repo_worktrees` lists the branches its writing sessions committed to, and anything it pushed is on the remote.";
 
 /** What the model is told the `memory` block is for. */
 export const MEMORY =
-  "Stable facts about this caller and their repositories worth keeping across tasks: conventions, preferences, what was tried and did not work. Not the state of one task.";
+  "Stable facts about this caller and their repositories worth keeping across tasks: conventions, preferences — how they want to work, such as whether they approve a plan before it is built — and what was tried and did not work. Not the state of one task.";

@@ -1,9 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { env } from "cloudflare:workers";
-import {
-  introspectWorkflowInstance,
-  runInDurableObject
-} from "cloudflare:test";
+import { introspectWorkflowInstance } from "cloudflare:test";
 import type { HitlRequestData } from "@dynamicagents/g2a-protocol";
 import {
   createAgentHarness,
@@ -11,19 +8,16 @@ import {
   type AgentHarness,
   type CapturedCallback
 } from "@dynamicagents/core/testing";
-import type { StepJob, TaskResult } from "@dynamicagents/core/workflow";
-import { activeToolsFor, PLAN_TOOLS } from "@/agents/anthropic-coding/roles";
-import { copy, PIPELINE_COPY, RETRY_BRIEF } from "@/copy";
+import { requireArtifactsStub } from "@dynamicagents/core/artifacts";
+import type { TaskResult } from "@dynamicagents/core/workflow";
+import { copy } from "@/copy";
 import worker, { type TestEnv } from "./worker";
 
 /**
- * `anthropic-coding`'s pipeline — plan, approve, code — through the real host and
- * workflow, on the scripted agent. The plan and the code steps are jobs on the
- * caller's AnthropicCodingAgent; the approval is the pipeline's own question.
- *
- * The scripted agent reads the task's text as its plan step's script, and the
- * approved plan as its code step's: `echo:delegate:sleep:1` plans
- * "delegate:sleep:1", and the code step then starts a writing session.
+ * `anthropic-coding` through the real host and workflow, on the scripted agent:
+ * one step, the whole task, in which planning and approving are the agent's own
+ * tool calls. `plan:` starts a planning session, `approve:<id>` asks the caller
+ * to approve a plan, `delegate:` starts a writing session.
  */
 
 const testEnv = env as unknown as TestEnv;
@@ -39,12 +33,7 @@ function setup(label: string) {
   const coder = testEnv.TEST_ANTHROPIC_CODING_AGENT.get(
     testEnv.TEST_ANTHROPIC_CODING_AGENT.idFromName(key)
   );
-  const turns = async () =>
-    JSON.parse(await coder.debugTurns()) as {
-      role: string | null;
-      active: string[] | null;
-    }[];
-  return { harness, coder, turns };
+  return { harness, coder };
 }
 
 const pause = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -114,22 +103,15 @@ async function cancel(harness: AgentHarness, taskId: string) {
   if (body.error) throw new Error(body.error.message);
 }
 
-describe("plan → approve → code", () => {
-  it("asks to approve the plan, then builds it in a writing session", async () => {
-    const { harness } = setup("approve");
+describe("a task is one step", () => {
+  it("runs the whole task on the caller's agent", async () => {
+    const { harness } = setup("one-step");
     using _ = harness.interceptGatekeeper();
-    const task = await harness.send("echo:delegate:sleep:1");
+    const task = await harness.send("delegate:sleep:1");
     await using instance = await introspectWorkflowInstance(
       testEnv.TEST_ANTHROPIC_CODING_WORKFLOW,
       task.id
     );
-
-    const plan = await question(harness, task.id);
-    expect(plan.requestKind).toBe("approval");
-    expect(plan.prompt).toBe(
-      `delegate:sleep:1\n\n${PIPELINE_COPY.approveHint}`
-    );
-    await harness.answer(task.id, plan.requestId, { optionId: "approve" });
 
     const done = await harness.waitForTerminal(task.id);
     expect(done.state).toBe("TASK_STATE_COMPLETED");
@@ -137,233 +119,107 @@ describe("plan → approve → code", () => {
     expect(working(harness, task.id)).toContain("Delegating.");
     await instance.waitForStatus("complete");
     const output = (await instance.getOutput()) as TaskResult;
-    expect(output.verdict.steps).toHaveLength(3);
-    expect(output.verdict.steps.slice(1)).toEqual(["approve:0", "code"]);
+    expect(output.verdict.steps).toEqual(["main"]);
     await pause(300);
     expect(terminals(harness, task.id)).toHaveLength(1);
-  });
-
-  it("writes the plan again on a comment, for as long as it takes", async () => {
-    const { harness } = setup("replan");
-    using _ = harness.interceptGatekeeper();
-    const task = await harness.send("echo:plan A");
-
-    const first = await question(harness, task.id, 1);
-    await harness.answer(task.id, first.requestId, { text: "smaller" });
-    const second = await question(harness, task.id, 2);
-    expect(second.prompt).toContain("1. smaller");
-    expect(working(harness, task.id)).toContain(PIPELINE_COPY.replanning);
-    await harness.answer(task.id, second.requestId, { text: "still too big" });
-
-    const third = await question(harness, task.id, 3);
-    expect(third.prompt).toContain("2. still too big");
-    await harness.answer(task.id, third.requestId, {
-      optionId: "approve",
-      text: "go"
-    });
-
-    const done = await harness.waitForTerminal(task.id);
-    expect(done.state).toBe("TASK_STATE_COMPLETED");
-    expect(done.text).toContain("plan A");
-    expect(terminals(harness, task.id)).toHaveLength(1);
-  });
-
-  it("stops at the plan when it is rejected, and builds nothing", async () => {
-    const { harness, turns } = setup("reject");
-    using _ = harness.interceptGatekeeper();
-    const task = await harness.send("echo:the findings");
-    await using instance = await introspectWorkflowInstance(
-      testEnv.TEST_ANTHROPIC_CODING_WORKFLOW,
-      task.id
-    );
-    const plan = await question(harness, task.id);
-    expect(plan.prompt).toContain("the findings");
-    await harness.answer(task.id, plan.requestId, { optionId: "reject" });
-
-    const done = await harness.waitForTerminal(task.id);
-    expect(done.state).toBe("TASK_STATE_COMPLETED");
-    expect(done.text).toBe(PIPELINE_COPY.stopped);
-    await instance.waitForStatus("complete");
-    const output = (await instance.getOutput()) as TaskResult;
-    expect(output.verdict.outcome).toBe("rejected");
-    expect(output.verdict.steps.slice(1)).toEqual(["approve:0"]);
-    expect((await turns()).map((t) => t.role)).not.toContain("code");
-    expect(terminals(harness, task.id)).toHaveLength(1);
-  });
-
-  it("plans through a reading session that runs in the background", async () => {
-    const { harness } = setup("read");
-    using _ = harness.interceptGatekeeper();
-    const task = await harness.send("delegate:sleep:1");
-    const plan = await question(harness, task.id);
-    expect(plan.prompt).toContain("child did: sleep:1");
-    await harness.answer(task.id, plan.requestId, { optionId: "approve" });
-    const done = await harness.waitForTerminal(task.id);
-    expect(done.state).toBe("TASK_STATE_COMPLETED");
   });
 
   it("runs a failed step once more, briefed as a retry", async () => {
     const { harness } = setup("retry");
     using _ = harness.interceptGatekeeper();
-    const task = await harness.send("echo:flaky");
+    const task = await harness.send("flaky");
     await using instance = await introspectWorkflowInstance(
       testEnv.TEST_ANTHROPIC_CODING_WORKFLOW,
       task.id
     );
-    const plan = await question(harness, task.id);
-    await harness.answer(task.id, plan.requestId, { optionId: "approve" });
 
     const done = await harness.waitForTerminal(task.id);
-    expect(done.state).toBe("TASK_STATE_COMPLETED");
     expect(done.text).toBe("recovered");
     await instance.waitForStatus("complete");
     const output = (await instance.getOutput()) as TaskResult;
-    expect(output.verdict.steps.slice(1)).toEqual([
-      "approve:0",
-      "code",
-      "code:retry"
-    ]);
-    await pause(300);
-    expect(terminals(harness, task.id)).toHaveLength(1);
+    expect(output.verdict.steps).toEqual(["main", "main:retry"]);
   });
 
-  it("relays a question the code step asks, and finishes on its answer", async () => {
+  it("relays a question, and finishes on its answer", async () => {
     const { harness } = setup("ask");
     using _ = harness.interceptGatekeeper();
-    const task = await harness.send("echo:ask:which one?");
-    const plan = await question(harness, task.id, 1);
-    await harness.answer(task.id, plan.requestId, { optionId: "approve" });
-    const asked = await question(harness, task.id, 2);
+    const task = await harness.send("ask:which one?");
+    const asked = await question(harness, task.id);
     expect(asked.prompt).toBe("which one?");
     await harness.answer(task.id, asked.requestId, { optionId: "option_1" });
-    const done = await harness.waitForTerminal(task.id);
-    expect(done.text).toBe("Yes");
+    expect((await harness.waitForTerminal(task.id)).text).toBe("Yes");
   });
 });
 
-describe("the plan reads and writes nothing", () => {
-  /**
-   * The real AnthropicCodingAgent's tools, less a plan's: exact, like `coding`'s surface
-   * spec, so a writer that appears later fails here rather than in a plan.
-   */
-  it("keeps only reading tools, and the reading session", async () => {
-    const names = await runInDurableObject(
-      testEnv.AnthropicCodingAgent.get(
-        testEnv.AnthropicCodingAgent.idFromName(
-          `surface:${crypto.randomUUID()}`
-        )
-      ),
-      (instance) => {
-        const think = [
-          "read",
-          "write",
-          "edit",
-          "delete",
-          "list",
-          "find",
-          "grep"
-        ];
-        return [
-          ...new Set([
-            ...think,
-            ...Object.keys(
-              (instance as unknown as { getTools(): object }).getTools()
-            )
-          ])
-        ];
-      }
-    );
-    const plan = activeToolsFor("plan", names).sort();
-    expect(plan).toEqual(
-      [...PLAN_TOOLS].filter((name) => names.includes(name)).sort()
-    );
-    for (const writer of [
-      "write",
-      "edit",
-      "delete",
-      "claude_code",
-      "repo_commit",
-      "repo_push",
-      "repo_open_pr",
-      "scratch_open",
-      "check_back"
-    ]) {
-      expect(plan).not.toContain(writer);
-    }
-    expect(plan).toContain("claude_code_read");
-    expect(activeToolsFor("code", names)).toContain("claude_code");
-  });
-
-  it("briefs a plan's retry without a writing session's work", async () => {
-    const briefs = await runInDurableObject(
-      testEnv.AnthropicCodingAgent.get(
-        testEnv.AnthropicCodingAgent.idFromName(`retry:${crypto.randomUUID()}`)
-      ),
-      (instance) => {
-        const format = (role: string) =>
-          (
-            instance as unknown as { formatStepJobInput(job: StepJob): string }
-          ).formatStepJobInput({ input: "x", attempt: 2, role } as StepJob);
-        return { plan: format("plan"), code: format("code") };
-      }
-    );
-    expect(briefs.plan.startsWith(RETRY_BRIEF)).toBe(true);
-    expect(briefs.plan).not.toContain("repo_worktrees");
-    expect(briefs.code).toContain("repo_worktrees");
-  });
-
-  it("gives each turn the tools its job's role allows", async () => {
-    const { harness, turns } = setup("roles");
+describe("a plan", () => {
+  it("is written by a planning session in the background", async () => {
+    const { harness } = setup("plan");
     using _ = harness.interceptGatekeeper();
-    const task = await harness.send("echo:the plan");
-    const plan = await question(harness, task.id);
-    await harness.answer(task.id, plan.requestId, { optionId: "approve" });
-    await harness.waitForTerminal(task.id);
-    const seen = await turns();
-    const planTurn = seen.find((t) => t.role === "plan");
-    const codeTurn = seen.find((t) => t.role === "code");
-    expect(planTurn?.active).not.toContain("claude_code");
-    expect(planTurn?.active).toContain("claude_code_read");
-    expect(codeTurn?.active).toContain("claude_code");
+    const task = await harness.send("plan:sleep:1");
+
+    const done = await harness.waitForTerminal(task.id);
+    expect(done.state).toBe("TASK_STATE_COMPLETED");
+    expect(done.text).toContain("child did: sleep:1");
+    expect(working(harness, task.id)).toContain("Planning.");
+  });
+
+  /**
+   * Approved through core's `ask_user`, on the caller's own plan: the question
+   * carries the plan's link, and approving it locks the plan.
+   */
+  it("is put to the caller with its link, and locked once approved", async () => {
+    const { harness, coder } = setup("approve");
+    using _ = harness.interceptGatekeeper();
+    const id = await coder.openPlan();
+    const artifacts = requireArtifactsStub(testEnv);
+    await artifacts.addEntry(id, { label: "plan", text: "# Plan\n\nthe plan" });
+
+    const task = await harness.send(`approve:${id}`);
+    const asked = await question(harness, task.id);
+    expect(asked.requestKind).toBe("approval");
+    expect(asked.artifact).toEqual({
+      id,
+      url: expect.stringMatching(new RegExp(`/a/${id}$`))
+    });
+    expect(asked.prompt).toContain(asked.artifact!.url);
+    await harness.answer(task.id, asked.requestId, { optionId: "approve" });
+
+    expect((await harness.waitForTerminal(task.id)).text).toBe("Approved.");
+    expect(await artifacts.artifactState(id)).toMatchObject({
+      status: "approved",
+      locked: true
+    });
+  });
+
+  it("is not put to the caller when it is not theirs", async () => {
+    const { harness } = setup("approve-foreign");
+    using _ = harness.interceptGatekeeper();
+    // A plan another caller's agent opened: its link may have been shared, but
+    // it is not this caller's to approve.
+    const other = setup("approve-owner");
+    const id = await other.coder.openPlan();
+
+    const task = await harness.send(`approve:${id}`);
+    const done = await harness.waitForTerminal(task.id);
+    expect(done.text).toMatch(
+      /Not an artifact you can ask the person to approve/
+    );
+    expect(
+      harness.callbacks.some(
+        (c) => c.taskId === task.id && c.state === "TASK_STATE_INPUT_REQUIRED"
+      )
+    ).toBe(false);
+    expect(await requireArtifactsStub(testEnv).artifactState(id)).toMatchObject(
+      { locked: false }
+    );
   });
 });
 
 describe("stopping", () => {
-  it("cancels while the plan is being read: no callback, the instance ends", async () => {
-    const { harness } = setup("cancel-plan");
+  it("cancels while a session runs: no callback, the instance ends", async () => {
+    const { harness } = setup("cancel");
     using _ = harness.interceptGatekeeper();
     const task = await harness.send("delegate:sleep:30");
-    await harness.waitForState(task.id, "TASK_STATE_WORKING");
-    await cancel(harness, task.id);
-    await until(
-      "terminated",
-      () => status(task.id),
-      (s) => s.status === "terminated"
-    );
-    await pause(300);
-    expect(terminals(harness, task.id)).toHaveLength(0);
-  });
-
-  it("cancels at the approval", async () => {
-    const { harness } = setup("cancel-approval");
-    using _ = harness.interceptGatekeeper();
-    const task = await harness.send("echo:a plan");
-    await question(harness, task.id);
-    await cancel(harness, task.id);
-    await until(
-      "terminated",
-      () => status(task.id),
-      (s) => s.status === "terminated"
-    );
-    expect(terminals(harness, task.id)).toHaveLength(0);
-  });
-
-  it("cancels while the work is being written", async () => {
-    const { harness } = setup("cancel-code");
-    using _ = harness.interceptGatekeeper();
-    const task = await harness.send("echo:delegate:sleep:30");
-    const plan = await question(harness, task.id);
-    await harness.answer(task.id, plan.requestId, { optionId: "approve" });
     await until(
       "the session",
       () => working(harness, task.id),
@@ -379,19 +235,30 @@ describe("stopping", () => {
     expect(terminals(harness, task.id)).toHaveLength(0);
   });
 
-  it("fails the task in its words when the approval expires", async () => {
-    const { harness } = setup("expire");
+  it("cancels at an approval", async () => {
+    const { harness, coder } = setup("cancel-approval");
     using _ = harness.interceptGatekeeper();
-    const task = await harness.send("echo:a plan");
-    const plan = await question(harness, task.id);
-    await harness.timeout(task.id, plan.requestId);
-    const done = await harness.waitForTerminal(task.id);
-    expect(done.state).toBe("TASK_STATE_FAILED");
-    expect(done.text).toBe(copy.questionExpired);
+    const id = await coder.openPlan();
+    const task = await harness.send(`approve:${id}`);
+    await question(harness, task.id);
+    await cancel(harness, task.id);
     await until(
       "terminated",
       () => status(task.id),
       (s) => s.status === "terminated"
     );
+    expect(terminals(harness, task.id)).toHaveLength(0);
+  });
+
+  it("fails the task in its words when an approval expires", async () => {
+    const { harness, coder } = setup("expire");
+    using _ = harness.interceptGatekeeper();
+    const id = await coder.openPlan();
+    const task = await harness.send(`approve:${id}`);
+    const asked = await question(harness, task.id);
+    await harness.timeout(task.id, asked.requestId);
+    const done = await harness.waitForTerminal(task.id);
+    expect(done.state).toBe("TASK_STATE_FAILED");
+    expect(done.text).toBe(copy.questionExpired);
   });
 });

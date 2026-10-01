@@ -30,7 +30,7 @@
     "prepare": "husky"
   },
   "dependencies": {
-    "@a2a-js/sdk": "^1.1.0",
+    "@a2a-js/sdk": "^1.2.0",
     "@cloudflare/computer": "^0.3.1",
     "@cloudflare/think": "^0.19.0",
     "@dynamicagents/core": "git+https://github.com/dynamicagents/core.git#main",

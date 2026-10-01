@@ -321,8 +321,17 @@ export async function preparePlanner(
   }
   const place = await sessionWorkspaces(ctx.parent).reading();
   await holdForReading(env, place, ctx.runId);
-  const id =
-    edits ?? (await createPlan(env, storage, `${ctx.taskId}:${ctx.runId}`));
+  let id: string;
+  try {
+    id =
+      edits ?? (await createPlan(env, storage, `${ctx.taskId}:${ctx.runId}`));
+  } catch (err) {
+    // A `prepare` that throws gets no `settle`, so nothing else lets go.
+    await workspaceStub(env, place.workspaceName)
+      .unhold(ctx.runId)
+      .catch(() => {});
+    throw err;
+  }
   const plan: PlanPlace = { id, isNew: edits === undefined };
   return { ...runtimeOf(place), [PLAN_KEY]: plan };
 }

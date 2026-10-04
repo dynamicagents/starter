@@ -152,11 +152,19 @@ RUN if command -v corepack > /dev/null; then \
 # first, by its probe; the plugins repository's AGENTS.md ("Updating Claude
 # Code") is the procedure.
 #
+# **The `postinstall` is the install**, so `--allow-scripts` approves it. `claude`
+# is published as a placeholder that exits 1, which the script replaces with the
+# platform's native binary. npm warns on an unapproved install script or blocks
+# it, depending on the release the nodesource line ships, and a global install
+# never reads this repo's `allowScripts`. `claude --version` fails the build on
+# the placeholder.
+#
 # `--no-fund --no-audit` for the same reason as the ENV block below: a build log
 # nobody reads is still a build log somebody has to scroll.
 ARG CLAUDE_CODE_VERSION=""
 RUN if [ -n "$CLAUDE_CODE_VERSION" ]; then \
       npm i -g --no-fund --no-audit \
+        --allow-scripts=@anthropic-ai/claude-code \
         "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}" \
       && claude --version; \
     else \

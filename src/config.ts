@@ -79,9 +79,10 @@ export const ANTHROPIC_CODING: AgentTuning = {
 };
 
 /**
- * The size a workspace's container starts at — 2 vCPU, 6 GiB, 8 GB disk —
- * asked for on every start. Changing it replaces each running container when
- * its workspace next connects.
+ * The size a `coding` workspace's container starts at — 2 vCPU, 6 GiB, 8 GB
+ * disk — and the base of {@link ANTHROPIC_CODING_WORKSPACE_INSTANCE}. Asked for
+ * on every start, so changing it replaces each running container when its
+ * workspace next connects.
  *
  * Deliberately not `lite`, the runtime's default: that is a size for trying
  * containers and cannot build a real project.
@@ -117,6 +118,18 @@ export const WORKSPACE_INSTANCE: WorkspaceObjectConfig["instance"] = {
   memoryMib: 6144,
   diskMb: 8000
 };
+
+/**
+ * `anthropic-coding`'s size: {@link WORKSPACE_INSTANCE} with four cores.
+ *
+ * About half of a writing session's wall-clock is the target's checks and
+ * tests, one process each, which no number of containers speeds up. The same
+ * suite took ~200 s here at 2 vCPU and 80 s on a 4-vCPU CI runner. Four is the
+ * custom-size ceiling, and its 3 GiB-per-vCPU floor sets the memory, which
+ * bills for the whole run.
+ */
+export const ANTHROPIC_CODING_WORKSPACE_INSTANCE: WorkspaceObjectConfig["instance"] =
+  { ...WORKSPACE_INSTANCE, vcpu: 4, memoryMib: 12288 };
 
 /**
  * What bounds one Claude Code session, and **this is the whole list**.

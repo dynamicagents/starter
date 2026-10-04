@@ -88,7 +88,8 @@
   //
   // **The object starts its own container** (`scheduling_policy`), from the
   // image under `images.app` and at the size its workspace config passes:
-  // `WORKSPACE_INSTANCE` in `src/config.ts`, which says why. The policy is fixed when
+  // `WORKSPACE_INSTANCE` and `ANTHROPIC_CODING_WORKSPACE_INSTANCE` in
+  // `src/config.ts`, which say why. The policy is fixed when
   // an application is created: one made under another policy is deleted before
   // the deploy that moves it, never switched. `@dynamicagents/plugins/workspace`
   // carries how, and what the gap between the two costs.
@@ -105,8 +106,8 @@
   // `AnthropicCodingWorkspace` — `ANTHROPIC_CODING` in `src/config.ts` carries
   // why. A reading session wants none: it runs in the parent's container, against
   // the checkout already in it. A full fan-out plus its parent, three times over,
-  // is around 2% of the concurrent memory and vCPU Cloudflare documents per
-  // account. What the width costs is the bill, because memory and disk are billed
+  // is around 4% of the concurrent vCPU Cloudflare documents per account, and 3%
+  // of the memory. What the width costs is the bill, because memory and disk are billed
   // on provisioned resources for as long as an instance runs — the same reason a
   // settled task stops its container rather than waiting out the idle deadline.
   // `npm run cf -- containers` is where to watch it.

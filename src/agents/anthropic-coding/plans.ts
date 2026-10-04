@@ -94,7 +94,7 @@ export const PLAN_OUTPUT = {
     plan: {
       type: "string",
       description:
-        "The plan, in Markdown, for the person who approves it: what will change and where, what stays as it is, and how the result will be checked. Complete on its own — the session that carries it out is given this, and nothing of your investigation. Name no branch: that session is given one, and it is the pull request's head."
+        "The plan, in Markdown, for the person who approves it: what will change and where, what stays as it is, and how the result will be checked. Complete on its own — the session that carries it out is given this, and nothing of your investigation. What you measured on the base, such as a test count, goes in it as fact, so that session compares against it instead of measuring it again. Name no branch: that session is given one, and it is the pull request's head."
     },
     lastReply: {
       type: "string",

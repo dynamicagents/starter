@@ -4,6 +4,7 @@
 // checked with `as const satisfies`, which checks the shape while keeping the
 // literal types.
 import type { ClaudeCodeConfig } from "@dynamicagents/plugins/claude-code";
+import type { WorkspaceObjectConfig } from "@dynamicagents/plugins/workspace";
 
 /**
  * Every value this Worker tunes, in one file.
@@ -68,13 +69,53 @@ export const CODING: AgentTuning = {
  *
  * **The fan-out is bounded by containers, not by this file.** A writing session
  * works in a worktree of its own, so N writers cost N+1 container instances,
- * counting the parent's workspace. The wrangler ceiling is per container entry
- * across the deployment; past it a workspace fails to start, and
- * `npm run cf -- containers` is what shows it.
+ * counting the parent's workspace. Nothing in the deployment caps them short of
+ * the account's limits — the containers block in `wrangler.jsonc` carries the
+ * arithmetic — and `npm run cf -- containers` is what shows it.
  */
 export const ANTHROPIC_CODING: AgentTuning = {
   ...CODING,
   modelId: "@cf/zai-org/glm-5.3"
+};
+
+/**
+ * Both workspaces' container: 2 vCPU, 6 GiB, 8 GB disk, asked for on every
+ * start. Changing it replaces each running container when its workspace next
+ * connects.
+ *
+ * Deliberately not `lite`, the runtime's default: that is a size for trying
+ * containers and cannot build a real project.
+ *
+ * The CPU is the exposure, and it was measured: on standard-1 (1/2 vCPU,
+ * 4 GiB) a one-line README change took 59 minutes, of which 52 were spent at
+ * **0.0% of Worker CPU** — the Worker was asleep awaiting this container the
+ * whole time. `npm run check` on the target repo is five sequential tools
+ * including two full `tsc` runs; it is recorded at 28 s in
+ * `src/workspace/install-plan.ts` and was observed taking 3-5 minutes here.
+ *
+ * Two things want the second core:
+ *
+ * 1. **A reading session shares the parent's container.** Several run at once
+ *    against one checkout — that is the point of not giving them one each — and
+ *    on a single core they contend rather than parallelise.
+ * 2. The build itself is what the measurement above is about, and the work is
+ *    inside the container where the Worker cannot help.
+ *
+ * It is not the more expensive choice it looks like. Cloudflare bills memory and
+ * disk on *provisioned* resources for as long as an instance runs, but CPU on
+ * *active usage* — so on CPU-bound work a second core costs the same vCPU-
+ * seconds over less wall-clock, and the memory-seconds fall with the duration.
+ * Verify that against `npm run cf -- containers` rather than trusting it.
+ *
+ * Memory is what to trim, because it bills for the whole run. Observed peaks
+ * are ~5 GiB and ~4 GB of disk, so 6 GiB is thin headroom: a workspace killed
+ * for memory means raise `memoryMib` first. More cores are not free either —
+ * a custom size needs at least 3 GiB per vCPU.
+ */
+export const WORKSPACE_INSTANCE: WorkspaceObjectConfig["instance"] = {
+  vcpu: 2,
+  memoryMib: 6144,
+  diskMb: 8000
 };
 
 /**

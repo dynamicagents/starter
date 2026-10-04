@@ -86,95 +86,64 @@
   // one container, which is what makes "one workspace per repository" a
   // structural property rather than a convention.
   //
-  // `instance_type` is deliberately not "lite": that is the getting-started
-  // default and cannot build a real project.
-  //
-  // The CPU is the exposure, and it was measured: on standard-1 (1/2 vCPU,
-  // 4 GiB) a one-line README change took 59 minutes, of which 52 were spent at
-  // **0.0% of Worker CPU** — the Worker was asleep awaiting this container the
-  // whole time.
-  // `npm run check` on the target repo is five sequential tools including two
-  // full `tsc` runs; it is recorded at 28 s in `src/workspace/install-plan.ts`
-  // and was observed taking 3-5 minutes here.
-  //
-  // Both entries run a custom 2 vCPU, 6 GiB, 8 GB disk. Two things want the
-  // second core:
-  //
-  // 1. **A reading session shares the parent's container.** Several run at once
-  //    against one checkout — that is the point of not giving them one each — and
-  //    on a single core they contend rather than parallelise.
-  // 2. The build itself is what the measurement above is about, and the work is
-  //    inside the container where the Worker cannot help.
-  //
-  // It is not the more expensive choice it looks like. Cloudflare bills memory and
-  // disk on *provisioned* resources for as long as an instance runs, but CPU on
-  // *active usage* — so on CPU-bound work a second core costs the same vCPU-
-  // seconds over less wall-clock, and the memory-seconds fall with the duration.
-  // Verify that against `npm run cf -- containers` rather than trusting it.
-  //
-  // Memory is what to trim, because it bills for the whole run. Observed peaks
-  // are ~5 GiB and ~4 GB of disk, so 6 GiB is thin headroom: a workspace killed
-  // for memory means raise `memory_mib` first. More cores are not free either —
-  // custom types need at least 3 GiB per vCPU.
+  // **The object starts its own container** — `scheduling_policy` — from the
+  // image under `images.app`, at the size `WORKSPACE_INSTANCE` in
+  // `src/config.ts` asks for; why that size is there. The policy is fixed when
+  // an application is created: one made under another policy is deleted before
+  // the deploy that moves it, never switched. `@dynamicagents/plugins/workspace`
+  // carries how, and what the gap between the two costs.
   //
   // **Two entries, one Dockerfile.** Cloudflare builds once per entry, so naming
-  // the same file twice produces two images — and `image_vars` is a Docker build
+  // the same file twice produces two images — and `build_vars` is a Docker build
   // arg, which is how only one of them gets the Claude Code CLI.
   //
-  // `max_instances` is per entry and caps *concurrent* instances, not slots that
-  // are rented: an entry bills only for what is running, so raising it costs
-  // nothing until there is work to fill it.
+  // **Nothing here caps how many run.** Running containers count against the
+  // account's limits rather than a ceiling per entry, and for `anthropic-coding`
+  // that is what bounds the fan-out: a writing session works in a worktree of its
+  // own while the parent keeps one, so N writers at once want N+1 instances of
+  // `AnthropicCodingWorkspace` — `ANTHROPIC_CODING` in `src/config.ts` carries
+  // why. A reading session wants none: it runs in the parent's container, against
+  // the checkout already in it. A full fan-out plus its parent, three times over,
+  // is around 2% of the concurrent memory and vCPU Cloudflare documents per
+  // account. What the width costs is the bill, because memory and disk are billed
+  // on provisioned resources for as long as an instance runs — the same reason a
+  // settled task stops its container rather than waiting out the idle deadline.
+  // `npm run cf -- containers` is where to watch it.
   //
-  // **For `anthropic-coding` it is what bounds the fan-out.** A writing session works in
-  // a worktree of its own while the parent keeps one, so N writers at once want
-  // N+1 instances of `AnthropicCodingWorkspace` — `ANTHROPIC_CODING` in `src/config.ts`
-  // carries why. A reading session wants none: it runs in the parent's container,
-  // against the checkout already in it. The cap is per deployment rather than per
-  // task, so the number is that peak multiplied by the tasks expected to run at
-  // once — a full fan-out plus its parent, three times over.
+  // **A deploy with a new image replaces each running container** when its
+  // workspace next connects, so there is no rollout to stage: the library in the
+  // Worker and the `computerd` in the image are one release, and `backend` in
+  // `@dynamicagents/plugins/workspace` carries why that has to hold.
   //
-  // That width is not near a platform limit; it is around 2% of the concurrent
-  // memory and vCPU Cloudflare documents per account. What the number guards is
-  // the bill, because memory and disk are billed on provisioned resources for as
-  // long as an instance runs — the same reason a settled task stops its container
-  // rather than waiting out the idle deadline.
-  //
-  // **`rollout_step_percentage` is 100 because the image and the Worker are one
-  // release.** The library in the Worker and the `computerd` in the image
-  // authenticate each other, so a host refuses a daemon from the other side of a
-  // version line — which means a staged rollout cannot reduce the risk of a bad
-  // image, it can only schedule one: for the width of the window the Worker is
-  // new everywhere and the image is still old somewhere, and every workspace
-  // that lands on the old one is guaranteed to fail until the step completes.
-  // The symptom is `[stage=auth]`, the container refusing to authenticate —
-  // worth knowing, because it names the image rather than the rollout.
-  //
-  // It has to be written here because wrangler's fallback is the hazard:
-  // unset, an entry with `max_instances` above one starts at a 10% step.
+  // `observability` is per entry and not inherited from the Worker's — omitted,
+  // an application keeps whatever it had. It is what carries `computerd`'s own
+  // output, including whether it mounted over FUSE or fell back to the shim.
   "containers": [
     {
       "class_name": "CodingWorkspace",
-      "image": "./Dockerfile",
-      "instance_type": { "vcpu": 2, "memory_mib": 6144, "disk_mb": 8000 },
-      "max_instances": 5,
-      "rollout_step_percentage": 100
+      "scheduling_policy": "durable_object",
+      "images": { "app": { "dockerfile": "./Dockerfile" } },
+      "observability": { "logs": { "enabled": true } }
     },
     {
       "class_name": "AnthropicCodingWorkspace",
-      "image": "./Dockerfile",
-      // **Pinned to the version the claude-code plugin verified**, and
-      // `npm run check` fails when the two differ — the Dockerfile carries why.
-      // `gh` is unauthenticated and can only read public repositories — the
-      // Dockerfile block carries why, and why it still needs a GH_TOKEN. The
-      // checksum is pinned because the build downloads the tarball.
-      "image_vars": {
-        "CLAUDE_CODE_VERSION": "2.1.285",
-        "GH_VERSION": "2.101.0",
-        "GH_SHA256": "9bca2d1c16825f109907a23307628a2f0698fbf99662b73a5cf0b020293072b8"
+      "scheduling_policy": "durable_object",
+      "images": {
+        "app": {
+          "dockerfile": "./Dockerfile",
+          // **Pinned to the version the claude-code plugin verified**, and
+          // `npm run check` fails when the two differ — the Dockerfile carries
+          // why. `gh` is unauthenticated and can only read public repositories —
+          // the Dockerfile block carries why, and why it still needs a GH_TOKEN.
+          // The checksum is pinned because the build downloads the tarball.
+          "build_vars": {
+            "CLAUDE_CODE_VERSION": "2.1.289",
+            "GH_VERSION": "2.101.0",
+            "GH_SHA256": "9bca2d1c16825f109907a23307628a2f0698fbf99662b73a5cf0b020293072b8"
+          }
+        }
       },
-      "instance_type": { "vcpu": 2, "memory_mib": 6144, "disk_mb": 8000 },
-      "max_instances": 15,
-      "rollout_step_percentage": 100
+      "observability": { "logs": { "enabled": true } }
     }
   ],
 

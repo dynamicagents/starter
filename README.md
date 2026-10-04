@@ -274,9 +274,10 @@ the Worker and leaves the container alone.
 > in-flight sessions to end — `--containers-rollout=none` is for a Worker-only
 > change, not for skipping a container build you also made.
 
-A staged image rollout is the same hazard with a timer on it, which is why every
-container entry in [`wrangler.jsonc`](wrangler.jsonc) pins
-`rollout_step_percentage` — the comment there is the explanation.
+There is no staged rollout to schedule around it. The workspace puts the image in
+what a running container is matched against, so a deploy with a new image replaces
+each container when its workspace next connects — the containers block in
+[`wrangler.jsonc`](wrangler.jsonc) points at why.
 
 > **Deleting a container application does not rebuild it.** In the dashboard it
 > reads like turning something off and on again, and it is not: the application
@@ -285,6 +286,8 @@ container entry in [`wrangler.jsonc`](wrangler.jsonc) pins
 > `There is no container application assigned to this Durable Object namespace`
 > — until the next deploy, which turns a bounded problem into an open-ended one.
 > To replace every container, deploy. To replace one workspace's, let it go idle.
+> The one deliberate delete is moving an application to another scheduling policy,
+> which `@dynamicagents/plugins/workspace` describes.
 
 #### The checkout outlives the container, and the container outlives the task
 

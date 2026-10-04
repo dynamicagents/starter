@@ -89,10 +89,10 @@ holds the credential on the other side of this container. Report what you change
 let it deliver.`;
 
 /**
- * How often a **writing** session runs the project's checks. Left to itself it
- * measures the base, runs the bar after each step and again from a clean
- * install, re-measuring figures its brief already gave — on a dependency round
- * that was half of a twenty-minute session.
+ * How often a **writing** session runs the project's checks: on the tree it
+ * commits, against the base its brief or plan already gives. Each full run is
+ * minutes of container time the caller waits through, and unsaid a session
+ * repeats them.
  */
 const CHECK_NOTE = `## Checking your work
 

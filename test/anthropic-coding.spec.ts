@@ -813,6 +813,9 @@ describe("the branch a writing session is told about", () => {
     });
 
     expect(brief).toContain("## Checking your work");
+    expect(brief).toMatch(
+      /on the tree you commit, and again only after changing\nsomething they cover/
+    );
     expect(brief).toMatch(/instead of running the base\nagain/);
     expect(sessionBrief(TASK)).not.toContain("## Checking your work");
   });

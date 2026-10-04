@@ -2,6 +2,7 @@ import {
   WorkspaceObjectBase,
   type WorkspaceObjectConfig
 } from "@dynamicagents/plugins/workspace";
+import { WORKSPACE_INSTANCE } from "@/config";
 import { INSTALL_PLAN } from "@/workspace/install-plan";
 import { gitIdentity } from "@/workspace/git-identity";
 
@@ -24,6 +25,7 @@ export class CodingWorkspace extends WorkspaceObjectBase {
       binding: "CODING_WORKSPACE",
       label: "coding-workspace",
       installPlan: INSTALL_PLAN,
+      instance: WORKSPACE_INSTANCE,
       /**
        * `direct` — the container's own network position, which is the behaviour
        * this agent has always had.

@@ -35,7 +35,7 @@
 # A single layer over `scratch` holding one file: the 126 MB SEA binary at
 # /usr/local/bin/computerd. Nothing else is in this image, so it is a staging
 # stage and never a base.
-FROM ghcr.io/cloudflare/computer-computerd-linux-x64:0.3.1 AS computerd
+FROM ghcr.io/cloudflare/computer-computerd-linux-x64:0.4.0 AS computerd
 
 # `debian:stable-slim`, matching the upstream reference recipe
 # (examples/container/Dockerfile) exactly — and the base is the load-bearing
@@ -134,7 +134,7 @@ RUN if command -v corepack > /dev/null; then \
 
 # --- Claude Code, for the agent whose sub-agents run it ---------------------
 #
-# `image_vars` in wrangler.jsonc is a Docker build arg, so which image gets the
+# `build_vars` in wrangler.jsonc is a Docker build arg, so which image gets the
 # CLI is decided per `containers[]` entry rather than per file. The `coding`
 # entry passes nothing and this is a no-op; the `anthropic-coding` entry passes a
 # version.
@@ -152,11 +152,19 @@ RUN if command -v corepack > /dev/null; then \
 # first, by its probe; the plugins repository's AGENTS.md ("Updating Claude
 # Code") is the procedure.
 #
+# **The `postinstall` is the install**, so `--allow-scripts` approves it. `claude`
+# is published as a placeholder that exits 1, which the script replaces with the
+# platform's native binary. npm warns on an unapproved install script or blocks
+# it, depending on the release the nodesource line ships, and a global install
+# never reads this repo's `allowScripts`. `claude --version` fails the build on
+# the placeholder.
+#
 # `--no-fund --no-audit` for the same reason as the ENV block below: a build log
 # nobody reads is still a build log somebody has to scroll.
 ARG CLAUDE_CODE_VERSION=""
 RUN if [ -n "$CLAUDE_CODE_VERSION" ]; then \
       npm i -g --no-fund --no-audit \
+        --allow-scripts=@anthropic-ai/claude-code \
         "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}" \
       && claude --version; \
     else \
@@ -165,7 +173,7 @@ RUN if [ -n "$CLAUDE_CODE_VERSION" ]; then \
 
 # --- The GitHub CLI, for reading a public repository ------------------------
 #
-# Behind its own build arg for the reason Claude Code is: `image_vars` in
+# Behind its own build arg for the reason Claude Code is: `build_vars` in
 # wrangler.jsonc decides per `containers[]` entry, so the `coding` image passes
 # nothing and stays smaller.
 #
@@ -310,11 +318,10 @@ ENV COMPUTER_VAR_CI=1 \
 # this set and no extra CA present.
 ENV COMPUTER_VAR_NODE_OPTIONS=--use-openssl-ca
 
-# computerd's own configuration. `CloudflareContainerBackend` passes PORT and
-# MOUNT_POINT in the container env when it starts the container, so these two
-# are defaults for a manual `docker run` rather than load-bearing — but they
-# must agree with the backend's, or a hand-run container answers on a port
-# nothing dials.
+# computerd's own configuration. `ContainerBackend` passes PORT and MOUNT_POINT
+# in the container env when it starts the container, so these two are defaults
+# for a manual `docker run` rather than load-bearing — but they must agree with
+# the backend's, or a hand-run container answers on a port nothing dials.
 #
 # FUSE_MOUNT=auto is the one that matters, and it is why a single image serves
 # both environments: Cloudflare Containers expose /dev/fuse to the workload, so

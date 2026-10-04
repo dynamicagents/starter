@@ -31,11 +31,11 @@ export { CodingChild } from "./agents/coding/children";
 export { CodingWorkspace } from "./agents/coding/workspace";
 export { AnthropicCodingWorkspace } from "./agents/anthropic-coding/workspace";
 
-// Not one of our classes, and **not optional**. `CloudflareContainerBackend`
-// builds the container's egress loopback with `ctx.exports.WorkspaceProxy`, so
-// the class has to be in this module's graph under that exact name. Nothing
-// imports it and no binding names it, which makes it look like dead code —
-// deleting it compiles cleanly and breaks every container at runtime.
+// Not one of our classes, and **not optional**. `ContainerBackend` builds the
+// container's egress loopback with `ctx.exports.WorkspaceProxy`, so the class
+// has to be in this module's graph under that exact name. Nothing imports it
+// and no binding names it, which makes it look like dead code — deleting it
+// compiles cleanly and breaks every container at runtime.
 export { WorkspaceProxy } from "@cloudflare/computer";
 
 // Core's own class, shipped whole and re-exported unmodified — there is nothing

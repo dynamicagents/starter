@@ -11,7 +11,7 @@ import {
   WorkspaceObjectBase,
   type WorkspaceObjectConfig
 } from "@dynamicagents/plugins/workspace";
-import { CLAUDE_CODE_SESSION } from "@/config";
+import { CLAUDE_CODE_SESSION, WORKSPACE_INSTANCE } from "@/config";
 import { INSTALL_PLAN } from "@/workspace/install-plan";
 import { gitIdentity } from "@/workspace/git-identity";
 import { claudeCodeConfig, CREDENTIALS_KEY } from "./claude-code";
@@ -47,9 +47,10 @@ export class AnthropicCodingWorkspace extends WorkspaceObjectBase {
    * buckets, so the strictly-correct home for this is one shared object that all
    * of them consult. That costs a Durable Object class, a binding, a migration
    * and an RPC on the rotation path; keeping it here costs one wasted `429` per
-   * workspace per rotation, bounded by `max_instances`. At five instances that
-   * is the cheaper trade by a wide margin — and if it ever stops being, the
-   * `CredentialStore` seam is exactly where a shared object would plug in.
+   * workspace per rotation, bounded by how many workspaces run at once — a
+   * fan-out's width. At that width it is the cheaper trade by a wide margin — and
+   * if it ever stops being, the `CredentialStore` seam is exactly where a shared
+   * object would plug in.
    */
   readonly #credentials: CredentialStore = {
     read: async () =>
@@ -70,6 +71,7 @@ export class AnthropicCodingWorkspace extends WorkspaceObjectBase {
       binding: "ANTHROPIC_CODING_WORKSPACE",
       label: "anthropic-coding-workspace",
       installPlan: INSTALL_PLAN,
+      instance: WORKSPACE_INSTANCE,
       // Above the whole session.
       //
       // The base's default is twenty minutes, and its rule is that the window

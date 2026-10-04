@@ -79,9 +79,9 @@ export const ANTHROPIC_CODING: AgentTuning = {
 };
 
 /**
- * Both workspaces' container: 2 vCPU, 6 GiB, 8 GB disk, asked for on every
- * start. Changing it replaces each running container when its workspace next
- * connects.
+ * The size a workspace's container starts at — 2 vCPU, 6 GiB, 8 GB disk —
+ * asked for on every start. Changing it replaces each running container when
+ * its workspace next connects.
  *
  * Deliberately not `lite`, the runtime's default: that is a size for trying
  * containers and cannot build a real project.

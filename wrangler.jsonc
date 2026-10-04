@@ -86,16 +86,17 @@
   // one container, which is what makes "one workspace per repository" a
   // structural property rather than a convention.
   //
-  // **The object starts its own container** — `scheduling_policy` — from the
-  // image under `images.app`, at the size `WORKSPACE_INSTANCE` in
-  // `src/config.ts` asks for; why that size is there. The policy is fixed when
+  // **The object starts its own container** (`scheduling_policy`), from the
+  // image under `images.app` and at the size its workspace config passes:
+  // `WORKSPACE_INSTANCE` in `src/config.ts`, which says why. The policy is fixed when
   // an application is created: one made under another policy is deleted before
   // the deploy that moves it, never switched. `@dynamicagents/plugins/workspace`
   // carries how, and what the gap between the two costs.
   //
-  // **Two entries, one Dockerfile.** Cloudflare builds once per entry, so naming
-  // the same file twice produces two images — and `build_vars` is a Docker build
-  // arg, which is how only one of them gets the Claude Code CLI.
+  // **One Dockerfile, an image per entry.** Cloudflare builds each entry's
+  // `images` on its own, so every entry naming this Dockerfile gets an image of
+  // its own — and `build_vars` is a Docker build arg, which is how
+  // `anthropic-coding`'s image gets the Claude Code CLI and `coding`'s does not.
   //
   // **Nothing here caps how many run.** Running containers count against the
   // account's limits rather than a ceiling per entry, and for `anthropic-coding`

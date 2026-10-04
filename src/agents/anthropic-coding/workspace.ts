@@ -11,7 +11,10 @@ import {
   WorkspaceObjectBase,
   type WorkspaceObjectConfig
 } from "@dynamicagents/plugins/workspace";
-import { CLAUDE_CODE_SESSION, WORKSPACE_INSTANCE } from "@/config";
+import {
+  ANTHROPIC_CODING_WORKSPACE_INSTANCE,
+  CLAUDE_CODE_SESSION
+} from "@/config";
 import { INSTALL_PLAN } from "@/workspace/install-plan";
 import { gitIdentity } from "@/workspace/git-identity";
 import { claudeCodeConfig, CREDENTIALS_KEY } from "./claude-code";
@@ -71,7 +74,7 @@ export class AnthropicCodingWorkspace extends WorkspaceObjectBase {
       binding: "ANTHROPIC_CODING_WORKSPACE",
       label: "anthropic-coding-workspace",
       installPlan: INSTALL_PLAN,
-      instance: WORKSPACE_INSTANCE,
+      instance: ANTHROPIC_CODING_WORKSPACE_INSTANCE,
       // Above the whole session.
       //
       // The base's default is twenty minutes, and its rule is that the window

@@ -804,6 +804,22 @@ describe("the branch a writing session is told about", () => {
     expect(brief).not.toContain("earlier work");
   });
 
+  /** Each full run is minutes of the person's wait, and a baseline it was given is one. */
+  it("says to check once, against the base the brief already gives", () => {
+    const brief = sessionBrief(TASK, undefined, {
+      branch: "anthropic-coding/task-1/1",
+      submodules: [],
+      continues: false
+    });
+
+    expect(brief).toContain("## Checking your work");
+    expect(brief).toMatch(
+      /on the tree you commit, and again only after changing\nsomething they cover/
+    );
+    expect(brief).toMatch(/instead of running the base\nagain/);
+    expect(sessionBrief(TASK)).not.toContain("## Checking your work");
+  });
+
   it("tells a continuing session the branch already holds work", () => {
     const brief = sessionBrief(TASK, undefined, {
       branch: "anthropic-coding/task-1/1",

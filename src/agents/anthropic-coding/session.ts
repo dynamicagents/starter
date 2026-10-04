@@ -88,6 +88,20 @@ Pull requests and replies to a review belong to the agent that briefed you, whic
 holds the credential on the other side of this container. Report what you changed and
 let it deliver.`;
 
+/**
+ * How often a **writing** session runs the project's checks: on the tree it
+ * commits, against the base its brief or plan already gives. Each full run is
+ * minutes of container time the caller waits through, and unsaid a session
+ * repeats them.
+ */
+const CHECK_NOTE = `## Checking your work
+
+Run the project's checks and tests on the tree you commit, and again only after changing
+something they cover. What the task or the plan says about the base — a test count, a
+passing suite — was measured already: compare against it instead of running the base
+again. A full run takes minutes in this container, and every repeat is time the person
+asking waits.`;
+
 /** One repository a writing session could commit in, and where it started. */
 export interface RepoStart {
   path: string;
@@ -270,7 +284,9 @@ export function sessionBrief(
   if (writing) {
     parts.push(
       "",
-      branchNote(writing.branch, writing.submodules, writing.continues)
+      branchNote(writing.branch, writing.submodules, writing.continues),
+      "",
+      CHECK_NOTE
     );
     if (writing.plan) parts.push("", planNote(writing.plan));
   }

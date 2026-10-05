@@ -32,6 +32,7 @@ import {
   createPlan,
   lastPlanIndex,
   latestPlan,
+  latestVersion,
   lookUpPlan,
   PLAN_INPUT,
   PLAN_LABEL,
@@ -191,10 +192,11 @@ async function claimPlace(
 
 async function releaseUnused(
   workspaces: SubtaskWorkspaces,
-  run: RunRef
+  run: RunRef,
+  options: { forgetBranch?: boolean } = {}
 ): Promise<void> {
   await workspaces
-    .release({ taskId: run.taskId, runId: run.runId })
+    .release({ taskId: run.taskId, runId: run.runId }, options)
     .catch((released: unknown) =>
       console.warn("[anthropic-coding] could not release an unused worktree", {
         runId: run.runId,
@@ -284,7 +286,7 @@ export async function prepareWriter(
     }
     planned = await plannedSession(
       ctx.parent.storage,
-      plan,
+      { id: plan, version: latestVersion(found.page) },
       sessionLookup(ctx.parent.env),
       ctx.runId
     );
@@ -385,7 +387,7 @@ export async function preparePlanner(
     }
     planned = await plannedSession(
       storage,
-      edits,
+      { id: edits, version: latestVersion(found.page) },
       sessionLookup(env),
       ctx.runId
     );
@@ -400,8 +402,9 @@ export async function preparePlanner(
     id =
       edits ?? (await createPlan(env, storage, `${ctx.taskId}:${ctx.runId}`));
   } catch (err) {
-    // A `prepare` that throws gets no `settle`, so nothing else lets go.
-    await releaseUnused(workspaces, run);
+    // A `prepare` that throws gets no `settle`, so nothing else lets go —
+    // and it lets go of the branch, as a planning session's settle does.
+    await releaseUnused(workspaces, run, { forgetBranch: true });
     throw err;
   }
   recordPlanRun(storage, {
@@ -460,7 +463,7 @@ export async function reportPlan(
   plan: PlanPlace,
   runId: string,
   outcome: SessionOutcome,
-  onFiled?: (sessionId: string) => Promise<void>
+  onFiled?: (sessionId: string, version: number) => Promise<void>
 ): Promise<string> {
   const result = outcome.session.result;
   const answer = PlanAnswer.safeParse(result?.structured);
@@ -482,7 +485,7 @@ export async function reportPlan(
   // What lets an edit or a build carry on from this conversation: see
   // `plannedSession` in `./plans.ts`.
   const sessionId = result.sessionId || outcome.session.sessionId;
-  if (onFiled && sessionId) await onFiled(sessionId);
+  if (onFiled && sessionId) await onFiled(sessionId, filed.sequence);
   return planReport(outcome, {
     kind: "filed",
     id: plan.id,
@@ -581,8 +584,13 @@ abstract class ClaudeCodeRun extends SubAgent<Env> {
           return unresumableReport(plan ? "plan" : "write");
         }
         return plan
-          ? reportPlan(this.env, plan, this.name, outcome, (sessionId) =>
-              this.#noteSession(place, { sessionId, plan: plan.id })
+          ? reportPlan(
+              this.env,
+              plan,
+              this.name,
+              outcome,
+              (sessionId, version) =>
+                this.#noteSession(place, { sessionId, plan: plan.id, version })
             )
           : this.#report(outcome, place, writes);
       }

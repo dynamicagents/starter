@@ -676,6 +676,34 @@ describe("handing a worktree to the next session", () => {
     expect(isFree(pool.all("acme/api")[0]!)).toBe(true);
   });
 
+  /**
+   * Without a branch a worktree is free whatever its tips read, so forgetting
+   * one must not take the hold on a tip it could not read, or on a commit.
+   */
+  it.each([
+    ["could not be read", { tipsThrow: true }],
+    ["holds a commit", { tips: { ".": "c1" } }]
+  ] as const)(
+    "keeps the branch it was asked to forget when a tip %s",
+    async (_label, over) => {
+      const { subtasks, pool } = harness({
+        selected: "acme/api",
+        checkout: CHECKOUT,
+        ...over
+      });
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+      try {
+        await subtasks.resolve(ctx);
+        await subtasks.release(ctx, { forgetBranch: true });
+      } finally {
+        warn.mockRestore();
+      }
+
+      expect(pool.rows()[0]?.branch).toBe(BRANCH_1);
+      expect(isFree(pool.all("acme/api")[0]!)).toBe(false);
+    }
+  );
+
   it("frees a worktree that never got onto its new branch", async () => {
     const { subtasks, pool } = harness({
       selected: "acme/api",

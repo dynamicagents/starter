@@ -412,19 +412,20 @@ describe("a plan", () => {
 
   it("files the session's answer as the plan, and tells the parent its id, not its text", async () => {
     const id = await requireArtifactsStub(env).createArtifact("plan");
-    const recorded: string[] = [];
+    const recorded: [string, number][] = [];
     const report = await reportPlan(
       env,
       { id, isNew: true },
       "run-1",
       outcome(ANSWER) as never,
-      async (sessionId) => {
-        recorded.push(sessionId);
+      async (sessionId, version) => {
+        recorded.push([sessionId, version]);
       }
     );
 
-    // The session that filed it, for an edit or a build to carry on from.
-    expect(recorded).toEqual(["s1"]);
+    // The session that filed it, and which version, for an edit or a build to
+    // carry on from.
+    expect(recorded).toEqual([["s1", 1]]);
 
     expect(report).toContain(`\`${id}\``);
     expect(report).toContain(ANSWER.title);
@@ -602,6 +603,15 @@ describe("carrying a plan on from the session that wrote it", () => {
       runId: `detached:${crypto.randomUUID()}`
     }) as const;
 
+  /** A version of plan `id` filed on its page; its sequence there. */
+  async function file(id: string, text = "# The plan\n\nDo it.") {
+    const filed = await requireArtifactsStub(env).addEntry(id, {
+      label: PLAN_LABEL,
+      text
+    });
+    return filed!.sequence;
+  }
+
   /** A planning run placed in `place`, with a version of its plan filed. */
   async function planned(agent: Parent, place: SessionPlace) {
     const ctx = planning();
@@ -610,11 +620,21 @@ describe("carrying a plan on from the session that wrote it", () => {
       placingPool(place).pool
     );
     const id = (runtime.plan as { id: string }).id;
-    await requireArtifactsStub(env).addEntry(id, {
-      label: PLAN_LABEL,
-      text: "# The plan\n\nDo it."
+    return { id, runId: ctx.runId, version: await file(id) };
+  }
+
+  /** What a planning session's report records on the workspace that ran it. */
+  function filedBy(
+    place: SessionPlace,
+    runId: string,
+    sessionId: string,
+    plan: { id: string; version: number }
+  ) {
+    return workspaceAt(place.workspaceName).noteSession(runId, {
+      sessionId,
+      plan: plan.id,
+      version: plan.version
     });
-    return { id, runId: ctx.runId };
   }
 
   /** A build of `id`, placed in `place`. */
@@ -635,10 +655,7 @@ describe("carrying a plan on from the session that wrote it", () => {
     const place = worktree(3);
     const { runtime, asked, plan } = await onParent(async (agent) => {
       const plan = await planned(agent, place);
-      await workspaceAt(place.workspaceName).noteSession(plan.runId, {
-        sessionId: "s-plan",
-        plan: plan.id
-      });
+      await filedBy(place, plan.runId, "s-plan", plan);
       return { ...(await build(agent, plan.id, place)), plan };
     });
 
@@ -653,10 +670,7 @@ describe("carrying a plan on from the session that wrote it", () => {
     const place = worktree(3);
     const runtime = await onParent(async (agent) => {
       const plan = await planned(agent, place);
-      await workspaceAt(place.workspaceName).noteSession(plan.runId, {
-        sessionId: "s-plan",
-        plan: plan.id
-      });
+      await filedBy(place, plan.runId, "s-plan", plan);
       return (await build(agent, plan.id, worktree(4))).runtime;
     });
 
@@ -683,10 +697,7 @@ describe("carrying a plan on from the session that wrote it", () => {
     const place = worktree(3);
     const { runtime, asked, plan } = await onParent(async (agent) => {
       const plan = await planned(agent, place);
-      await workspaceAt(place.workspaceName).noteSession(plan.runId, {
-        sessionId: "s-plan",
-        plan: plan.id
-      });
+      await filedBy(place, plan.runId, "s-plan", plan);
       const placing = placingPool(place);
       const runtime = await preparePlanner(
         {
@@ -715,19 +726,14 @@ describe("carrying a plan on from the session that wrote it", () => {
     const second = worktree(5);
     const { asked, runtime } = await onParent(async (agent) => {
       const plan = await planned(agent, first);
-      await workspaceAt(first.workspaceName).noteSession(plan.runId, {
-        sessionId: "s-first",
-        plan: plan.id
-      });
+      await filedBy(first, plan.runId, "s-first", plan);
       const edit = planning(plan.id);
       await preparePlanner(
         { ...edit, parent: agent.pluginContext() },
         placingPool(second).pool
       );
-      await workspaceAt(second.workspaceName).noteSession(edit.runId, {
-        sessionId: "s-second",
-        plan: plan.id
-      });
+      const version = await file(plan.id, "# The plan\n\nDo less.");
+      await filedBy(second, edit.runId, "s-second", { id: plan.id, version });
       return build(agent, plan.id, second);
     });
 
@@ -735,14 +741,42 @@ describe("carrying a plan on from the session that wrote it", () => {
     expect(runtime).toMatchObject({ resume: { sessionId: "s-second" } });
   });
 
+  /**
+   * The conversation behind an older version would build a plan the person has
+   * since seen changed, so it never stands in for the latest one's.
+   */
+  it("starts fresh rather than carry on from an older version's session", async () => {
+    const first = worktree(3);
+    const { asked, runtime } = await onParent(async (agent) => {
+      const plan = await planned(agent, first);
+      await filedBy(first, plan.runId, "s-first", plan);
+      // An edit filed a newer version, and its workspace was since reclaimed:
+      // nothing records its session.
+      await preparePlanner(
+        { ...planning(plan.id), parent: agent.pluginContext() },
+        placingPool(worktree(5)).pool
+      );
+      await file(plan.id, "# The plan\n\nDo less.");
+      return build(agent, plan.id, first);
+    });
+
+    expect(asked[0]).not.toHaveProperty("near");
+    expect(runtime).not.toHaveProperty("resume");
+  });
+
   /** A recovered turn reports the handle again, without the plan it filed. */
   it("keeps the plan a session filed, and forgets a session found gone", async () => {
     const stub = workspaceAt(`anthropic-coding-spec:${crypto.randomUUID()}`);
-    await stub.noteSession("run-1", { sessionId: "s1", plan: "p1" });
+    await stub.noteSession("run-1", {
+      sessionId: "s1",
+      plan: "p1",
+      version: 2
+    });
     await stub.noteSession("run-1", { sessionId: "s1" });
     expect(await stub.sessionOf("run-1")).toEqual({
       sessionId: "s1",
-      plan: "p1"
+      plan: "p1",
+      version: 2
     });
     await stub.forgetSession("run-1");
     expect(await stub.sessionOf("run-1")).toBeUndefined();

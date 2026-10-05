@@ -167,16 +167,18 @@ export class AnthropicCodingWorkspace extends WorkspaceObjectBase {
    * workspace that is reclaimed takes the record with the transcript it names.
    * A record found is one whose conversation can be continued.
    *
-   * It keeps the plan once it has one: a recovered turn reports the session's
-   * handle again, without it.
+   * It keeps the plan and its version once it has them: a recovered turn reports
+   * the session's handle again, without them.
    */
   async noteSession(runId: string, note: SessionNote): Promise<void> {
     const key = `${SESSION_KEY}${runId}`;
-    const plan =
-      note.plan ?? (await this.ctx.storage.get<SessionNote>(key))?.plan;
+    const filed = note.plan
+      ? note
+      : await this.ctx.storage.get<SessionNote>(key);
     await this.ctx.storage.put(key, {
       sessionId: note.sessionId,
-      ...(plan ? { plan } : {})
+      ...(filed?.plan ? { plan: filed.plan } : {}),
+      ...(filed?.version !== undefined ? { version: filed.version } : {})
     });
   }
 
@@ -199,4 +201,6 @@ export interface SessionNote {
   sessionId: string;
   /** A plan this session filed a version of: a planning run's. */
   plan?: string;
+  /** Which version: the sequence of the entry it filed on the plan's page. */
+  version?: number;
 }

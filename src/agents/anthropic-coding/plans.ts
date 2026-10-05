@@ -234,25 +234,29 @@ export interface PlannedSession {
 }
 
 /**
- * The newest planning run on `planId` that filed a version of it and whose
- * workspace still holds its session — the conversation an edit revises and a
- * build carries on from. None when there is no such run, and the run then
- * starts fresh from the plan's text.
+ * The planning run that filed the plan's latest version, when its workspace
+ * still holds its session — the conversation an edit revises and a build
+ * carries on from. None otherwise, and the run then starts fresh from the
+ * plan's text.
  *
- * Newest first, so a later edit wins over the version it revised; a run that
- * filed nothing — it failed, or the plan was locked under it — is passed over
- * rather than continued. `except` is the run asking, whose own row a repeated
- * `prepare` has already written.
+ * **That run and no other.** The conversation behind an older version would
+ * revise, or build, a plan the person has since seen changed — and an edit
+ * carrying on is not shown the plan again. So a run whose record is gone is not
+ * stood in for by the one before it. Matched by the version it filed rather than
+ * by when it started, since two edits need not finish in the order they began.
+ * `except` is the run asking, whose own row a repeated `prepare` has already
+ * written.
  */
 export async function plannedSession(
   storage: DurableObjectStorage,
-  planId: string,
+  plan: { id: string; version: number | undefined },
   sessionOf: (
     workspaceName: string,
     runId: string
   ) => Promise<SessionNote | undefined>,
   except?: string
 ): Promise<PlannedSession | undefined> {
+  if (plan.version === undefined) return undefined;
   ensureRuns(storage);
   const runs = storage.sql
     .exec<{
@@ -262,7 +266,7 @@ export async function plannedSession(
       slot: number | null;
     }>(
       `SELECT run_id, workspace, repo, slot FROM ${RUNS_TABLE} WHERE plan_id = ? ORDER BY created_at DESC, rowid DESC`,
-      planId
+      plan.id
     )
     .toArray();
   for (const run of runs) {
@@ -271,7 +275,7 @@ export async function plannedSession(
     const note = await sessionOf(run.workspace, run.run_id).catch(
       () => undefined
     );
-    if (note?.plan !== planId) continue;
+    if (note?.plan !== plan.id || note.version !== plan.version) continue;
     return {
       runId: run.run_id,
       sessionId: note.sessionId,
@@ -331,6 +335,14 @@ export async function lookUpPlan(
 export function latestPlan(page: readonly ArtifactEntry[]): string | undefined {
   const at = lastPlanIndex(page);
   return at < 0 ? undefined : page[at]!.text;
+}
+
+/** The latest version's place in the page's sequence, or none yet. */
+export function latestVersion(
+  page: readonly ArtifactEntry[]
+): number | undefined {
+  const at = lastPlanIndex(page);
+  return at < 0 ? undefined : page[at]!.sequence;
 }
 
 /** Where on a page its latest version is, or -1 for none yet. */

@@ -433,7 +433,9 @@ export interface SubtaskWorkspaces {
    * keeps it from the next session whatever its tips read — a run whose work
    * {@link keep} could not secure — until a push says otherwise.
    * `forgetBranch` frees it without its branch, for a run that never meant to
-   * commit on one: a planning session's branch is no work to review.
+   * commit on one: a planning session's branch is no work to review. Only when
+   * its tips read clean, though — one that could not be read, or holds a
+   * commit, is held on its branch like any other.
    */
   release(
     ctx: RunRef,
@@ -864,9 +866,17 @@ export function subtaskWorkspaces(config: {
         }
       }
       // A worktree that never got onto its new branch holds nothing of it; one
-      // being continued still holds the branch it had.
-      const keeps =
-        !options.forgetBranch && (row.ready || row.mode === "continue");
+      // being continued still holds the branch it had. A branch is forgotten only
+      // with nothing on it: without one, `isFree` frees the worktree whatever
+      // its tips read, which would take the unknown-tip hold with it.
+      const forget =
+        options.forgetBranch === true &&
+        repos.every(
+          (repo) =>
+            repo.tip !== "" &&
+            (repo.tip === repo.base || repo.tip === repo.pushed)
+        );
+      const keeps = !forget && (row.ready || row.mode === "continue");
       const { live: _live, mode: _mode, ready: _ready, ...rest } = row;
       config.pool.put({
         ...rest,

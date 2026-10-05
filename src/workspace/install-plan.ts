@@ -37,7 +37,7 @@ export const INSTALL_PLAN: InstallPlan = {
     // and the code is in submodules no clone initialises. `bootstrap` is the
     // one command its AGENTS.md gives a clone: submodules on their branches,
     // then `npm ci` in each whose `node_modules` is empty — as every one is in
-    // a new container. A reading session's copy carries what this leaves.
+    // a new container.
     "dynamicagents/dev-agents":
       "npm ci --no-audit --no-fund && npm run bootstrap"
   },

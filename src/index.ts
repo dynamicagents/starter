@@ -49,8 +49,7 @@ export { AnthropicCodingWorkflow } from "./agents/anthropic-coding/workflow";
 export { AnthropicCodingAgent } from "./agents/anthropic-coding/agent";
 export {
   AnthropicCodingWriterChild,
-  AnthropicCodingPlannerChild,
-  AnthropicCodingReaderChild
+  AnthropicCodingPlannerChild
 } from "./agents/anthropic-coding/children";
 
 /**

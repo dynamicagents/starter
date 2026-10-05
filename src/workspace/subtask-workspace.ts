@@ -395,6 +395,8 @@ export interface SessionPlace {
   branch?: string;
   /** Whether that branch already holds earlier work. */
   continues?: boolean;
+  /** The worktree it was placed in, for a later run to ask for it by `near`. */
+  slot?: { repo: string; slot: number };
 }
 
 /** What keeping a run's work found. */
@@ -415,16 +417,30 @@ export interface SubtaskWorkspaces {
    * scratchpad is the parent's own, and answers that.
    */
   resolve(
-    ctx: RunRef & { continue?: string; branch?: string }
+    ctx: RunRef & {
+      continue?: string;
+      branch?: string;
+      /**
+       * The worktree to place it in when that one is free — where a
+       * conversation it continues was recorded. See `claim` in
+       * `./worktree-pool.ts`.
+       */
+      near?: { repo: string; slot: number };
+    }
   ): Promise<SessionPlace>;
-  /** A reading session: the parent's own checkout, read in a throwaway copy. */
-  reading(): Promise<SessionPlace>;
   /**
    * The run is over: record where it left each repository and free it. `hold`
    * keeps it from the next session whatever its tips read — a run whose work
    * {@link keep} could not secure — until a push says otherwise.
+   * `forgetBranch` frees it without its branch, for a run that never meant to
+   * commit on one: a planning session's branch is no work to review. Only when
+   * its tips read clean, though — one that could not be read, or holds a
+   * commit, is held on its branch like any other.
    */
-  release(ctx: RunRef, options?: { hold?: boolean }): Promise<void>;
+  release(
+    ctx: RunRef,
+    options?: { hold?: boolean; forgetBranch?: boolean }
+  ): Promise<void>;
   /**
    * The run ended without completing — failed or canceled: stop it and keep
    * what it did, answering where, and whether that is secured.
@@ -508,7 +524,7 @@ export function subtaskWorkspaces(config: {
     );
   };
 
-  /** A session in a workspace's own checkout: a scratchpad's, or a reader's. */
+  /** A session in a workspace's own checkout: a scratchpad's. */
   const placeIn = async (name: string): Promise<SessionPlace> => {
     const dir = await checkoutIn(name);
     await config.admit(name);
@@ -785,7 +801,13 @@ export function subtaskWorkspaces(config: {
         );
       }
 
-      const claimed = claim(config.pool, repo, ctx, now());
+      const { near, ...run } = ctx;
+      const claimed = claim(
+        config.pool,
+        repo,
+        { ...run, ...(near?.repo === repo ? { near: near.slot } : {}) },
+        now()
+      );
       const name = nameOf(claimed);
       await config.admit(name);
       const ready = claimed.ready
@@ -799,12 +821,9 @@ export function subtaskWorkspaces(config: {
         workspaceName: name,
         dir: ready.dir ?? checkout.dir,
         branch: ready.branch as string,
-        continues: ctx.continue !== undefined
+        continues: ctx.continue !== undefined,
+        slot: { repo: ready.repo, slot: ready.slot }
       };
-    },
-
-    async reading(): Promise<SessionPlace> {
-      return placeIn(workspaceName(config.callerKey(), config.active.get()));
     },
 
     async release(ctx, options = {}): Promise<void> {
@@ -847,8 +866,17 @@ export function subtaskWorkspaces(config: {
         }
       }
       // A worktree that never got onto its new branch holds nothing of it; one
-      // being continued still holds the branch it had.
-      const keeps = row.ready || row.mode === "continue";
+      // being continued still holds the branch it had. A branch is forgotten only
+      // with nothing on it: without one, `isFree` frees the worktree whatever
+      // its tips read, which would take the unknown-tip hold with it.
+      const forget =
+        options.forgetBranch === true &&
+        repos.every(
+          (repo) =>
+            repo.tip !== "" &&
+            (repo.tip === repo.base || repo.tip === repo.pushed)
+        );
+      const keeps = !forget && (row.ready || row.mode === "continue");
       const { live: _live, mode: _mode, ready: _ready, ...rest } = row;
       config.pool.put({
         ...rest,

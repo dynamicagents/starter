@@ -210,6 +210,58 @@ describe("claiming a worktree", () => {
     expect(claimed.mode).toBe("new");
   });
 
+  /**
+   * `near` is the worktree holding a conversation the run carries on from, so
+   * it wins over the one used longest ago — but only while it is free.
+   */
+  describe("with `near`", () => {
+    function pooled() {
+      const pool = memoryPoolStore();
+      pool.put({
+        repo: REPO,
+        slot: 0,
+        branch: "anthropic-coding/t/1",
+        repos: [repo()],
+        usedAt: 1
+      });
+      pool.put({
+        repo: REPO,
+        slot: 1,
+        branch: "anthropic-coding/t/2",
+        repos: [repo()],
+        usedAt: 5
+      });
+      return pool;
+    }
+
+    it("takes that worktree when it is free", () => {
+      const claimed = claim(pooled(), REPO, { ...ctx, near: 1 }, 10);
+      expect(claimed.slot).toBe(1);
+      expect(claimed.previous).toBe("anthropic-coding/t/2");
+      expect(claimed.mode).toBe("new");
+    });
+
+    it.each([
+      ["a session is in it", { live: { taskId: "t", runId: "r" } }],
+      ["it holds unpushed commits", { repos: [repo({ tip: "c1" })] }]
+    ])("passes it over when %s", (_label, over) => {
+      const pool = pooled();
+      pool.put({ ...pool.all(REPO)[1]!, ...over });
+      expect(claim(pool, REPO, { ...ctx, near: 1 }, 10).slot).toBe(0);
+    });
+
+    it("gives way to `continue`, which names the worktree itself", () => {
+      const claimed = claim(
+        pooled(),
+        REPO,
+        { ...ctx, continue: "anthropic-coding/t/1", near: 1 },
+        10
+      );
+      expect(claimed.slot).toBe(0);
+      expect(claimed.mode).toBe("continue");
+    });
+  });
+
   it("keeps pools apart by repository", () => {
     const pool = memoryPoolStore();
     claim(pool, REPO, ctx, 10);

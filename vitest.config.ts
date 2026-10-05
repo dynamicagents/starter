@@ -137,10 +137,6 @@ export default defineConfig({
             className: "AnthropicCodingPlannerChild",
             useSQLite: true
           },
-          ANTHROPIC_CODING_READER_CHILD: {
-            className: "AnthropicCodingReaderChild",
-            useSQLite: true
-          },
           TEST_GENERIC_CHILD: {
             className: "TestGenericChild",
             useSQLite: true
@@ -152,10 +148,6 @@ export default defineConfig({
           },
           TEST_ANTHROPIC_CODING_PLANNER_CHILD: {
             className: "TestAnthropicCodingPlannerChild",
-            useSQLite: true
-          },
-          TEST_ANTHROPIC_CODING_READER_CHILD: {
-            className: "TestAnthropicCodingReaderChild",
             useSQLite: true
           }
         },

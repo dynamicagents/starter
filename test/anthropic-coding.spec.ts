@@ -15,7 +15,6 @@ import type { AnthropicCodingWorkspace } from "@/index";
 import { requireArtifactsStub } from "@dynamicagents/core/artifacts";
 import {
   AnthropicCodingPlannerChild,
-  AnthropicCodingReaderChild,
   AnthropicCodingWriterChild,
   claimSession,
   forgetKept,
@@ -32,9 +31,11 @@ import {
   PLAN_LABEL
 } from "@/agents/anthropic-coding/plans";
 import {
+  notResumable,
   planBrief,
   sessionBrief,
   sessionFooter,
+  unresumableReport,
   warningPrompt,
   writingNote
 } from "@/agents/anthropic-coding/session";
@@ -46,9 +47,11 @@ import {
 } from "@/agents/anthropic-coding/claude-code";
 import { admitSession } from "@/agents/anthropic-coding/plugins";
 import { activeRepo } from "@/workspace/active-repo";
+import { SCRATCH_REPO } from "@/workspace/scratch";
 import { gitIdentity } from "@/workspace/git-identity";
 import type {
   KeptWork,
+  SessionPlace,
   SubtaskWorkspaces
 } from "@/workspace/subtask-workspace";
 
@@ -119,7 +122,6 @@ describe("the parent's surface", () => {
       "check_back",
       "claude_code",
       "claude_code_plan",
-      "claude_code_read",
       "grep",
       "repo_clone",
       "repo_commit",
@@ -168,14 +170,13 @@ describe("the parent's surface", () => {
     }
   });
 
-  it("offers the writing session first, then the planning and reading ones", async () => {
+  it("offers the writing session first, then the planning one", async () => {
     const names = await onParent((agent) =>
       agent.getSubAgents().map((Cls) => Cls.name)
     );
     expect(names).toEqual([
       "AnthropicCodingWriterChild",
-      "AnthropicCodingPlannerChild",
-      "AnthropicCodingReaderChild"
+      "AnthropicCodingPlannerChild"
     ]);
   });
 });
@@ -184,13 +185,11 @@ describe("the sessions", () => {
   it("run in the background, because a session outlasts a turn", () => {
     expect(AnthropicCodingWriterChild.spec.detached).toBe(true);
     expect(AnthropicCodingPlannerChild.spec.detached).toBe(true);
-    expect(AnthropicCodingReaderChild.spec.detached).toBe(true);
   });
 
   it.each([
     ["ANTHROPIC_CODING_WRITER_CHILD"],
-    ["ANTHROPIC_CODING_PLANNER_CHILD"],
-    ["ANTHROPIC_CODING_READER_CHILD"]
+    ["ANTHROPIC_CODING_PLANNER_CHILD"]
   ])("install no tools on %s: the session brings its own", async (binding) => {
     const ns = (env as unknown as Record<string, DurableObjectNamespace>)[
       binding
@@ -212,8 +211,7 @@ describe("the sessions", () => {
 describe("preparing a session", () => {
   it.each([
     ["writing", AnthropicCodingWriterChild],
-    ["planning", AnthropicCodingPlannerChild],
-    ["reading", AnthropicCodingReaderChild]
+    ["planning", AnthropicCodingPlannerChild]
   ])(
     "refuses a %s session in a workspace with nothing checked out",
     async (_label, Cls) => {
@@ -233,24 +231,24 @@ describe("preparing a session", () => {
   );
 
   it("does not mistake a checkout with nothing to install for an empty workspace", async () => {
-    const dir = "/workspace/spike";
+    const dir = "/workspace/scratch";
     const key = `anthropic-coding-spec:${crypto.randomUUID()}`;
-    const name = workspaceName(key, "acme/spike");
+    const name = workspaceName(key, SCRATCH_REPO);
     const workspace = env.ANTHROPIC_CODING_WORKSPACE.get(
       env.ANTHROPIC_CODING_WORKSPACE.idFromName(name)
     );
 
-    // A repository with git in it and no lockfile: cloned, recorded, and skipped
-    // by the resolver.
+    // A scratchpad — a git repository of its own — with no lockfile: opened,
+    // recorded, and skipped by the resolver.
     using ws = await openWorkspace(workspace);
     await ws.fs.mkdir(`${dir}/.git`, { recursive: true });
     await ws.fs.writeFile(`${dir}/.git/HEAD`, "ref: refs/heads/main\n");
-    await workspace.noteCheckout({ dir, kind: "repo", repo: "acme/spike" });
+    await workspace.noteCheckout({ dir, kind: "scratch" });
     expect((await workspace.startInstall({ dir })).state).toBe("skipped");
 
     const runtime = await onParent((agent) => {
-      activeRepo(agent.ctx.storage).set("acme/spike");
-      return AnthropicCodingReaderChild.spec.prepare!({
+      activeRepo(agent.ctx.storage).set(SCRATCH_REPO);
+      return AnthropicCodingWriterChild.spec.prepare!({
         input: { task: TASK } as never,
         taskId: "task-1",
         runId: "detached:call_1",
@@ -267,21 +265,6 @@ describe("preparing a session", () => {
  * What travels between them is the id — see `@/agents/anthropic-coding/plans`.
  */
 describe("a plan", () => {
-  /** A checkout the reading copy can be made from, as a clone leaves one. */
-  async function checkedOut(key: string): Promise<string> {
-    const dir = "/workspace/plan";
-    const name = workspaceName(key, "acme/plan");
-    const workspace = env.ANTHROPIC_CODING_WORKSPACE.get(
-      env.ANTHROPIC_CODING_WORKSPACE.idFromName(name)
-    );
-    using ws = await openWorkspace(workspace);
-    await ws.fs.mkdir(`${dir}/.git`, { recursive: true });
-    await ws.fs.writeFile(`${dir}/.git/HEAD`, "ref: refs/heads/main\n");
-    await workspace.noteCheckout({ dir, kind: "repo", repo: "acme/plan" });
-    await workspace.startInstall({ dir });
-    return dir;
-  }
-
   const planning = (plan?: string) =>
     ({
       input: { task: TASK, ...(plan ? { plan } : {}) },
@@ -317,72 +300,87 @@ describe("a plan", () => {
   };
 
   it("opens a new plan for this caller, once a workspace has admitted the run", async () => {
-    const key = `anthropic-coding-spec:${crypto.randomUUID()}`;
-    await checkedOut(key);
+    const { pool } = placingPool(worktree());
     const { runtime, owned } = await onParent(async (agent) => {
-      activeRepo(agent.ctx.storage).set("acme/plan");
-      const runtime = await preparePlanner({
-        ...planning(),
-        parent: agent.pluginContext()
-      });
+      const runtime = await preparePlanner(
+        { ...planning(), parent: agent.pluginContext() },
+        pool
+      );
       const plan = runtime.plan as { id: string };
       return { runtime, owned: ownsPlan(agent.ctx.storage, plan.id) };
-    }, key);
+    });
 
     expect(runtime).toMatchObject({ plan: { isNew: true } });
+    expect(runtime).not.toHaveProperty("resume");
     expect(owned).toBe(true);
   });
 
   /**
-   * A planning session runs detached in the parent's own container, which the
-   * task that started it releases when it settles.
+   * A planning session works in a worktree of its own, as a writing one does,
+   * and commits nothing — so its branch is no work for the parent to review.
    */
-  it("holds its container from prepare until its settle", async () => {
-    const key = `anthropic-coding-spec:${crypto.randomUUID()}`;
-    await checkedOut(key);
+  it("claims a worktree of its own, and frees it without its branch", async () => {
+    const place = worktree();
+    const { pool, asked, calls } = placingPool(place);
     const ctx = planning();
     const runtime = await onParent(async (agent) => {
-      activeRepo(agent.ctx.storage).set("acme/plan");
-      return preparePlanner({ ...ctx, parent: agent.pluginContext() });
-    }, key);
-    const workspace = env.ANTHROPIC_CODING_WORKSPACE.get(
-      env.ANTHROPIC_CODING_WORKSPACE.idFromName(workspaceName(key, "acme/plan"))
-    );
-    const holds = () =>
-      runInDurableObject(workspace, async (_instance, state) =>
-        Object.keys(
-          (await state.storage.get<Record<string, number>>(
-            "container-holds"
-          )) ?? {}
-        )
+      const runtime = await preparePlanner(
+        { ...ctx, parent: agent.pluginContext() },
+        pool
       );
-
-    expect(await holds()).toEqual([ctx.runId]);
-
-    await onParent(
-      (agent) =>
-        settlePlanner({
+      await settlePlanner(
+        {
           runId: ctx.runId,
           taskId: ctx.taskId,
           runtime,
           result: { status: "completed" } as never,
           parent: agent.pluginContext()
-        }),
-      key
-    );
-    expect(await holds()).toEqual([]);
+        },
+        pool
+      );
+      return runtime;
+    });
+
+    expect(asked).toEqual([{ taskId: ctx.taskId, runId: ctx.runId }]);
+    expect(runtime).toMatchObject({
+      workspaceName: place.workspaceName,
+      dir: place.dir
+    });
+    expect(calls).toEqual(["release, forgetting its branch"]);
   });
 
+  it.each([
+    ["settled", true, ["keep", "release, forgetting its branch"]],
+    ["unsettled", false, ["keep", "release, held"]]
+  ] as const)(
+    "keeps a failed planning session's worktree as a writing one's when %s",
+    async (_label, settled, expected) => {
+      const { pool, calls } = recordingPool(undefined, { settled });
+      const ctx = planning();
+      await onParent((agent) =>
+        settlePlanner(
+          {
+            runId: ctx.runId,
+            taskId: ctx.taskId,
+            runtime: { workspaceName: "w", dir: "/d" },
+            result: { status: "error" } as never,
+            parent: agent.pluginContext()
+          },
+          pool
+        )
+      );
+      expect(calls).toEqual(expected);
+    }
+  );
+
   it("opens the plan it opened before when prepare runs again for the same run", async () => {
-    const key = `anthropic-coding-spec:${crypto.randomUUID()}`;
-    await checkedOut(key);
+    const { pool } = placingPool(worktree());
     const ids = await onParent(async (agent) => {
-      activeRepo(agent.ctx.storage).set("acme/plan");
       const ctx = { ...planning(), parent: agent.pluginContext() };
-      const first = await preparePlanner(ctx);
-      const again = await preparePlanner(ctx);
+      const first = await preparePlanner(ctx, pool);
+      const again = await preparePlanner(ctx, pool);
       return [first, again].map((r) => (r.plan as { id: string }).id);
-    }, key);
+    });
 
     expect(ids[1]).toBe(ids[0]);
   });
@@ -414,12 +412,20 @@ describe("a plan", () => {
 
   it("files the session's answer as the plan, and tells the parent its id, not its text", async () => {
     const id = await requireArtifactsStub(env).createArtifact("plan");
+    const recorded: [string, number][] = [];
     const report = await reportPlan(
       env,
       { id, isNew: true },
       "run-1",
-      outcome(ANSWER) as never
+      outcome(ANSWER) as never,
+      async (sessionId, version) => {
+        recorded.push([sessionId, version]);
+      }
     );
+
+    // The session that filed it, and which version, for an edit or a build to
+    // carry on from.
+    expect(recorded).toEqual([["s1", 1]]);
 
     expect(report).toContain(`\`${id}\``);
     expect(report).toContain(ANSWER.title);
@@ -435,13 +441,18 @@ describe("a plan", () => {
 
   it("files nothing for a session that did not answer through the schema", async () => {
     const id = await requireArtifactsStub(env).createArtifact("plan");
+    const recorded: string[] = [];
     const report = await reportPlan(
       env,
       { id, isNew: true },
       "run-1",
-      outcome() as never
+      outcome() as never,
+      async (sessionId) => {
+        recorded.push(sessionId);
+      }
     );
     expect(report).toMatch(/returned no plan, so nothing was filed/);
+    expect(recorded).toEqual([]);
     expect((await requireArtifactsStub(env).readArtifact(id))?.entries).toEqual(
       []
     );
@@ -515,14 +526,45 @@ describe("a plan", () => {
   );
 
   it("is given whole to the writing session that carries it out", () => {
-    const brief = sessionBrief(TASK, undefined, {
-      branch: "anthropic-coding/t/c",
-      submodules: [],
-      continues: false,
-      plan: "# The plan\n\nDo the thing."
-    });
+    const brief = sessionBrief(
+      TASK,
+      undefined,
+      { branch: "anthropic-coding/t/c", submodules: [], continues: false },
+      { text: "# The plan\n\nDo the thing.", resumed: false }
+    );
     expect(brief).toContain("## The plan");
     expect(brief).toContain("Do the thing.");
+  });
+
+  /**
+   * The session carrying on was last told it plans and changes nothing, and has
+   * every version it wrote in context — so it is told planning is over, and
+   * which version was approved.
+   */
+  it("is given whole to a build carrying on from it, which is told planning is over", () => {
+    const brief = sessionBrief(
+      TASK,
+      undefined,
+      { branch: "anthropic-coding/t/c", submodules: [], continues: false },
+      { text: "# The plan\n\nDo the thing.", resumed: true }
+    );
+    expect(brief).toContain("## Carrying out your plan");
+    expect(brief).toContain("no longer in plan mode");
+    expect(brief).toContain("Do the thing.");
+    expect(brief).toContain("## Your branch");
+  });
+
+  it("is given to a session in a scratchpad too, which has no branch", () => {
+    const brief = sessionBrief(TASK, undefined, undefined, {
+      text: "# The plan\n\nDo the thing.",
+      resumed: false
+    });
+    expect(brief).toContain("Do the thing.");
+    expect(brief).not.toContain("## Your branch");
+  });
+
+  it("is written in plan mode, which the planning session is told", () => {
+    expect(planBrief(TASK)).toContain("plan mode");
   });
 
   it("is edited with its latest version and what was said about it in the brief", () => {
@@ -534,7 +576,265 @@ describe("a plan", () => {
     expect(brief).toContain("the first plan");
     expect(brief).toContain("- Comment: smaller, please");
   });
+
+  /** The conversation that wrote it already holds the plan and the code it read. */
+  it("is revised by the conversation that wrote it with only what is new", () => {
+    const brief = planBrief(TASK, undefined, {
+      said: ["Comment: smaller, please"],
+      resumed: true
+    });
+    expect(brief).toContain("## Revising your plan");
+    expect(brief).toContain("- Comment: smaller, please");
+    expect(brief).not.toContain("## The plan you are changing");
+    expect(brief).not.toContain("## `gh` in this container");
+  });
 });
+
+/**
+ * An approved plan is built, and a plan is revised, by carrying on from the
+ * conversation that wrote it — in the worktree that holds it, which is where
+ * its transcript is. See `prepareWriter` in `@/agents/anthropic-coding/children`.
+ */
+describe("carrying a plan on from the session that wrote it", () => {
+  const planning = (plan?: string) =>
+    ({
+      input: { task: TASK, ...(plan ? { plan } : {}) },
+      taskId: "task-1",
+      runId: `detached:${crypto.randomUUID()}`
+    }) as const;
+
+  /** A version of plan `id` filed on its page; its sequence there. */
+  async function file(id: string, text = "# The plan\n\nDo it.") {
+    const filed = await requireArtifactsStub(env).addEntry(id, {
+      label: PLAN_LABEL,
+      text
+    });
+    return filed!.sequence;
+  }
+
+  /** A planning run placed in `place`, with a version of its plan filed. */
+  async function planned(agent: Parent, place: SessionPlace) {
+    const ctx = planning();
+    const runtime = await preparePlanner(
+      { ...ctx, parent: agent.pluginContext() },
+      placingPool(place).pool
+    );
+    const id = (runtime.plan as { id: string }).id;
+    return { id, runId: ctx.runId, version: await file(id) };
+  }
+
+  /** What a planning session's report records on the workspace that ran it. */
+  function filedBy(
+    place: SessionPlace,
+    runId: string,
+    sessionId: string,
+    plan: { id: string; version: number }
+  ) {
+    return workspaceAt(place.workspaceName).noteSession(runId, {
+      sessionId,
+      plan: plan.id,
+      version: plan.version
+    });
+  }
+
+  /** A build of `id`, placed in `place`. */
+  function build(agent: Parent, id: string, place: SessionPlace) {
+    const placing = placingPool(place);
+    return prepareWriter(
+      {
+        input: { task: TASK, plan: id },
+        taskId: "task-1",
+        runId: `detached:${crypto.randomUUID()}`,
+        parent: agent.pluginContext()
+      },
+      placing.pool
+    ).then((runtime) => ({ runtime, asked: placing.asked }));
+  }
+
+  it("builds an approved plan by forking the session that filed it, in its worktree", async () => {
+    const place = worktree(3);
+    const { runtime, asked, plan } = await onParent(async (agent) => {
+      const plan = await planned(agent, place);
+      await filedBy(place, plan.runId, "s-plan", plan);
+      return { ...(await build(agent, plan.id, place)), plan };
+    });
+
+    expect(asked[0]).toMatchObject({ near: { repo: "acme/plan", slot: 3 } });
+    expect(runtime).toMatchObject({
+      plan: plan.id,
+      resume: { sessionId: "s-plan", fork: true, fromRun: plan.runId }
+    });
+  });
+
+  it("starts a build fresh from the plan when that worktree was not free", async () => {
+    const place = worktree(3);
+    const runtime = await onParent(async (agent) => {
+      const plan = await planned(agent, place);
+      await filedBy(place, plan.runId, "s-plan", plan);
+      return (await build(agent, plan.id, worktree(4))).runtime;
+    });
+
+    expect(runtime).toHaveProperty("plan");
+    expect(runtime).not.toHaveProperty("resume");
+  });
+
+  it("starts a build fresh when no session is recorded as having filed the plan", async () => {
+    const place = worktree(3);
+    const { runtime, asked } = await onParent(async (agent) => {
+      const plan = await planned(agent, place);
+      // Its handle, but not the plan: it ended before filing a version.
+      await workspaceAt(place.workspaceName).noteSession(plan.runId, {
+        sessionId: "s-plan"
+      });
+      return build(agent, plan.id, place);
+    });
+
+    expect(asked[0]).not.toHaveProperty("near");
+    expect(runtime).not.toHaveProperty("resume");
+  });
+
+  it("revises a plan in the conversation that wrote it, without a fork", async () => {
+    const place = worktree(3);
+    const { runtime, asked, plan } = await onParent(async (agent) => {
+      const plan = await planned(agent, place);
+      await filedBy(place, plan.runId, "s-plan", plan);
+      const placing = placingPool(place);
+      const runtime = await preparePlanner(
+        {
+          ...planning(plan.id),
+          input: { task: "smaller, please", plan: plan.id },
+          parent: agent.pluginContext()
+        },
+        placing.pool
+      );
+      return { runtime, asked: placing.asked, plan };
+    });
+
+    expect(asked[0]).toMatchObject({ near: { repo: "acme/plan", slot: 3 } });
+    expect(runtime).toMatchObject({
+      plan: { id: plan.id, isNew: false },
+      resume: { sessionId: "s-plan", fromRun: plan.runId }
+    });
+    expect(
+      (runtime as { resume: Record<string, unknown> }).resume
+    ).not.toHaveProperty("fork");
+  });
+
+  /** A later edit wins over the version it revised, wherever it ran. */
+  it("builds from the session that filed the latest version", async () => {
+    const first = worktree(3);
+    const second = worktree(5);
+    const { asked, runtime } = await onParent(async (agent) => {
+      const plan = await planned(agent, first);
+      await filedBy(first, plan.runId, "s-first", plan);
+      const edit = planning(plan.id);
+      await preparePlanner(
+        { ...edit, parent: agent.pluginContext() },
+        placingPool(second).pool
+      );
+      const version = await file(plan.id, "# The plan\n\nDo less.");
+      await filedBy(second, edit.runId, "s-second", { id: plan.id, version });
+      return build(agent, plan.id, second);
+    });
+
+    expect(asked[0]).toMatchObject({ near: { repo: "acme/plan", slot: 5 } });
+    expect(runtime).toMatchObject({ resume: { sessionId: "s-second" } });
+  });
+
+  /**
+   * The conversation behind an older version would build a plan the person has
+   * since seen changed, so it never stands in for the latest one's.
+   */
+  it("starts fresh rather than carry on from an older version's session", async () => {
+    const first = worktree(3);
+    const { asked, runtime } = await onParent(async (agent) => {
+      const plan = await planned(agent, first);
+      await filedBy(first, plan.runId, "s-first", plan);
+      // An edit filed a newer version, and its workspace was since reclaimed:
+      // nothing records its session.
+      await preparePlanner(
+        { ...planning(plan.id), parent: agent.pluginContext() },
+        placingPool(worktree(5)).pool
+      );
+      await file(plan.id, "# The plan\n\nDo less.");
+      return build(agent, plan.id, first);
+    });
+
+    expect(asked[0]).not.toHaveProperty("near");
+    expect(runtime).not.toHaveProperty("resume");
+  });
+
+  /** A recovered turn reports the handle again, without the plan it filed. */
+  it("keeps the plan a session filed, and forgets a session found gone", async () => {
+    const stub = workspaceAt(`anthropic-coding-spec:${crypto.randomUUID()}`);
+    await stub.noteSession("run-1", {
+      sessionId: "s1",
+      plan: "p1",
+      version: 2
+    });
+    await stub.noteSession("run-1", { sessionId: "s1" });
+    expect(await stub.sessionOf("run-1")).toEqual({
+      sessionId: "s1",
+      plan: "p1",
+      version: 2
+    });
+    await stub.forgetSession("run-1");
+    expect(await stub.sessionOf("run-1")).toBeUndefined();
+  });
+
+  it("tells a conversation that is gone apart from a session that failed", () => {
+    const ended = (errors: string[]) =>
+      ({
+        session: { exitCode: 1, result: { isError: true, errors } }
+      }) as never;
+    expect(
+      notResumable(ended(["No conversation found with session ID: s1"]))
+    ).toBe(true);
+    expect(notResumable(ended(["API Error: 500"]))).toBe(false);
+    expect(notResumable({ session: { exitCode: 143 } } as never)).toBe(false);
+  });
+
+  it("tells the parent a run that found it gone to delegate again", () => {
+    expect(unresumableReport("write")).toMatch(
+      /Delegate again with the same plan/
+    );
+    expect(unresumableReport("plan")).toMatch(/claude_code_plan again/);
+  });
+});
+
+/** A worktree of a planning or writing session, in a workspace of its own. */
+function worktree(slot = 3): SessionPlace {
+  return {
+    workspaceName: `anthropic-coding-spec:${crypto.randomUUID()}`,
+    dir: "/workspace/plan",
+    branch: "anthropic-coding/p",
+    slot: { repo: "acme/plan", slot }
+  };
+}
+
+/** A pool that places every run in `place`, and records what it was asked. */
+function placingPool(place: SessionPlace) {
+  const asked: unknown[] = [];
+  const { pool, calls } = recordingPool();
+  return {
+    asked,
+    calls,
+    pool: {
+      ...pool,
+      resolve: async (ctx) => {
+        asked.push(ctx);
+        return place;
+      }
+    } satisfies SubtaskWorkspaces
+  };
+}
+
+/** The workspace object a session ran in, where its handle is recorded. */
+function workspaceAt(name: string) {
+  return env.ANTHROPIC_CODING_WORKSPACE.get(
+    env.ANTHROPIC_CODING_WORKSPACE.idFromName(name)
+  );
+}
 
 /** A pool that records what a session's hooks asked of it. */
 function recordingPool(
@@ -553,9 +853,14 @@ function recordingPool(
         dir: "/workspace/w",
         branch: "anthropic-coding/task-1/call_1"
       })),
-    reading: async () => ({ workspaceName: "w", dir: "/workspace/w" }),
     release: async (_ctx, options) => {
-      calls.push(options?.hold ? "release, held" : "release");
+      calls.push(
+        options?.hold
+          ? "release, held"
+          : options?.forgetBranch
+            ? "release, forgetting its branch"
+            : "release"
+      );
     },
     keep: async () => {
       calls.push("keep");
@@ -830,8 +1135,8 @@ describe("the branch a writing session is told about", () => {
     expect(brief).toMatch(/already holds earlier work:/);
   });
 
-  /** A reading session's copy is deleted, so asking it to commit wastes it. */
-  it("says nothing about a branch to a reading session", () => {
+  /** A scratchpad keeps what a session leaves in the tree, on no branch. */
+  it("says nothing about a branch to a session in a scratchpad", () => {
     expect(sessionBrief(TASK)).not.toContain("## Your branch");
   });
 });

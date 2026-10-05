@@ -396,31 +396,6 @@ describe("preparing a worktree for a writing session", () => {
     expect(pool.every()).toEqual([]);
   });
 
-  it("answers a reading session with the parent's own checkout", async () => {
-    const { subtasks } = harness({
-      selected: "acme/api",
-      checkout: CHECKOUT,
-      dirs: { "caller|acme/api": "/workspace/api" }
-    });
-
-    expect(await subtasks.reading()).toEqual({
-      workspaceName: "caller|acme/api",
-      dir: "/workspace/api"
-    });
-  });
-
-  it("asks the workspace a reading session reads in", async () => {
-    const { subtasks, admitted } = harness({
-      selected: "acme/api",
-      checkout: CHECKOUT,
-      dirs: { "caller|acme/api": "/workspace/api" },
-      refuse: true
-    });
-
-    await expect(subtasks.reading()).rejects.toThrow(/no credential/);
-    expect(admitted).toEqual(["caller|acme/api"]);
-  });
-
   it("delegates from the repository's pool while the parent is in one of its worktrees", async () => {
     const { subtasks } = harness({
       selected: worktreeRepo("acme/api", 4),
@@ -634,6 +609,98 @@ describe("handing a worktree to the next session", () => {
       );
       expect(calls).toEqual([]);
       expect(pool.rows()).toEqual([]);
+    }
+  );
+
+  /**
+   * A run carrying on from a conversation asks for the worktree that holds it —
+   * a planning session's transcript is in the workspace that ran it.
+   */
+  it("places a run in the worktree it asks for by `near`, when that one is free", async () => {
+    const { subtasks } = harness({
+      selected: "acme/api",
+      checkout: CHECKOUT,
+      tips: { ".": sha("origin/main") }
+    });
+    // Two worktrees, both free once released: the older would be taken.
+    const second = { ...ctx, runId: "detached:2" };
+    await subtasks.resolve(ctx);
+    await subtasks.resolve(second);
+    await subtasks.release(ctx);
+    await subtasks.release(second);
+
+    const place = await subtasks.resolve({
+      ...ctx,
+      runId: "detached:3",
+      near: { repo: "acme/api", slot: 1 }
+    });
+    expect(place.workspaceName).toBe(SLOT1);
+    expect(place.slot).toEqual({ repo: "acme/api", slot: 1 });
+  });
+
+  it("ignores a `near` in another repository's pool", async () => {
+    const { subtasks } = harness({
+      selected: "acme/api",
+      checkout: CHECKOUT,
+      tips: { ".": sha("origin/main") }
+    });
+    const second = { ...ctx, runId: "detached:2" };
+    await subtasks.resolve(ctx);
+    await subtasks.resolve(second);
+    await subtasks.release(ctx);
+    await subtasks.release(second);
+
+    expect(
+      await nameOf(
+        subtasks.resolve({
+          ...ctx,
+          runId: "detached:3",
+          near: { repo: "acme/other", slot: 1 }
+        })
+      )
+    ).toBe(SLOT0);
+  });
+
+  /** A planning session commits nothing, so its branch is no work to review. */
+  it("frees a worktree without its branch when asked to forget it", async () => {
+    const { subtasks, pool } = harness({
+      selected: "acme/api",
+      checkout: CHECKOUT,
+      tips: { ".": sha("origin/main") }
+    });
+    await subtasks.resolve(ctx);
+    await subtasks.release(ctx, { forgetBranch: true });
+
+    expect(pool.rows()[0]?.branch).toBeUndefined();
+    expect(pool.rows()[0]).toMatchObject({ previous: BRANCH_1 });
+    expect(isFree(pool.all("acme/api")[0]!)).toBe(true);
+  });
+
+  /**
+   * Without a branch a worktree is free whatever its tips read, so forgetting
+   * one must not take the hold on a tip it could not read, or on a commit.
+   */
+  it.each([
+    ["could not be read", { tipsThrow: true }],
+    ["holds a commit", { tips: { ".": "c1" } }]
+  ] as const)(
+    "keeps the branch it was asked to forget when a tip %s",
+    async (_label, over) => {
+      const { subtasks, pool } = harness({
+        selected: "acme/api",
+        checkout: CHECKOUT,
+        ...over
+      });
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+      try {
+        await subtasks.resolve(ctx);
+        await subtasks.release(ctx, { forgetBranch: true });
+      } finally {
+        warn.mockRestore();
+      }
+
+      expect(pool.rows()[0]?.branch).toBe(BRANCH_1);
+      expect(isFree(pool.all("acme/api")[0]!)).toBe(false);
     }
   );
 

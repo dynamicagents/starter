@@ -155,4 +155,52 @@ export class AnthropicCodingWorkspace extends WorkspaceObjectBase {
       }
     );
   }
+
+  /**
+   * The Claude Code session a run started here, and the plan it filed — what
+   * lets a later run continue that conversation. See `plannedSession` in
+   * `./plans.ts`.
+   *
+   * On this object rather than the agent's because the conversation is here: a
+   * session's transcript is under the workspace mount, in this object's storage
+   * — `SESSION_CONFIG_DIR` in `@dynamicagents/plugins/claude-code` — so a
+   * workspace that is reclaimed takes the record with the transcript it names.
+   * A record found is one whose conversation can be continued.
+   *
+   * It keeps the plan and its version once it has them: a recovered turn reports
+   * the session's handle again, without them.
+   */
+  async noteSession(runId: string, note: SessionNote): Promise<void> {
+    const key = `${SESSION_KEY}${runId}`;
+    const filed = note.plan
+      ? note
+      : await this.ctx.storage.get<SessionNote>(key);
+    await this.ctx.storage.put(key, {
+      sessionId: note.sessionId,
+      ...(filed?.plan ? { plan: filed.plan } : {}),
+      ...(filed?.version !== undefined ? { version: filed.version } : {})
+    });
+  }
+
+  /** A run's session, if this workspace still holds it. Starts no container. */
+  async sessionOf(runId: string): Promise<SessionNote | undefined> {
+    return await this.ctx.storage.get<SessionNote>(`${SESSION_KEY}${runId}`);
+  }
+
+  /** A session whose conversation turned out to be gone, so none resumes it. */
+  async forgetSession(runId: string): Promise<void> {
+    await this.ctx.storage.delete(`${SESSION_KEY}${runId}`);
+  }
+}
+
+/** Where {@link AnthropicCodingWorkspace.noteSession} keeps a run's session. */
+const SESSION_KEY = "claude-session:";
+
+/** A run's Claude Code session, as this workspace records it. */
+export interface SessionNote {
+  sessionId: string;
+  /** A plan this session filed a version of: a planning run's. */
+  plan?: string;
+  /** Which version: the sequence of the entry it filed on the plan's page. */
+  version?: number;
 }

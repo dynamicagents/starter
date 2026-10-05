@@ -21,7 +21,7 @@ import {
  *
  * A switch is `ActiveRepo.set` with the worktree's sentinel, and that is the
  * whole mechanism: every tool the parent has — `/repo`, the read-only file
- * tools, a reading session — resolves its workspace from that one selection on
+ * tools — resolves its workspace from that one selection on
  * each call, the way `scratch_open` already moves them all at once. So no tool
  * learns what a worktree is, and a worktree's checkout sits at the same path the
  * parent's own does.

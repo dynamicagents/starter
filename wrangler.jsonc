@@ -101,11 +101,10 @@
   //
   // **Nothing here caps how many run.** Running containers count against the
   // account's limits rather than a ceiling per entry, and for `anthropic-coding`
-  // that is what bounds the fan-out: a writing session works in a worktree of its
-  // own while the parent keeps one, so N writers at once want N+1 instances of
-  // `AnthropicCodingWorkspace` — `ANTHROPIC_CODING` in `src/config.ts` carries
-  // why. A reading session wants none: it runs in the parent's container, against
-  // the checkout already in it. A full fan-out plus its parent, three times over,
+  // that is what bounds the fan-out: a writing or planning session works in a
+  // worktree of its own while the parent keeps one, so N sessions at once want N+1
+  // instances of `AnthropicCodingWorkspace` — `ANTHROPIC_CODING` in
+  // `src/config.ts` carries why. A full fan-out plus its parent, three times over,
   // is around 4% of the concurrent vCPU Cloudflare documents per account, and 3%
   // of the memory. What the width costs is the bill, because memory and disk are billed
   // on provisioned resources for as long as an instance runs — the same reason a

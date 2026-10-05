@@ -273,14 +273,17 @@ export function sessionBrief(
     branch: string;
     submodules: readonly string[];
     continues: boolean;
+  },
+  plan?: {
     /** The plan it carries out, as the caller was shown it. */
-    plan?: string;
+    text: string;
+    /** Whether it carries on from the conversation that wrote the plan. */
+    resumed: boolean;
   }
 ): string {
   const parts = [task, "", GH_NOTE];
-  // Writing only. A reading session works in a copy that is deleted when it
-  // ends, and the plugin tells it so; a brief that asked it to commit would
-  // spend the session on work nobody will see.
+  // On a branch only. A scratchpad session has none, and keeps what it leaves
+  // in the tree, so a brief that asked it to commit would be wrong about both.
   if (writing) {
     parts.push(
       "",
@@ -288,8 +291,8 @@ export function sessionBrief(
       "",
       CHECK_NOTE
     );
-    if (writing.plan) parts.push("", planNote(writing.plan));
   }
+  if (plan) parts.push("", planNote(plan.text, plan.resumed));
   if (note) {
     parts.push("", "## The state of this workspace", "", note);
   }
@@ -299,8 +302,24 @@ export function sessionBrief(
 /**
  * The plan a writing session carries out, whole: the text the caller read, not
  * the parent's account of it — see `./plans.ts`.
+ *
+ * **Whole even when the session wrote it.** One carrying on from the planning
+ * conversation has every version it wrote in context, and the one approved is
+ * the one to build: stating it costs a page, and building another costs the
+ * review. That session is also still under the last thing it was told — that it
+ * plans and changes nothing — so its note says first that planning is over.
  */
-function planNote(plan: string): string {
+function planNote(plan: string, resumed: boolean): string {
+  if (resumed) {
+    return `## Carrying out your plan
+
+The plan you wrote in this conversation was approved, as it stands below. Planning is
+over: you are no longer in plan mode, so edit and run what the work needs. Carry the
+plan out. Where the work shows it is wrong, say so in your reply rather than quietly
+doing something else.
+
+${plan}`;
+  }
   return `## The plan
 
 This is the plan for the work above, as the person who asked for it read it. Carry it
@@ -314,24 +333,37 @@ ${plan}`;
  * What a **planning** session is told about its answer and, for an edit, about
  * the plan it changes. What each field of the answer is for is in the schema
  * the CLI hands it, so it is not said twice here.
+ *
+ * An edit that carries on from the conversation that wrote the plan is told
+ * only what is new — what the person said — since the plan, the code it read
+ * and these instructions are already in its context.
  */
 export function planBrief(
   task: string,
   note?: string,
-  editing?: { plan?: string; said: readonly string[] }
+  editing?: { plan?: string; said: readonly string[]; resumed?: boolean }
 ): string {
-  const parts = [
-    task,
-    "",
-    GH_NOTE,
-    "",
-    `## Your answer
+  const parts = editing?.resumed
+    ? [
+        task,
+        "",
+        `## Revising your plan
 
-You are writing a plan, not making the change: this is a copy of the checkout, and nothing
-you change in it is kept. Read what the change will touch, run what tells you how it
-behaves, and answer through the StructuredOutput tool.`
-  ];
-  if (editing?.plan) {
+The person read the plan you wrote and asked for the changes above. Revise it, and answer
+again through the StructuredOutput tool with the whole plan as it should now stand.`
+      ]
+    : [
+        task,
+        "",
+        GH_NOTE,
+        "",
+        `## Your answer
+
+You are writing a plan, not making the change: you are in Claude Code's plan mode, and
+anything that would change the tree is refused. Read what the change will touch, and
+answer through the StructuredOutput tool.`
+      ];
+  if (editing?.plan && !editing.resumed) {
     parts.push("", "## The plan you are changing", "", editing.plan);
   }
   if (editing && editing.said.length > 0) {
@@ -382,6 +414,34 @@ export function planReport(
       .join("\n\n");
   }
   return `**The planning session returned no plan, so nothing was filed.**\n\n${sessionReport(outcome)}`;
+}
+
+/**
+ * How the CLI refuses a `--resume` whose conversation is not where it looks: a
+ * `result` line, an error, this sentence in `errors`, no model call. Measured
+ * by the probe in `@dynamicagents/plugins`, which fails a version that answers
+ * any other way.
+ */
+const NO_CONVERSATION = "No conversation found";
+
+/** Whether a run that carried on from a conversation found it gone. */
+export function notResumable(outcome: SessionOutcome): boolean {
+  const result = outcome.session.result;
+  return (
+    result?.isError === true &&
+    (result.errors ?? []).some((error) => error.startsWith(NO_CONVERSATION))
+  );
+}
+
+/**
+ * What the parent is told when the conversation a run was to carry on from is
+ * gone. Nothing ran and nothing was spent, and its record is forgotten, so the
+ * same call again starts fresh from the plan's text.
+ */
+export function unresumableReport(kind: "plan" | "write"): string {
+  return kind === "plan"
+    ? "**The conversation that wrote this plan is gone from its workspace, so nothing was revised.** Nothing was spent. Call claude_code_plan again with the same plan and comment: the next session starts from the plan's text."
+    : "**The planning session's conversation is gone from its workspace, so nothing was built.** Nothing was spent and no branch has work on it. Delegate again with the same plan: the next session starts from the plan's text.";
 }
 
 /** Each listed repository and the commit it is on. */

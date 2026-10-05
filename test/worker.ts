@@ -28,7 +28,6 @@ import { CodingWorkflow } from "@/agents/coding/workflow";
 import { AnthropicCodingAgent } from "@/agents/anthropic-coding/agent";
 import {
   AnthropicCodingPlannerChild,
-  AnthropicCodingReaderChild,
   AnthropicCodingWriterChild
 } from "@/agents/anthropic-coding/children";
 import { AnthropicCodingHost } from "@/agents/anthropic-coding/host";
@@ -280,7 +279,7 @@ export class TestAnthropicCodingWriterChild extends AnthropicCodingWriterChild {
 
 /**
  * The planner's spec with a reduced `prepare`: it opens a plan, or takes the one
- * named, and hands over the stand-in workspace in place of a reading copy. It
+ * named, and hands over the stand-in workspace in place of a worktree. It
  * does not check ownership or the lock, which `preparePlanner` does and
  * `anthropic-coding.spec.ts` covers. `settle` is the real one.
  */
@@ -302,26 +301,6 @@ const PLANNER_SPEC = {
 
 export class TestAnthropicCodingPlannerChild extends AnthropicCodingPlannerChild {
   static override spec = PLANNER_SPEC;
-  override getModel(): ThinkModel {
-    return scriptedModel(childRule);
-  }
-  override getTools(): ToolSet {
-    return { ...super.getTools(), child_sleep: sleepTool("child") };
-  }
-}
-
-/** The reader's spec, with the same stand-in workspace as the writer's. */
-const READER_SPEC = {
-  ...AnthropicCodingReaderChild.spec,
-  prepare: async () => ({
-    workspaceName: "test-workspace",
-    dir: "/workspace/t"
-  }),
-  settle: async () => {}
-} as SubAgentSpec<never, never>;
-
-export class TestAnthropicCodingReaderChild extends AnthropicCodingReaderChild {
-  static override spec = READER_SPEC;
   override getModel(): ThinkModel {
     return scriptedModel(childRule);
   }
@@ -355,11 +334,7 @@ export class TestAnthropicCodingAgent extends AnthropicCodingAgent {
     });
   }
   override getSubAgents(): SubAgentClass[] {
-    return [
-      TestAnthropicCodingWriterChild,
-      TestAnthropicCodingPlannerChild,
-      TestAnthropicCodingReaderChild
-    ];
+    return [TestAnthropicCodingWriterChild, TestAnthropicCodingPlannerChild];
   }
   override getTools(): ToolSet {
     return { ...super.getTools(), test_wait: sleepTool("parent") };

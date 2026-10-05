@@ -82,17 +82,22 @@ describe("contract skew between the repos", () => {
 });
 
 describe("tuning", () => {
-  it("runs anthropic-coding's parent on the full-size model, and only it", () => {
-    expect(ANTHROPIC_CODING.modelId).not.toBe(CODING.modelId);
-    expect(GENERIC.modelId).toBe(CODING.modelId);
-    // Everything else is `coding`'s, so a change to one reaches the other.
-    expect({ ...ANTHROPIC_CODING, modelId: CODING.modelId }).toEqual(CODING);
+  it("runs every agent's turns on the flash model", () => {
+    expect(GENERIC.modelId).toBe("@cf/zai-org/glm-5.3-flash");
+    expect(CODING.modelId).toBe(GENERIC.modelId);
+    // anthropic-coding is `coding`'s tuning whole, so a change to one reaches
+    // the other.
+    expect(ANTHROPIC_CODING).toEqual(CODING);
   });
 
-  it.each([GENERIC, CODING, ANTHROPIC_CODING])(
-    "compacts on the flash model",
+  it("compacts generic on the flash model", () => {
+    expect(GENERIC.compactionModelId).toBe("@cf/zai-org/glm-5.3-flash");
+  });
+
+  it.each([CODING, ANTHROPIC_CODING])(
+    "compacts a coding agent on the full-size model",
     (tuning) => {
-      expect(tuning.compactionModelId).toBe("@cf/zai-org/glm-5.3-flash");
+      expect(tuning.compactionModelId).toBe("@cf/zai-org/glm-5.3");
     }
   );
 

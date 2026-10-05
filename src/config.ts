@@ -93,13 +93,9 @@ export const ANTHROPIC_CODING: AgentTuning = { ...CODING };
  * including two full `tsc` runs; it is recorded at 28 s in
  * `src/workspace/install-plan.ts` and was observed taking 3-5 minutes here.
  *
- * Two things want the second core:
- *
- * 1. **A reading session shares the parent's container.** Several run at once
- *    against one checkout — that is the point of not giving them one each — and
- *    on a single core they contend rather than parallelise.
- * 2. The build itself is what the measurement above is about, and the work is
- *    inside the container where the Worker cannot help.
+ * What wants the second core is the build itself: it is what the measurement
+ * above is about, and the work is inside the container where the Worker cannot
+ * help.
  *
  * It is not the more expensive choice it looks like. Cloudflare bills memory and
  * disk on *provisioned* resources for as long as an instance runs, but CPU on

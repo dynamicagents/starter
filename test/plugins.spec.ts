@@ -9,7 +9,7 @@ import {
 import { GenericChild } from "@/agents/generic/children";
 import { CodingChild } from "@/agents/coding/children";
 import {
-  AnthropicCodingReaderChild,
+  AnthropicCodingPlannerChild,
   AnthropicCodingWriterChild
 } from "@/agents/anthropic-coding/children";
 import { resolveInstallCommand } from "@dynamicagents/plugins/workspace";
@@ -26,7 +26,7 @@ const SPECS: [string, SubAgentSpec<unknown, unknown>][] = [
   ["GenericChild", GenericChild.spec],
   ["CodingChild", CodingChild.spec],
   ["AnthropicCodingWriterChild", AnthropicCodingWriterChild.spec],
-  ["AnthropicCodingReaderChild", AnthropicCodingReaderChild.spec]
+  ["AnthropicCodingPlannerChild", AnthropicCodingPlannerChild.spec]
 ] as [string, SubAgentSpec<unknown, unknown>][];
 
 describe("a sub-agent this repo binds", () => {
@@ -46,7 +46,7 @@ describe("a sub-agent this repo binds", () => {
       GenericChild: false,
       CodingChild: true,
       AnthropicCodingWriterChild: true,
-      AnthropicCodingReaderChild: true
+      AnthropicCodingPlannerChild: true
     });
   });
 

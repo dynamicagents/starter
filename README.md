@@ -203,18 +203,23 @@ retry.
 
 Planning, approving and building are the agent's own tool calls, so whether a change
 gets a plan — and whether the caller approves it first — is the agent's to judge and the
-caller's to set, in what the agent remembers about them:
+caller's to set, in what the agent remembers about them. A small, clear change skips
+all three and goes straight to `claude_code`.
 
-1. **`claude_code_plan`** runs a Claude Code session in a throwaway copy of the checkout,
-   which answers through `--json-schema`: a title, the plan, and a short account for the
-   agent. The plan is filed as an [artifact](https://github.com/dynamicagents/core) — a
-   page anyone with its link can read, kept 30 days — and the agent gets its **id**,
-   never its text. Called again with the id, it edits the plan on the same page.
+1. **`claude_code_plan`** runs a Claude Code session in a worktree of its own, in Claude
+   Code's plan mode — it reads, and changes nothing — which answers through
+   `--json-schema`: a title, the plan, and a short account for the agent. The plan is
+   filed as an [artifact](https://github.com/dynamicagents/core) — a page anyone with its
+   link can read, kept 30 days — and the agent gets its **id**, never its text. Called
+   again with the id, the session that wrote the plan revises it on the same page.
 2. **`ask_user`** with the plan's id asks the caller to approve it, with its link:
    Approve, Reject, or a comment, which the agent turns into an edit. Approving locks
    the plan. A caller whose memory says they do not approve plans is not asked.
-3. **`claude_code`** with the plan's id gives the writing session the plan whole — the
-   text the caller read, not the agent's account of it.
+3. **`claude_code`** with the plan's id **carries on from the planning session's
+   conversation**, forked, in the worktree that holds it — so the build starts knowing
+   what the planner read and found — and is given the plan whole, the text the caller
+   read. Where that worktree is busy or gone, it starts fresh from the plan.
+   `prepareWriter` in [`children.ts`](src/agents/anthropic-coding/children.ts) has how.
 
 A plan belongs to the caller whose agent opened it
 ([`plans.ts`](src/agents/anthropic-coding/plans.ts)): a link is shared by design, but only

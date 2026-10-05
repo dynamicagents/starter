@@ -28,7 +28,6 @@ import {
 } from "@/workspace/worktree-pool";
 import {
   AnthropicCodingPlannerChild,
-  AnthropicCodingReaderChild,
   AnthropicCodingWriterChild,
   forgetKept,
   keptNote
@@ -117,11 +116,7 @@ export class AnthropicCodingAgent extends StepAgent<Env> {
 
   /** Writing first, then planning: the order the delegating model is shown them. */
   override getSubAgents(): SubAgentClass[] {
-    return [
-      AnthropicCodingWriterChild,
-      AnthropicCodingPlannerChild,
-      AnthropicCodingReaderChild
-    ];
+    return [AnthropicCodingWriterChild, AnthropicCodingPlannerChild];
   }
 
   /**

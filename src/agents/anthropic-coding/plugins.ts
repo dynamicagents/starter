@@ -50,7 +50,7 @@ export function container(env: Env, name: () => string): ComputerConfig {
   return workspaceContainer(env.ANTHROPIC_CODING_WORKSPACE, name);
 }
 
-/** Stop a run's session in a workspace: both execs, and a reader's copy. */
+/** Stop a run's session in a workspace: both execs. */
 export async function stopSession(
   env: Env,
   workspace: string,

@@ -160,6 +160,8 @@ export function isFree(worktree: Worktree): boolean {
  * - For `continue`, the worktree holding that branch, unless a session is in it.
  *   When none holds it — it was pushed and released, or its worktree went to
  *   another run — a free one adopts it from the remote.
+ * - Otherwise `near`, when that slot is free: it holds a conversation the run
+ *   continues — a planning session's transcript is in the workspace that ran it.
  * - Otherwise the free worktree used longest ago, or a new slot. The pool grows
  *   with concurrency and has no ceiling of its own. Its branch is `branch`, or
  *   {@link runBranch}, and never one a worktree already holds.
@@ -167,7 +169,13 @@ export function isFree(worktree: Worktree): boolean {
 export function claim(
   store: PoolStore,
   repo: string,
-  ctx: { taskId: string; runId: string; continue?: string; branch?: string },
+  ctx: {
+    taskId: string;
+    runId: string;
+    continue?: string;
+    branch?: string;
+    near?: number;
+  },
   now: number
 ): Worktree {
   const rows = store.all(repo);
@@ -195,7 +203,12 @@ export function claim(
     );
   }
 
-  const free = rows.filter(isFree).sort((a, b) => a.usedAt - b.usedAt)[0];
+  const near =
+    ctx.continue === undefined && ctx.near !== undefined
+      ? rows.find((row) => row.slot === ctx.near && isFree(row))
+      : undefined;
+  const free =
+    near ?? rows.filter(isFree).sort((a, b) => a.usedAt - b.usedAt)[0];
   const slot =
     holder?.slot ??
     free?.slot ??

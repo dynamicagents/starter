@@ -5,6 +5,7 @@ import {
 } from "@dynamicagents/core/artifacts";
 import { CLAUDE_CODE_WRITE_INPUT } from "@dynamicagents/plugins/claude-code";
 import { z } from "zod";
+import type { SessionNote } from "./workspace";
 
 /**
  * A plan, as `anthropic-coding` keeps one: an artifact of its own, which a
@@ -50,7 +51,7 @@ export const WRITE_INPUT = CLAUDE_CODE_WRITE_INPUT.extend({
     .string()
     .optional()
     .describe(
-      "The id of a plan to carry out — one claude_code_plan returned. The session is given the plan whole, so brief it on the work rather than restating the plan."
+      "The id of an approved plan to carry out — one claude_code_plan returned. The session carries on from the planning session's conversation where it can, and is given the plan whole either way, so brief it on the work rather than restating the plan or what the planner found."
     ),
   branch: z
     .string()
@@ -64,16 +65,20 @@ export type WriteInput = z.infer<typeof WRITE_INPUT>;
 
 /** What the parent model is told `claude_code_plan` does. */
 export const PLANNER_DESCRIPTION = [
-  "Have a Claude Code session work out a plan for a change, in a throwaway copy",
-  "of your checkout: it reads the code and can run the tests, and changes",
-  "nothing. The plan is filed on a page of its own. What comes back is the plan's",
-  "id, its title and the session's account of it — not the plan itself: a",
-  "writing session given the id reads it whole, and so does the person you ask to",
-  "approve it, who gets its link with your question.",
+  "Have a Claude Code session work out a plan for a change, in a worktree of its",
+  "own and in Claude Code's plan mode: it reads the code and changes nothing, and",
+  "it cannot run the tests. The plan is filed on a page of its own. What comes",
+  "back is the plan's id, its title and the session's account of it — not the",
+  "plan itself: the person you ask to approve it reads it whole, from the link",
+  "that goes with your question.",
   "",
   "To change a plan, call this again with `plan` set to its id, and say what",
-  "to change; the new version goes on the same page. A plan that was approved is",
-  "locked and cannot change — write a new one instead.",
+  "to change: the session that wrote it revises it where it can, and the new",
+  "version goes on the same page. A plan that was approved is locked and cannot",
+  "change — write a new one instead.",
+  "",
+  "To build an approved plan, pass its id to claude_code as `plan`: that session",
+  "carries on from this one's conversation, so it starts knowing what it found.",
   "",
   "It runs in the background, and cannot ask you anything mid-run."
 ].join("\n");
@@ -94,7 +99,7 @@ export const PLAN_OUTPUT = {
     plan: {
       type: "string",
       description:
-        "The plan, in Markdown, for the person who approves it: what will change and where, what stays as it is, and how the result will be checked. Complete on its own — the session that carries it out is given this, and nothing of your investigation. What you measured on the base, such as a test count, goes in it as fact, so that session compares against it instead of measuring it again. Name no branch: that session is given one, and it is the pull request's head."
+        "The plan, in Markdown, for the person who approves it: what will change and where, what stays as it is, and how the result will be checked. Complete on its own — the session that carries it out usually continues this conversation, but may start without it and have only this. What you established about the base goes in it as fact, so that session compares against it instead of finding it out again. Name no branch: that session is given one, and it is the pull request's head."
     },
     lastReply: {
       type: "string",
@@ -174,6 +179,111 @@ export function ownsPlan(storage: DurableObjectStorage, id: string): boolean {
   );
 }
 
+// --- which session wrote a plan ---------------------------------------------
+
+/**
+ * Every planning run on a plan, and where it ran: what a later run needs to
+ * continue the conversation that wrote it — see {@link plannedSession}.
+ *
+ * Recorded when the run is placed, so it says where the session ran and nothing
+ * about how it went: whether it filed a version is the workspace's record,
+ * which a reclaimed workspace takes with the transcript.
+ */
+const RUNS_TABLE = "anthropic_coding_plan_runs";
+
+function ensureRuns(storage: DurableObjectStorage): void {
+  storage.sql.exec(
+    `CREATE TABLE IF NOT EXISTS ${RUNS_TABLE} (run_id TEXT PRIMARY KEY, plan_id TEXT NOT NULL, workspace TEXT NOT NULL, repo TEXT, slot INTEGER, created_at INTEGER NOT NULL)`
+  );
+}
+
+/** Where a planning run on `planId` was placed. Once per run, however often prepared. */
+export function recordPlanRun(
+  storage: DurableObjectStorage,
+  run: {
+    runId: string;
+    planId: string;
+    workspaceName: string;
+    slot?: { repo: string; slot: number };
+  }
+): void {
+  ensureRuns(storage);
+  const now = Date.now();
+  storage.sql.exec(
+    `DELETE FROM ${RUNS_TABLE} WHERE created_at < ?`,
+    now - ARTIFACT_RETENTION_MS
+  );
+  storage.sql.exec(
+    `INSERT OR IGNORE INTO ${RUNS_TABLE} (run_id, plan_id, workspace, repo, slot, created_at) VALUES (?, ?, ?, ?, ?, ?)`,
+    run.runId,
+    run.planId,
+    run.workspaceName,
+    run.slot?.repo ?? null,
+    run.slot?.slot ?? null,
+    now
+  );
+}
+
+/** The conversation that wrote a plan's latest version, and where it is. */
+export interface PlannedSession {
+  runId: string;
+  sessionId: string;
+  workspaceName: string;
+  /** Its worktree, to be placed in again; none for a scratchpad. */
+  near?: { repo: string; slot: number };
+}
+
+/**
+ * The newest planning run on `planId` that filed a version of it and whose
+ * workspace still holds its session — the conversation an edit revises and a
+ * build carries on from. None when there is no such run, and the run then
+ * starts fresh from the plan's text.
+ *
+ * Newest first, so a later edit wins over the version it revised; a run that
+ * filed nothing — it failed, or the plan was locked under it — is passed over
+ * rather than continued. `except` is the run asking, whose own row a repeated
+ * `prepare` has already written.
+ */
+export async function plannedSession(
+  storage: DurableObjectStorage,
+  planId: string,
+  sessionOf: (
+    workspaceName: string,
+    runId: string
+  ) => Promise<SessionNote | undefined>,
+  except?: string
+): Promise<PlannedSession | undefined> {
+  ensureRuns(storage);
+  const runs = storage.sql
+    .exec<{
+      run_id: string;
+      workspace: string;
+      repo: string | null;
+      slot: number | null;
+    }>(
+      `SELECT run_id, workspace, repo, slot FROM ${RUNS_TABLE} WHERE plan_id = ? ORDER BY created_at DESC, rowid DESC`,
+      planId
+    )
+    .toArray();
+  for (const run of runs) {
+    if (run.run_id === except) continue;
+    // Unreadable reads as not there: the run starts fresh, which it can.
+    const note = await sessionOf(run.workspace, run.run_id).catch(
+      () => undefined
+    );
+    if (note?.plan !== planId) continue;
+    return {
+      runId: run.run_id,
+      sessionId: note.sessionId,
+      workspaceName: run.workspace,
+      ...(run.repo !== null && run.slot !== null
+        ? { near: { repo: run.repo, slot: run.slot } }
+        : {})
+    };
+  }
+  return undefined;
+}
+
 /** A plan as a session is given it, or why it cannot be. */
 export type PlanLookup =
   | {
@@ -219,10 +329,16 @@ export async function lookUpPlan(
 
 /** The latest version of the plan on a page, or none yet. */
 export function latestPlan(page: readonly ArtifactEntry[]): string | undefined {
+  const at = lastPlanIndex(page);
+  return at < 0 ? undefined : page[at]!.text;
+}
+
+/** Where on a page its latest version is, or -1 for none yet. */
+export function lastPlanIndex(page: readonly ArtifactEntry[]): number {
   for (let i = page.length - 1; i >= 0; i--) {
-    if (page[i]!.label === PLAN_LABEL) return page[i]!.text;
+    if (page[i]!.label === PLAN_LABEL) return i;
   }
-  return undefined;
+  return -1;
 }
 
 /** A version of the plan as it is filed: its title over it. */

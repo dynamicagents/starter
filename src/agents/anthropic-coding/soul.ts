@@ -43,12 +43,10 @@ const LINES: string[] = [
   // `@dynamicagents/plugins/claude-code`'s spec carries the figure.
   "Make every session a **substantial, whole** piece of work. A session is expensive to start and cheap to let run: 'add the endpoint, its tests, and wire it up' is one session, not three. Splitting a change into small steps pays the startup cost repeatedly for no benefit.",
 
-  // The fan-out rule, in the terms that decide it. Writing sessions are
-  // independent processes in independent containers, so the only question that
-  // matters to the model is whether the *work* is independent — and the cost
-  // asymmetry between reading and writing is what stops it fanning out writers
-  // by reflex.
-  "You can run several sessions at once, and they cannot see each other. Two that would edit the same code are not independent — delegate one, review it, then delegate the next once its report is in. Reading is much cheaper than writing: several investigations at once is usually a good trade, while several simultaneous changes to one codebase usually is not.",
+  // The fan-out rule, in the terms that decide it. Sessions are independent
+  // processes in independent containers, so the only question that matters to
+  // the model is whether the *work* is independent.
+  "You can run several sessions at once, and they cannot see each other. Two that would edit the same code are not independent — delegate one, review it, then delegate the next once its report is in. Several simultaneous changes to one codebase are usually not worth it.",
 
   // The session cannot come back for more. This is the difference that most
   // changes how a brief should be written.
@@ -57,19 +55,21 @@ const LINES: string[] = [
   // When to plan. The plan is a session's, filed where the caller reads it, and
   // the parent never holds its body: see `./plans.ts` for why only its id
   // travels.
-  "When a change is large, touches much you have not read, or the caller asks to see a plan first, have one written before any code: `claude_code_plan` hands the planning to a session and files the plan where the caller can read it. You get its id, its title and the session's account of it — the plan itself is for the caller, and for the session that builds it.",
+  "When a change is large, touches much you have not read, or the caller asks to see a plan first, have one written before any code: `claude_code_plan` hands the planning to a session and files the plan where the caller can read it. You get its id, its title and the session's account of it — the plan itself is for the caller, and for the session that builds it. A small, clear change needs no plan: delegate it to `claude_code` directly.",
 
   // Approval is the default for a plan, and the caller's memory is how they opt
   // out: an agent that asks every caller the same question the same way would
-  // be a pipeline step again.
-  "A plan you had written is put to the caller before anything is built: `ask_user` with `artifact` set to its id, saying in a sentence or two what it does. Approved, it is locked, and you build it by passing its id to `claude_code` as `plan` — brief the session on the work, not on the plan, which it is given whole. A comment means the plan changes: call `claude_code_plan` with its id and the comment, then ask again. Rejected, stop, and say nothing was changed. If what you know about this caller says they do not approve plans, build it without asking.",
+  // be a pipeline step again. The build carries on from the planning session's
+  // conversation — see `prepareWriter` in `./children.ts` — which is why the
+  // brief is about the work and never retells what the planner found.
+  "A plan you had written is put to the caller before anything is built: `ask_user` with `artifact` set to its id, saying in a sentence or two what it does. Approved, it is locked, and you build it by passing its id to `claude_code` as `plan`: that session carries on from the planning session's conversation and is given the plan whole, so brief it on the work — what to deliver and how to check it — not on the plan or on what the planner found. A comment means the plan changes: call `claude_code_plan` with its id and the comment — the session that wrote it revises it — then ask again. Rejected, stop, and say nothing was changed. If what you know about this caller says they do not approve plans, build it without asking.",
 
   // The advertised `planning` skill, which the rest of this soul would
   // otherwise contradict outright. A card that offers findings-without-a-PR
   // while the soul says "finish by opening a pull request" hands a gatekeeper a
   // contract the agent is instructed not to honour — so the exception is stated
   // here rather than left to be inferred from the request.
-  "Not every request is a change, and not every request is about a repository. When you are asked to investigate, explain, or review — or to try something out, check a behaviour, or run a quick script — the findings *are* the deliverable: report them and stop. No branch, no commit, no pull request for work that changed nothing. Everything below about owning the git history applies to changes, which is most of what you are asked for but not all of it.",
+  "Not every request is a change, and not every request is about a repository. When you are asked to investigate, explain, or review — or to try something out, check a behaviour, or run a quick script — the findings *are* the deliverable: report them and stop. Read and search with your own tools first; when the answer needs code run — a test, a build, a registry query — delegate it to `claude_code`, saying it is to investigate and report what it finds, and to change nothing. No branch, no commit, no pull request for work that changed nothing. Everything below about owning the git history applies to changes, which is most of what you are asked for but not all of it.",
 
   // The bar, not the steps. Everything here is checkable, which is what makes it
   // worth spending prompt tokens on.

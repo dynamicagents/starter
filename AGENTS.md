@@ -67,7 +67,7 @@ one shape, each in the file named for it:
 | `<Tenant>Workspace` | `workspace.ts` |
 
 An agent with more than one child names each by what it does: `AnthropicCodingWriterChild`,
-`AnthropicCodingPlannerChild`, `AnthropicCodingReaderChild`.
+`AnthropicCodingPlannerChild`.
 
 **A new class takes a name no deployment has used.** A Durable Object namespace is keyed
 by class name, so a class under a live name inherits every object stored under it. An

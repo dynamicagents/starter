@@ -8,7 +8,6 @@ import { requireArtifactsStub } from "@dynamicagents/core/artifacts";
 import { SubAgent } from "@dynamicagents/core/subagent";
 import {
   CLAUDE_CODE_AGENT,
-  CLAUDE_CODE_READER_AGENT,
   claudeCodeModel,
   type RateLimitInfo,
   type SessionEnd,
@@ -24,13 +23,14 @@ import {
 } from "@dynamicagents/plugins/workspace";
 import {
   readSubmodules,
+  type RunRef,
   type SessionPlace,
   type SubtaskWorkspaces
 } from "@/workspace/subtask-workspace";
-import { CLAUDE_CODE_SESSION } from "@/config";
 import { claudeCodeConfig } from "./claude-code";
 import {
   createPlan,
+  lastPlanIndex,
   latestPlan,
   lookUpPlan,
   PLAN_INPUT,
@@ -38,12 +38,16 @@ import {
   PLAN_OUTPUT,
   PlanAnswer,
   PLANNER_DESCRIPTION,
+  plannedSession,
   planText,
+  recordPlanRun,
   WRITE_INPUT,
+  type PlannedSession,
   type PlanInput,
   type WriteInput
 } from "./plans";
-import { container, sessionWorkspaces, stopSession } from "./plugins";
+import { container, sessionWorkspaces } from "./plugins";
+import type { SessionNote } from "./workspace";
 import {
   COUNT_COMMITS,
   DISCARD,
@@ -51,11 +55,13 @@ import {
   READ_HEADS,
   STOPPED_EXIT,
   needsWarning,
+  notResumable,
   planBrief,
   planReport,
   sessionBrief,
   sessionReport,
   tabbed,
+  unresumableReport,
   warningPrompt,
   type RepoStart,
   type Uncommitted,
@@ -165,36 +171,60 @@ function placeOf(runtime: Record<string, unknown> | undefined): SessionPlace {
 }
 
 /**
- * A writing session gets a worktree of its own, on its branch.
+ * A session gets a worktree of its own, on its branch.
  *
  * A claim this run made and will never use is released before the refusal
  * goes back: the run has not started, so no `settle` comes to free it, and a
  * claim left live is passed over for good.
  */
-export async function claimSession(
+async function claimPlace(
   workspaces: SubtaskWorkspaces,
-  ctx: { input: WriteInput; taskId: string; runId: string }
-): Promise<Record<string, unknown>> {
-  const run = { taskId: ctx.taskId, runId: ctx.runId };
+  ctx: Parameters<SubtaskWorkspaces["resolve"]>[0]
+): Promise<SessionPlace> {
   try {
-    return runtimeOf(
-      await workspaces.resolve({
-        ...run,
-        // An empty name is no name: a model may fill an optional string with
-        // one, and refusing it would fail a call that asked for nothing.
-        ...(ctx.input.continue ? { continue: ctx.input.continue } : {}),
-        ...(ctx.input.branch ? { branch: ctx.input.branch } : {})
-      })
-    );
+    return await workspaces.resolve(ctx);
   } catch (err) {
-    await workspaces.release(run).catch((released: unknown) =>
+    await releaseUnused(workspaces, ctx);
+    throw err;
+  }
+}
+
+async function releaseUnused(
+  workspaces: SubtaskWorkspaces,
+  run: RunRef
+): Promise<void> {
+  await workspaces
+    .release({ taskId: run.taskId, runId: run.runId })
+    .catch((released: unknown) =>
       console.warn("[anthropic-coding] could not release an unused worktree", {
-        runId: ctx.runId,
+        runId: run.runId,
         err: String(released)
       })
     );
-    throw err;
+}
+
+/**
+ * A writing session's worktree, on the branch its input names or one of its
+ * own — in the worktree `near` names when that one is free.
+ */
+export async function claimSession(
+  workspaces: SubtaskWorkspaces,
+  ctx: {
+    input: WriteInput;
+    taskId: string;
+    runId: string;
+    near?: { repo: string; slot: number };
   }
+): Promise<SessionPlace> {
+  return claimPlace(workspaces, {
+    taskId: ctx.taskId,
+    runId: ctx.runId,
+    // An empty name is no name: a model may fill an optional string with
+    // one, and refusing it would fail a call that asked for nothing.
+    ...(ctx.input.continue ? { continue: ctx.input.continue } : {}),
+    ...(ctx.input.branch ? { branch: ctx.input.branch } : {}),
+    ...(ctx.near ? { near: ctx.near } : {})
+  });
 }
 
 /**
@@ -206,24 +236,44 @@ export async function claimSession(
 export async function settleSession(
   workspaces: SubtaskWorkspaces,
   storage: DurableObjectStorage,
-  ctx: Pick<SubAgentSettleContext<Env>, "taskId" | "runId" | "result">
+  ctx: Pick<SubAgentSettleContext<Env>, "taskId" | "runId" | "result">,
+  options: { forgetBranch?: boolean } = {}
 ): Promise<void> {
   const run = { taskId: ctx.taskId, runId: ctx.runId };
-  if (ctx.result.status === "completed") return workspaces.release(run);
+  const forget = options.forgetBranch ? { forgetBranch: true } : {};
+  if (ctx.result.status === "completed") {
+    return workspaces.release(run, forget);
+  }
   const kept = await workspaces.keep(run);
   if (kept.note) keepNote(storage, ctx.taskId, ctx.runId, kept.note);
-  await workspaces.release(run, { hold: !kept.settled });
+  // A worktree held for work it could not secure keeps its branch, which is
+  // how its work is found.
+  await workspaces.release(
+    run,
+    kept.settled ? { hold: false, ...forget } : { hold: true }
+  );
 }
 
 /**
  * A writing session gets a worktree of its own, and the plan it carries out if
  * it names one — checked before the worktree is claimed, so a plan that is not
  * the caller's refuses the run with nothing to release.
+ *
+ * **A plan is built by carrying on from the conversation that wrote it**, which
+ * already holds everything the planning session read and found. That
+ * conversation is in the workspace that ran it, so the build asks for that
+ * worktree, and forks the conversation if it gets it: the build gets a session
+ * of its own, and the plan's stays whole for another build. Anywhere else it
+ * starts fresh from the plan's text, as a build always could.
+ *
+ * `workspaces` is the parent's own unless a spec hands it another.
  */
 export async function prepareWriter(
-  ctx: SubAgentPrepareContext<WriteInput, Env>
+  ctx: SubAgentPrepareContext<WriteInput, Env>,
+  workspaces: SubtaskWorkspaces = sessionWorkspaces(ctx.parent)
 ): Promise<Record<string, unknown>> {
   const plan = ctx.input.plan;
+  let planned: PlannedSession | undefined;
   if (plan !== undefined) {
     const found = await lookUpPlan(ctx.parent.env, ctx.parent.storage, plan);
     if (!found.ok) throw new Error(`claude_code: ${found.reason}`);
@@ -232,84 +282,99 @@ export async function prepareWriter(
         `claude_code: the plan \`${plan}\` has nothing on it yet — its planning session wrote no plan.`
       );
     }
+    planned = await plannedSession(
+      ctx.parent.storage,
+      plan,
+      sessionLookup(ctx.parent.env),
+      ctx.runId
+    );
   }
-  const runtime = await claimSession(sessionWorkspaces(ctx.parent), ctx);
-  return plan === undefined ? runtime : { ...runtime, [PLAN_KEY]: plan };
+  const place = await claimSession(workspaces, {
+    ...ctx,
+    ...(planned?.near ? { near: planned.near } : {})
+  });
+  const resume = carryOn(planned, place, { fork: true });
+  return {
+    ...runtimeOf(place),
+    ...(plan === undefined ? {} : { [PLAN_KEY]: plan }),
+    ...(resume ? { [RESUME_KEY]: resume } : {})
+  };
 }
 
 const settleWriter = (ctx: SubAgentSettleContext<Env>): Promise<void> =>
   settleSession(sessionWorkspaces(ctx.parent), ctx.parent.storage, ctx);
-
-/**
- * How long a reading session holds its container: the install it may wait out
- * first and the session itself, each bounded by the session's timeout.
- */
-const READING_HOLD_MS = 2 * CLAUDE_CODE_SESSION.timeoutMs + 5 * 60_000;
 
 function workspaceStub(env: Env, name: string) {
   const binding = env.ANTHROPIC_CODING_WORKSPACE;
   return binding.get(binding.idFromName(name));
 }
 
+/** How a `prepare` asks a workspace for a run's session. */
+function sessionLookup(env: Env) {
+  return (workspaceName: string, runId: string) =>
+    workspaceStub(env, workspaceName).sessionOf(runId);
+}
+
+/** Where a run's conversation to carry on from is kept in what `prepare` hands it. */
+const RESUME_KEY = "resume";
+
+/** A conversation a run carries on from, as `prepare` hands it over. */
+interface CarryOn {
+  sessionId: string;
+  /** Under a new session id — a build, which leaves the plan's own whole. */
+  fork?: true;
+  /** The run that wrote it, whose record goes if the conversation is gone. */
+  fromRun: string;
+}
+
 /**
- * A reading session runs detached in the parent's own container, and the task
- * that started it can settle first, releasing that container. The hold defers
- * the release to the session's `settle`; `hold` on the workspace object has the
- * rest.
+ * The conversation a run placed in `place` carries on from: `planned`'s, when
+ * the run landed in the workspace that holds it. A scratchpad is the parent's
+ * own and always does; a worktree does when it was free to be had again.
  */
-async function holdForReading(
-  env: Env,
+function carryOn(
+  planned: PlannedSession | undefined,
   place: SessionPlace,
-  runId: string
-): Promise<void> {
-  await workspaceStub(env, place.workspaceName).hold(
-    runId,
-    Date.now() + READING_HOLD_MS
-  );
-}
-
-/** A reading session works in a throwaway copy of the parent's own checkout. */
-async function prepareReader({
-  parent,
-  runId
-}: SubAgentPrepareContext<unknown, Env>): Promise<Record<string, unknown>> {
-  const place = await sessionWorkspaces(parent).reading();
-  await holdForReading(parent.env, place, runId);
-  return runtimeOf(place);
-}
-
-/**
- * A reading session holds no worktree, only its container, which it lets go of
- * here. One that did not complete is stopped first, which also deletes its copy:
- * a run that errored has no drain left to do either.
- */
-async function settleReader({
-  runId,
-  runtime,
-  result,
-  parent
-}: SubAgentSettleContext<Env>): Promise<void> {
-  const name = workspaceNameFromRuntime(runtime);
-  if (!name) return;
-  try {
-    if (result.status !== "completed")
-      await stopSession(parent.env, name, runId);
-  } finally {
-    await workspaceStub(parent.env, name).unhold(runId);
+  options: { fork: boolean }
+): CarryOn | undefined {
+  if (!planned || planned.workspaceName !== place.workspaceName) {
+    return undefined;
   }
+  return {
+    sessionId: planned.sessionId,
+    fromRun: planned.runId,
+    ...(options.fork ? { fork: true as const } : {})
+  };
+}
+
+function carryOnOf(
+  runtime: Record<string, unknown> | undefined
+): CarryOn | undefined {
+  const resume = runtime?.[RESUME_KEY];
+  return resume &&
+    typeof resume === "object" &&
+    typeof (resume as CarryOn).sessionId === "string"
+    ? (resume as CarryOn)
+    : undefined;
 }
 
 /**
- * A planning session works where a reading one does, on a plan of this
- * caller's: a new one, opened only once the workspace has admitted the run, or
- * one it names, which must not be locked — approved, or failed before it was
- * written, a locked plan does not change.
+ * A planning session works in a worktree of its own, as a writing one does, on a
+ * plan of this caller's: a new one, opened only once the workspace has admitted
+ * the run, or one it names, which must not be locked — approved, or failed
+ * before it was written, a locked plan does not change.
+ *
+ * An edit carries on from the conversation that wrote the plan, in the
+ * worktree that holds it, without a fork: revising is one conversation
+ * accumulating. See {@link prepareWriter} for where else it ends up.
  */
 export async function preparePlanner(
-  ctx: SubAgentPrepareContext<PlanInput, Env>
+  ctx: SubAgentPrepareContext<PlanInput, Env>,
+  workspaces: SubtaskWorkspaces = sessionWorkspaces(ctx.parent)
 ): Promise<Record<string, unknown>> {
   const { env, storage } = ctx.parent;
   const edits = ctx.input.plan;
+  let planned: PlannedSession | undefined;
   if (edits !== undefined) {
     const found = await lookUpPlan(env, storage, edits);
     if (!found.ok) throw new Error(`claude_code_plan: ${found.reason}`);
@@ -318,22 +383,40 @@ export async function preparePlanner(
         `claude_code_plan: the plan \`${edits}\` is locked (${found.status ?? "locked"}), and a locked plan does not change. Write a new plan instead.`
       );
     }
+    planned = await plannedSession(
+      storage,
+      edits,
+      sessionLookup(env),
+      ctx.runId
+    );
   }
-  const place = await sessionWorkspaces(ctx.parent).reading();
-  await holdForReading(env, place, ctx.runId);
+  const run = { taskId: ctx.taskId, runId: ctx.runId };
+  const place = await claimPlace(workspaces, {
+    ...run,
+    ...(planned?.near ? { near: planned.near } : {})
+  });
   let id: string;
   try {
     id =
       edits ?? (await createPlan(env, storage, `${ctx.taskId}:${ctx.runId}`));
   } catch (err) {
     // A `prepare` that throws gets no `settle`, so nothing else lets go.
-    await workspaceStub(env, place.workspaceName)
-      .unhold(ctx.runId)
-      .catch(() => {});
+    await releaseUnused(workspaces, run);
     throw err;
   }
+  recordPlanRun(storage, {
+    runId: ctx.runId,
+    planId: id,
+    workspaceName: place.workspaceName,
+    ...(place.slot ? { slot: place.slot } : {})
+  });
+  const resume = carryOn(planned, place, { fork: false });
   const plan: PlanPlace = { id, isNew: edits === undefined };
-  return { ...runtimeOf(place), [PLAN_KEY]: plan };
+  return {
+    ...runtimeOf(place),
+    [PLAN_KEY]: plan,
+    ...(resume ? { [RESUME_KEY]: resume } : {})
+  };
 }
 
 /**
@@ -343,10 +426,15 @@ export async function preparePlanner(
  * plan as it was.
  */
 export async function settlePlanner(
-  ctx: SubAgentSettleContext<Env>
+  ctx: SubAgentSettleContext<Env>,
+  workspaces: SubtaskWorkspaces = sessionWorkspaces(ctx.parent)
 ): Promise<void> {
   try {
-    await settleReader(ctx);
+    // Without its branch: a planning session commits nothing, and a branch
+    // with no work on it is nothing for the parent to review.
+    await settleSession(workspaces, ctx.parent.storage, ctx, {
+      forgetBranch: true
+    });
   } finally {
     await closeUnwritten(ctx);
   }
@@ -371,7 +459,8 @@ export async function reportPlan(
   env: Env,
   plan: PlanPlace,
   runId: string,
-  outcome: SessionOutcome
+  outcome: SessionOutcome,
+  onFiled?: (sessionId: string) => Promise<void>
 ): Promise<string> {
   const result = outcome.session.result;
   const answer = PlanAnswer.safeParse(result?.structured);
@@ -390,6 +479,10 @@ export async function reportPlan(
       lastReply: answer.data.lastReply
     });
   }
+  // What lets an edit or a build carry on from this conversation: see
+  // `plannedSession` in `./plans.ts`.
+  const sessionId = result.sessionId || outcome.session.sessionId;
+  if (onFiled && sessionId) await onFiled(sessionId);
   return planReport(outcome, {
     kind: "filed",
     id: plan.id,
@@ -427,7 +520,7 @@ function writerPlanOf(
 
 /** A Claude Code session as a sub-agent: the writer, the planner and the reader below. */
 abstract class ClaudeCodeRun extends SubAgent<Env> {
-  protected abstract readonly kind: "write" | "read" | "plan";
+  protected abstract readonly kind: "write" | "plan";
 
   override getModel(): ThinkModel {
     const runtime = this.pluginContext().runtime();
@@ -439,6 +532,7 @@ abstract class ClaudeCodeRun extends SubAgent<Env> {
         "anthropic-coding: this planning run carries no plan; its spec's prepare opens one"
       );
     }
+    const resume = carryOnOf(runtime);
     return claudeCodeModel({
       config: claudeCodeConfig(this.env),
       // A new stub per open: a re-attach after a cut stream opens it again, and
@@ -447,26 +541,80 @@ abstract class ClaudeCodeRun extends SubAgent<Env> {
         openWorkspace(
           this.#stub(place.workspaceName)
         ) as Promise<SessionWorkspace>,
-      advisories: () => this.#stub(place.workspaceName).advisories(),
       storage: this.ctx.storage,
       runId: this.name,
-      // A plan is written in a reading session's copy.
-      kind: this.kind === "write" ? "write" : "read",
       dir: place.dir,
-      ...(plan ? { jsonSchema: PLAN_OUTPUT } : {}),
+      // A plan is a writing session under `plan`, answering as data: it reads,
+      // changes nothing, and has nobody to approve its plan mid-run.
+      ...(plan
+        ? { jsonSchema: PLAN_OUTPUT, permissionMode: "plan" as const }
+        : {}),
+      ...(resume
+        ? {
+            resume: {
+              sessionId: resume.sessionId,
+              ...(resume.fork ? { fork: true } : {})
+            }
+          }
+        : {}),
       note: (key, text) => this.note(key, text),
+      // Every run's, so a later one can carry on from it: see `noteSession`
+      // on the workspace.
+      onSession: (record) =>
+        this.#noteSession(place, { sessionId: record.sessionId }),
       brief: (task) =>
         plan
-          ? this.#planBrief(task, place, plan)
-          : this.#brief(task, place, writes, writerPlanOf(runtime)),
+          ? this.#planBrief(task, place, plan, resume !== undefined)
+          : this.#brief(
+              task,
+              place,
+              writes,
+              writerPlanOf(runtime),
+              resume !== undefined
+            ),
       ...(writes
         ? { followUp: (session: SessionEnd) => this.#followUp(session, place) }
         : {}),
-      report: (outcome) =>
-        plan
-          ? reportPlan(this.env, plan, this.name, outcome)
-          : this.#report(outcome, place, writes)
+      report: async (outcome) => {
+        if (resume && notResumable(outcome)) {
+          await this.#forgetSession(place, resume.fromRun);
+          return unresumableReport(plan ? "plan" : "write");
+        }
+        return plan
+          ? reportPlan(this.env, plan, this.name, outcome, (sessionId) =>
+              this.#noteSession(place, { sessionId, plan: plan.id })
+            )
+          : this.#report(outcome, place, writes);
+      }
     });
+  }
+
+  /**
+   * Record a run's session on the workspace that holds its conversation.
+   * Best-effort: a record lost is a later run starting fresh from the plan,
+   * which it always could.
+   */
+  async #noteSession(place: SessionPlace, note: SessionNote): Promise<void> {
+    try {
+      await this.#stub(place.workspaceName).noteSession(this.name, note);
+    } catch (err) {
+      console.warn("[anthropic-coding] could not record the session", {
+        runId: this.name,
+        err: String(err)
+      });
+    }
+  }
+
+  /** A conversation found gone, so the next run starts fresh rather than fail again. */
+  async #forgetSession(place: SessionPlace, runId: string): Promise<void> {
+    try {
+      await this.#stub(place.workspaceName).forgetSession(runId);
+    } catch (err) {
+      console.warn("[anthropic-coding] could not forget a lost session", {
+        runId,
+        err: String(err)
+      });
+    }
   }
 
   #stub(name: string) {
@@ -493,21 +641,28 @@ abstract class ClaudeCodeRun extends SubAgent<Env> {
     task: string,
     place: SessionPlace,
     writes: boolean,
-    planId?: string
+    planId: string | undefined,
+    resumed: boolean
   ): Promise<string> {
     const note = sessionAdvisory(
       await this.#stub(place.workspaceName).advisories()
     );
-    if (!writes) return sessionBrief(task, note);
-    const plan = planId ? await this.#plan(planId) : undefined;
+    const plan = planId
+      ? { text: await this.#plan(planId), resumed }
+      : undefined;
+    if (!writes) return sessionBrief(task, note, undefined, plan);
     const submodules = await this.#submodules(place);
     await this.#recordStarts(place, [".", ...submodules]);
-    return sessionBrief(task, note, {
-      branch: place.branch as string,
-      submodules,
-      continues: place.continues ?? false,
-      ...(plan ? { plan } : {})
-    });
+    return sessionBrief(
+      task,
+      note,
+      {
+        branch: place.branch as string,
+        submodules,
+        continues: place.continues ?? false
+      },
+      plan
+    );
   }
 
   /** The latest version of a plan `prepare` checked; gone since is a refusal. */
@@ -530,7 +685,8 @@ abstract class ClaudeCodeRun extends SubAgent<Env> {
   async #planBrief(
     task: string,
     place: SessionPlace,
-    plan: PlanPlace
+    plan: PlanPlace,
+    resumed: boolean
   ): Promise<string> {
     const note = sessionAdvisory(
       await this.#stub(place.workspaceName).advisories()
@@ -538,11 +694,15 @@ abstract class ClaudeCodeRun extends SubAgent<Env> {
     if (plan.isNew) return planBrief(task, note);
     const page = await requireArtifactsStub(this.env).readArtifact(plan.id);
     const entries = page?.entries ?? [];
+    // Carrying on, the session has read what was said up to the version it
+    // wrote; what is new is what came after it.
+    const since = resumed ? entries.slice(lastPlanIndex(entries) + 1) : entries;
     return planBrief(task, note, {
-      ...(page ? { plan: latestPlan(entries) } : {}),
-      said: entries
+      ...(page && !resumed ? { plan: latestPlan(entries) } : {}),
+      said: since
         .filter((entry) => entry.label !== PLAN_LABEL)
-        .map((entry) => entry.text)
+        .map((entry) => entry.text),
+      resumed
     });
   }
 
@@ -788,12 +948,14 @@ export class AnthropicCodingWriterChild extends ClaudeCodeRun {
 }
 
 /**
- * A planning session: a reading session that answers through `--json-schema`,
- * and whose answer is filed as a plan — see `./plans.ts`.
+ * A planning session: a writing session under `plan`, in a worktree of its
+ * own, that answers through `--json-schema` and whose answer is filed as a plan
+ * — see `./plans.ts`. The writer's spec under another name, description and
+ * input, since what makes it a planner is how it is launched.
  */
 export class AnthropicCodingPlannerChild extends ClaudeCodeRun {
   static override spec = {
-    ...CLAUDE_CODE_READER_AGENT,
+    ...CLAUDE_CODE_AGENT,
     name: "claude_code_plan",
     description: PLANNER_DESCRIPTION,
     inputSchema: PLAN_INPUT,
@@ -801,14 +963,4 @@ export class AnthropicCodingPlannerChild extends ClaudeCodeRun {
     settle: settlePlanner
   } as SubAgentSpec<never, never>;
   protected readonly kind = "plan";
-}
-
-/** A reading session, in a throwaway copy of the parent's checkout. */
-export class AnthropicCodingReaderChild extends ClaudeCodeRun {
-  static override spec = {
-    ...CLAUDE_CODE_READER_AGENT,
-    prepare: prepareReader,
-    settle: settleReader
-  } as SubAgentSpec<never, never>;
-  protected readonly kind = "read";
 }

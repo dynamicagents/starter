@@ -22,9 +22,11 @@ export interface AgentTuning {
    */
   modelId: string;
   /**
-   * The model compaction summarizes with. A summary is a paraphrase rather
-   * than a decision, and the turn waits for it, so this is the flash model even
-   * where `modelId` is not.
+   * The model compaction summarizes with, and the turn waits for it. Flash
+   * where the prompt it summarizes stays small; the full-size model where it
+   * does not, because flash has timed out (`408` / `3046`, after ~235 s) on
+   * every summary of a ~275 KB conversation, while glm-5.3 reads a
+   * 111k-token uncached prompt in ~34 s.
    */
   compactionModelId: string;
   /** Compact once the conversation's estimate crosses this. */
@@ -54,7 +56,7 @@ export const GENERIC: AgentTuning = {
  */
 export const CODING: AgentTuning = {
   modelId: "@cf/zai-org/glm-5.3-flash",
-  compactionModelId: "@cf/zai-org/glm-5.3-flash",
+  compactionModelId: "@cf/zai-org/glm-5.3",
   compactAfterTokens: 240_000,
   keepRecentTokens: 12_000
 };
@@ -62,10 +64,10 @@ export const CODING: AgentTuning = {
 /**
  * `anthropic-coding`: `coding`'s shape, with the work done elsewhere.
  *
- * **The full-size model for its turns, not the flash one.** The parent does no
- * work of its own: it reads diffs and decides what to delegate, so every turn it
- * spends is a decision about a container boot and a Claude Code session, paid
- * for at that price rather than a retry's. Compaction keeps `coding`'s.
+ * **The flash model, like `coding`.** The full-size `glm-5.3` answers a share of
+ * calls with `429` / `3040` "Capacity temporarily exceeded", and nothing falls
+ * back to another model on it: Think takes one model per turn, and
+ * `@dynamicagents/core/model` ships no fallback.
  *
  * **The fan-out is bounded by containers, not by this file.** A writing session
  * works in a worktree of its own, so N writers cost N+1 container instances,
@@ -73,10 +75,7 @@ export const CODING: AgentTuning = {
  * the account's limits — the containers block in `wrangler.jsonc` carries the
  * arithmetic — and `npm run cf -- containers` is what shows it.
  */
-export const ANTHROPIC_CODING: AgentTuning = {
-  ...CODING,
-  modelId: "@cf/zai-org/glm-5.3"
-};
+export const ANTHROPIC_CODING: AgentTuning = { ...CODING };
 
 /**
  * The size a `coding` workspace's container starts at — 2 vCPU, 6 GiB, 8 GB

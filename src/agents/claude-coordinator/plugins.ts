@@ -168,11 +168,11 @@ export const parentPlugins = (
       // They go to the workspace object, which reads `GITHUB_TOKEN` from its own
       // environment — so the container never holds the credential at all.
       git: workspaceGit({ binding, workspaceName: config.workspaceName }),
-      // For the forge reads the coordinator watches a pull request with.
+      // For the GitHub reads the coordinator watches a pull request with.
       token: () => env.GITHUB_TOKEN,
       author,
       // The coordinator reads; the sessions write. A pull request, its review
-      // and its replies are a session's — see `forge` in `./claude-code.ts`.
+      // and its replies are a session's — see `githubToken` in `./claude-code.ts`.
       tools: [
         "repo_clone",
         "repo_issue_view",

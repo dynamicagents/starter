@@ -64,7 +64,7 @@ export function sessionFooter(result: {
 
 /**
  * What a session is told about GitHub. `gh` and git present a placeholder and
- * the egress gateway swaps in the deployment's token — see `forge` in
+ * the egress gateway swaps in the deployment's token — see `githubToken` in
  * `./claude-code.ts` — so both work and neither can leak it.
  *
  * Every session gets the first half. Only a writer on a branch gets the rules,

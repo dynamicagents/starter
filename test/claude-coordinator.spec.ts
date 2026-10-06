@@ -1423,7 +1423,7 @@ describe("the sessions' GitHub token", () => {
       GITHUB_TOKEN: "ghp_deployment"
     } as never);
 
-    expect(config.forge?.token()).toBe("ghp_deployment");
+    expect(config.githubToken?.()).toBe("ghp_deployment");
     expect(config.env?.GH_TOKEN).toBeUndefined();
   });
 });

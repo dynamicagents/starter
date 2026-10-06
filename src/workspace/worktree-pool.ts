@@ -72,7 +72,7 @@ export interface PoolStore {
  * The repository slot a worktree's workspace is keyed on.
  *
  * A sentinel in the same namespace as `owner/repo`, for the reason
- * `SCRATCH_REPO` in `./scratch.ts` gives: angle brackets no forge name can
+ * `SCRATCH_REPO` in `./scratch.ts` gives: angle brackets no GitHub name can
  * contain, and never `|`, the separator `workspaceName` joins on.
  */
 export function worktreeRepo(repo: string, slot: number): string {

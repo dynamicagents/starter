@@ -107,7 +107,7 @@ const AGENTS = [
     forbidden: [plugin("claude-code")],
     // Measured 13474 KiB. Over generic's by the container client and
     // `@cloudflare/computer/git`, which bundles isomorphic-git so that clone,
-    // fetch and push run on this side of the container boundary and the forge
+    // fetch and push run on this side of the container boundary and the GitHub
     // token never crosses it. A workspace agent, so it also carries `/alarm`
     // and `/job`.
     maxBytes: 14_910_000

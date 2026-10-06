@@ -26,7 +26,7 @@ import type { ActiveRepo } from "./active-repo";
  * `@cloudflare/computer`'s one-object-one-container pairing requires of anything
  * with a filesystem of its own.
  *
- * Angle brackets because no forge name can contain them. This shares a namespace
+ * Angle brackets because no GitHub name can contain them. This shares a namespace
  * with the `owner/repo` strings in {@link ActiveRepo}, so a sentinel a caller
  * could clone is a sentinel a caller could collide with — the same reasoning that
  * spells the pre-selection window `<unassigned>` — see `workspaceName` in

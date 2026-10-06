@@ -180,7 +180,7 @@ RUN if [ -n "$CLAUDE_CODE_VERSION" ]; then \
 # **Signed in, with no credential in the image or the container.** A
 # claude-coordinator session pushes its branch, opens its pull request and
 # answers its review with `gh` and git. Both present a placeholder token, and the
-# egress gateway swaps in the real one for GitHub's hosts only — `forge` in
+# egress gateway swaps in the real one for GitHub's hosts only — `githubToken` in
 # `@dynamicagents/plugins/claude-code`. The placeholder lives in the session env,
 # not here: `coding`'s container egresses `direct`, where nothing would swap it.
 #

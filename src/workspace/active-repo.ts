@@ -68,7 +68,7 @@ export interface ActiveRepo {
    * filesystem, so something has to clone into it — and the honest url to use is
    * **the one the parent actually cloned from**, already allowlist-checked by
    * `/repo`. Reconstructing one from `owner/repo` would mean this file deciding a
-   * forge host, which is a decision `/repo` owns and permits more than one answer
+   * GitHub host, which is a decision `/repo` owns and permits more than one answer
    * to.
    *
    * `undefined` before the first clone, and a caller must treat that as "there is

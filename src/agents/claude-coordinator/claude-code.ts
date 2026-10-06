@@ -15,7 +15,7 @@ export const CREDENTIALS_KEY = "claude-credentials";
  *
  * ## The credentials never enter the container, and barely leave this file
  *
- * `credentials` and `forge` are read by **`.egress()`**, which runs inside the workspace
+ * `credentials` and `githubToken` are read by **`.egress()`**, which runs inside the workspace
  * object. A sub-agent holds this same config and reads the thunk only to check
  * one is configured at all — it needs the model name and the timeouts, none of
  * which is secret. The container is launched with placeholders and the swap
@@ -43,7 +43,7 @@ export function claudeCodeConfig(env: Env): ClaudeCodeConfig {
      * its pull request and answers its review. The token reaches GitHub's hosts
      * through the egress gateway and never the container.
      */
-    forge: { token: () => env.GITHUB_TOKEN },
+    githubToken: () => env.GITHUB_TOKEN,
     /**
      * The same identity the workspace and the repo plugin answer with — see
      * `@/workspace/git-identity`.

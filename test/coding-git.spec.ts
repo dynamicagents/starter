@@ -10,7 +10,7 @@ import type { CodingWorkspace } from "@/index";
  * These methods exist so that `GITHUB_TOKEN` never enters the container:
  * they run isomorphic-git inside this Durable Object, against the same SQLite
  * filesystem the container mounts, and read the token from this object's own
- * `env`. What that buys is verified end-to-end against a real forge; what is
+ * `env`. What that buys is verified end-to-end against GitHub; what is
  * verified here is the seam `/repo` depends on — that a git failure comes back
  * as **data**, not as a throw.
  *

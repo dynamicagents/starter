@@ -74,7 +74,11 @@ describe("the artifact routes answer", () => {
     // the stream opened; a live one holds the connection open by design.
     const body = await res.text();
     expect(framesOf(body, ARTIFACT_EVENTS.ready)).toEqual([
-      { kind: "session-transcript-probe", status: "completed" }
+      {
+        kind: "session-transcript-probe",
+        status: "completed",
+        now: expect.any(Number)
+      }
     ]);
   });
 
@@ -150,7 +154,14 @@ describe("a sub-agent's notes reach the thread as one link", () => {
     expect(res.status).toBe(200);
     const body = await res.text();
     const entries = framesOf<ArtifactEntry>(body, ARTIFACT_EVENTS.entry);
-    expect(entries.map(({ text }) => text)).toEqual(["working on sleep:1"]);
+    // The narration, then its tool call as a card the result completes.
+    expect(
+      entries.map(({ text, detail }) => [text, detail?.status ?? null])
+    ).toEqual([
+      ["working on sleep:1", null],
+      ["child_sleep", "running"],
+      ["child_sleep", "ok"]
+    ]);
     expect(framesOf(body, ARTIFACT_EVENTS.settled)).toEqual([
       { status: "completed" }
     ]);

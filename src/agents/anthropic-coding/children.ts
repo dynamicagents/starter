@@ -560,7 +560,9 @@ abstract class ClaudeCodeRun extends SubAgent<Env> {
             }
           }
         : {}),
-      note: (key, text) => this.note(key, text),
+      // The method itself, bound: a wrapper's argument list is a place to drop
+      // the card, and plugins' own spec is what proves the model passes it.
+      note: this.note.bind(this),
       // Every run's, so a later one can carry on from it: see `noteSession`
       // on the workspace.
       onSession: (record) =>

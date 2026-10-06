@@ -260,6 +260,18 @@ describe("claiming a worktree", () => {
       expect(claimed.slot).toBe(0);
       expect(claimed.mode).toBe("continue");
     });
+
+    /** Its conversation is in that workspace, wherever the branch went since. */
+    it("adopts a branch no worktree holds into it", () => {
+      const claimed = claim(
+        pooled(),
+        REPO,
+        { ...ctx, continue: "feat/pushed-and-released", near: 1 },
+        10
+      );
+      expect(claimed.slot).toBe(1);
+      expect(claimed.mode).toBe("adopt");
+    });
   });
 
   it("keeps pools apart by repository", () => {

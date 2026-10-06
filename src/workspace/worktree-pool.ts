@@ -161,7 +161,8 @@ export function isFree(worktree: Worktree): boolean {
  *   When none holds it — it was pushed and released, or its worktree went to
  *   another run — a free one adopts it from the remote.
  * - Otherwise `near`, when that slot is free: it holds a conversation the run
- *   continues — a planning session's transcript is in the workspace that ran it.
+ *   continues — a session's transcript is in the workspace that ran it, which
+ *   is why an adopted branch goes there too.
  * - Otherwise the free worktree used longest ago, or a new slot. The pool grows
  *   with concurrency and has no ceiling of its own. Its branch is `branch`, or
  *   {@link runBranch}, and never one a worktree already holds.
@@ -204,9 +205,9 @@ export function claim(
   }
 
   const near =
-    ctx.continue === undefined && ctx.near !== undefined
-      ? rows.find((row) => row.slot === ctx.near && isFree(row))
-      : undefined;
+    ctx.near === undefined
+      ? undefined
+      : rows.find((row) => row.slot === ctx.near && isFree(row));
   const free =
     near ?? rows.filter(isFree).sort((a, b) => a.usedAt - b.usedAt)[0];
   const slot =

@@ -1694,4 +1694,12 @@ describe("a writing session's answer", () => {
       "**Question for the person:** Nested or flat JSON?"
     );
   });
+
+  it("says so when a session stopped for a decision and named none", () => {
+    const report = sessionReport(
+      ended({ status: "needs_input", summary: "Unsure which shape." })
+    );
+
+    expect(report).toContain("**It named no question.**");
+  });
 });

@@ -201,7 +201,7 @@ export const WRITE_OUTPUT = {
     question: {
       type: "string",
       description:
-        "With `needs_input`: the one question only the person can answer, with the options you see."
+        "Required with `needs_input`: the one question only the person can answer, with the options you see."
     }
   },
   required: ["status", "summary"],
@@ -238,10 +238,14 @@ export function answerText(answer: WriteAnswer): string {
         .map((c) => `\`${c.command}\` ${c.passed ? "passed" : "FAILED"}`)
         .join("; ")}.`
     : "";
+  // A stop for a decision that names none still has to say so, or the
+  // coordinator has nothing to ask and nothing to tell it is missing.
   const question =
-    answer.status === "needs_input" && answer.question
-      ? `**Question for the person:** ${answer.question}`
-      : "";
+    answer.status !== "needs_input"
+      ? ""
+      : answer.question?.trim()
+        ? `**Question for the person:** ${answer.question.trim()}`
+        : "**It named no question.** Its summary above is what it stopped on: ask the person what it leaves open, or send it back to say what it needs.";
   return [`${status}${pr}`, answer.summary.trim(), checks, question]
     .filter(Boolean)
     .join("\n\n");

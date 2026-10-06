@@ -3,7 +3,7 @@ import {
   workspaceName,
   type WorkspaceObjectBase
 } from "@dynamicagents/plugins/workspace";
-import type { RepoConfig, RepoWorktrees } from "@dynamicagents/plugins/repo";
+import type { RepoWorktrees } from "@dynamicagents/plugins/repo";
 import type { ActiveRepo } from "./active-repo";
 import { selectedRepo } from "./subtask-workspace";
 import {
@@ -26,13 +26,16 @@ import {
  * learns what a worktree is, and a worktree's checkout sits at the same path the
  * parent's own does.
  *
- * The two write hooks are what a worktree adds to `/repo`'s guards: a session
- * may still be working in it, and a session had a root shell over its
- * `.git/config`.
+ * **The selection stays where it was put**, across turns and tasks: a person's
+ * follow-up usually asks about the same work. It moves on a switch, a clone, a
+ * scratchpad, a release, and when a writing session settles — see `follow` in
+ * `./subtask-workspace.ts`. The parent hears of every move through {@link
+ * WorktreeSwitch.where}, which its context re-reads each turn, rather than from
+ * a `repo_worktree` answer it may be remembering from tasks ago.
  */
 export interface WorktreeSwitch extends RepoWorktrees {
-  beforeWrite: NonNullable<RepoConfig["beforeWrite"]>;
-  afterPush: NonNullable<RepoConfig["afterPush"]>;
+  /** Where the parent's file reads and repo tools run now, in its terms. */
+  where(): string;
 }
 
 /** Days a workspace survives untouched, as the parent is told it. */
@@ -43,28 +46,6 @@ function dirOf(worktree: Worktree, repo: PoolRepo): string {
   return repo.path === "."
     ? (worktree.dir ?? ".")
     : `${worktree.dir}/${repo.path}`;
-}
-
-/** The repository a tool's `dir` names, if it is one of the worktree's. */
-function repoAt(worktree: Worktree, dir: string): PoolRepo | undefined {
-  const root = worktree.dir?.replace(/\/+$/, "");
-  const target = dir.replace(/\/+$/, "");
-  if (!root) return undefined;
-  if (target === root) return worktree.repos.find((repo) => repo.path === ".");
-  if (!target.startsWith(`${root}/`)) return undefined;
-  const path = target.slice(root.length + 1);
-  return worktree.repos.find((repo) => repo.path === path);
-}
-
-/** Two spellings of one remote: case, a trailing slash and `.git` aside. */
-function sameRemote(a: string, b: string): boolean {
-  const norm = (url: string) =>
-    url
-      .trim()
-      .toLowerCase()
-      .replace(/\/+$/, "")
-      .replace(/\.git$/, "");
-  return norm(a) === norm(b);
 }
 
 /** What one repository holds of the branch, in a reviewer's terms. */
@@ -119,29 +100,29 @@ export function worktreeSwitch(config: {
         `Worktrees for ${repo}:`,
         ...rows.map(
           (row) =>
-            `- \`${row.branch}\`${row.slot === here ? " (your tools are here)" : ""} — ${summary(row)}`
+            `- \`${row.branch}\`${row.slot === here ? " (your reads are here)" : ""} — ${summary(row)}`
         ),
         "",
-        `A worktree nothing touches for ${KEPT_DAYS} days is deleted, with any commits in it that were never pushed. Delegate with \`continue\` set to a branch to carry its work on.`
+        `A worktree nothing touches for ${KEPT_DAYS} days is deleted, with any commits in it that were never pushed. \`repo_worktree\` with a branch points your reads at it, and \`claude_code\` with \`continue\` set to it carries its work on.`
       ].join("\n");
     },
 
     async use(branch?: string): Promise<string> {
       if (branch === undefined) {
         const here = current();
-        if (!here) return "Your tools already point at your own checkout.";
+        if (!here)
+          return "Your file reads and repo tools already run in your own checkout.";
         config.active.set(here.repo);
         const dir = config.active.checkout()?.dir;
-        return `Your tools are back on your own checkout${dir ? `, at ${dir}` : ""}.`;
+        return `Your file reads and repo tools are back on your own checkout${dir ? `, at ${dir}` : ""}.`;
       }
       const repo = selectedRepo(config.active.get());
       if (!repo) return noRepo;
       const row = holderOf(config.pool, repo, branch);
       if (!row) {
         return (
-          `No worktree holds \`${branch}\`. If it was pushed, review it from your own checkout — ` +
-          `\`repo_fetch\`, then \`repo_diff\` with ref \`origin/${branch}\` — or delegate with ` +
-          "`continue` set to it to work on it again."
+          `No worktree holds \`${branch}\`. If it was pushed, its pull request shows what changed ` +
+          "(`repo_pr_view`), and `claude_code` with `continue` set to it puts a session back on it."
         );
       }
 
@@ -172,11 +153,11 @@ export function worktreeSwitch(config: {
 
       config.active.set(sentinel);
       return [
-        `Your repo tools and file reads now run in the worktree holding \`${branch}\`, at the same paths as your checkout.`,
+        `Your file reads and repo tools now run in the worktree holding \`${branch}\`, at the same paths as your checkout, and stay there until you move them.`,
         ...(row.live
           ? [
               "",
-              "**A session is still working here.** Read what you like, but nothing can be committed or pushed until its report arrives."
+              "**A session is working here now**, so what you read may still change."
             ]
           : []),
         "",
@@ -185,9 +166,7 @@ export function worktreeSwitch(config: {
             `- \`${dirOf(row, entry)}\` — ${repoState(entry)}, since \`${entry.baseRef}\``
         ),
         "",
-        "Review each with repo_diff, `dir` set to it and `base` set to what it started from. " +
-          `Publish one with repo_push and branch \`${branch}\`, then repo_open_pr from the same directory. ` +
-          "repo_worktree with no branch brings your tools back to your own checkout."
+        "repo_worktree with no branch brings them back to your own checkout."
       ].join("\n");
     },
 
@@ -211,58 +190,29 @@ export function worktreeSwitch(config: {
         ...(unpushed
           ? ["Commits in it that were never pushed are gone when that happens."]
           : []),
-        ...(wasHere ? ["Your tools are back on your own checkout."] : [])
+        ...(wasHere
+          ? ["Your file reads and repo tools are back on your own checkout."]
+          : [])
       ].join(" ");
     },
 
-    async beforeWrite({ tool, dir, branch, url }) {
-      const here = current();
-      if (!here?.row) return undefined;
-      const { row } = here;
-      if (row.live) {
-        return "A session is still working in this worktree, so nothing in it can be committed or pushed until its report arrives.";
+    where(): string {
+      const selected = config.active.get();
+      if (selected === undefined) {
+        return "Your file reads have nowhere to run yet: open a repository with repo_clone, or a scratchpad with scratch_open.";
       }
-      const entry = repoAt(row, dir);
-      if (tool === "repo_commit") {
-        // A commit the map cannot see moves the tip; until a push says where it
-        // went, the worktree is held rather than handed to the next session.
-        if (entry) {
-          config.pool.put({
-            ...row,
-            repos: row.repos.map((repo) =>
-              repo === entry ? { ...repo, tip: "" } : repo
-            )
-          });
-        }
-        return undefined;
+      const here = parseWorktreeRepo(selected);
+      if (!here) {
+        const repo = selectedRepo(selected);
+        if (!repo) return "Your file reads run in your scratchpad.";
+        const dir = config.active.checkout()?.dir;
+        return `Your file reads and repo tools run in your own checkout of ${repo}${dir ? `, at ${dir}` : ""}.`;
       }
-      if (branch !== row.branch) {
-        return `This worktree holds \`${row.branch}\`. Push that branch from it, or switch back to your own checkout with repo_worktree first.`;
+      const row = slotOf(config.pool, here.repo, here.slot);
+      if (!row?.branch) {
+        return `Your file reads and repo tools point at a worktree of ${here.repo} that no longer holds a branch. repo_worktree with no branch brings them back to your own checkout.`;
       }
-      if (!entry) {
-        return `${dir} is not one of this worktree's repositories: ${row.repos.map((repo) => dirOf(row, repo)).join(", ")}.`;
-      }
-      if (url !== undefined && !sameRemote(url, entry.url)) {
-        return (
-          `The origin of ${dir} reads ${url}, but this worktree cloned it from ${entry.url} — ` +
-          "something in the worktree changed it after the clone. Nothing was pushed."
-        );
-      }
-      return undefined;
-    },
-
-    async afterPush({ dir, commit }) {
-      const here = current();
-      if (!here?.row) return;
-      const { row } = here;
-      const entry = repoAt(row, dir);
-      if (!entry) return;
-      config.pool.put({
-        ...row,
-        repos: row.repos.map((repo) =>
-          repo === entry ? { ...repo, tip: commit, pushed: commit } : repo
-        )
-      });
+      return `Your file reads and repo tools run in the worktree holding \`${row.branch}\`, at the same paths as your own checkout of ${here.repo}. repo_worktree moves them.`;
     }
   };
 }

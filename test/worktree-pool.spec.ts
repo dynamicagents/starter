@@ -274,6 +274,54 @@ describe("claiming a worktree", () => {
     });
   });
 
+  /**
+   * `avoid` is the worktree the parent's reads are in: reset under them for
+   * another branch, they would read its files believing them their own.
+   */
+  describe("with `avoid`", () => {
+    const free = (slot: number, usedAt: number) => ({
+      repo: REPO,
+      slot,
+      branch: `claude-coordinator/t/${slot}`,
+      repos: [repo()],
+      usedAt
+    });
+
+    it("gives another branch the next free worktree instead", () => {
+      const pool = memoryPoolStore();
+      pool.put(free(0, 1));
+      pool.put(free(1, 5));
+      expect(claim(pool, REPO, { ...ctx, avoid: 0 }, 10).slot).toBe(1);
+    });
+
+    it("opens a new worktree rather than take the only free one", () => {
+      const pool = memoryPoolStore();
+      pool.put(free(0, 1));
+      expect(claim(pool, REPO, { ...ctx, avoid: 0 }, 10).slot).toBe(1);
+      expect(pool.all(REPO)[0]?.branch).toBe("claude-coordinator/t/0");
+    });
+
+    it("passes over `near` when it is that worktree", () => {
+      const pool = memoryPoolStore();
+      pool.put(free(0, 1));
+      pool.put(free(1, 5));
+      expect(claim(pool, REPO, { ...ctx, near: 0, avoid: 0 }, 10).slot).toBe(1);
+    });
+
+    it("still continues the branch it holds, in it", () => {
+      const pool = memoryPoolStore();
+      pool.put(free(0, 1));
+      const claimed = claim(
+        pool,
+        REPO,
+        { ...ctx, continue: "claude-coordinator/t/0", avoid: 0 },
+        10
+      );
+      expect(claimed.slot).toBe(0);
+      expect(claimed.mode).toBe("continue");
+    });
+  });
+
   it("keeps pools apart by repository", () => {
     const pool = memoryPoolStore();
     claim(pool, REPO, ctx, 10);

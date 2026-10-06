@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import type { ActiveCheckout, ActiveRepo } from "@/workspace/active-repo";
+import { SCRATCH_REPO } from "@/workspace/scratch";
 import { worktreeRepo, type Worktree } from "@/workspace/worktree-pool";
 import { worktreeSwitch } from "@/workspace/worktrees";
 import { memoryPoolStore } from "./support/memory-pool";
@@ -38,8 +39,9 @@ const HELD: Worktree = {
   ]
 };
 
-function setup(opts: { selected?: string; checkoutDir?: string } = {}) {
-  let selected = opts.selected ?? "acme/super";
+function setup(opts: { selected?: string | null; checkoutDir?: string } = {}) {
+  let selected =
+    opts.selected === null ? undefined : (opts.selected ?? "acme/super");
   const active = {
     get: () => selected,
     set: (repo: string) => {
@@ -74,7 +76,7 @@ describe("the parent's way into a worktree", () => {
     expect(listed).toMatch(/nothing touches for 7 days is deleted/);
   });
 
-  it("switches every tool into the worktree holding a branch, and back", async () => {
+  it("switches the reads into the worktree holding a branch, and back", async () => {
     const { worktrees, selected } = setup();
 
     const into = await worktrees.use(BRANCH);
@@ -83,7 +85,9 @@ describe("the parent's way into a worktree", () => {
       "`/workspace/super/core` — has commits, not pushed, since `origin/main`"
     );
     expect(into).toContain("`/workspace/super` — no commits");
-    expect(into).toContain("`base`");
+    expect(into).toContain("stay there until you move them");
+    // The parent reads here; the sessions write and push.
+    expect(into).not.toMatch(/repo_diff|repo_push|repo_open_pr/);
 
     expect(await worktrees.use()).toContain(
       "back on your own checkout, at /workspace/super"
@@ -94,7 +98,7 @@ describe("the parent's way into a worktree", () => {
   it("says where to look for a branch no worktree holds", async () => {
     const { worktrees, selected } = setup();
     const answer = await worktrees.use("claude-coordinator/task-a/9");
-    expect(answer).toMatch(/No worktree holds.*repo_fetch.*continue/s);
+    expect(answer).toMatch(/No worktree holds.*repo_pr_view.*continue/s);
     expect(selected()).toBe("acme/super");
   });
 
@@ -142,92 +146,36 @@ describe("the parent's way into a worktree", () => {
   });
 });
 
-describe("writing from inside a worktree", () => {
-  const inside = () => setup({ selected: worktreeRepo("acme/super", 2) });
-
-  it("has no opinion about the parent's own checkout", async () => {
-    const { worktrees } = setup();
-    await expect(
-      worktrees.beforeWrite({
-        tool: "repo_push",
-        dir: "/workspace/super",
-        branch: "x"
-      })
-    ).resolves.toBeUndefined();
-  });
-
-  it("refuses a commit or a push while a session is still working there", async () => {
-    const { worktrees, pool } = inside();
-    pool.put({ ...HELD, live: { taskId: "task-a", runId: "detached:3" } });
-    for (const tool of ["repo_commit", "repo_push"] as const) {
-      expect(
-        await worktrees.beforeWrite({
-          tool,
-          dir: "/workspace/super/core",
-          branch: BRANCH
-        })
-      ).toMatch(/A session is still working in this worktree/);
-    }
-  });
-
-  it("pushes only the worktree's branch, to the origin it was cloned from", async () => {
-    const { worktrees } = inside();
-    expect(
-      await worktrees.beforeWrite({
-        tool: "repo_push",
-        dir: "/workspace/super/core",
-        branch: "other"
-      })
-    ).toMatch(/holds `claude-coordinator\/task-a\/1`/);
-    expect(
-      await worktrees.beforeWrite({
-        tool: "repo_push",
-        dir: "/workspace/super/core",
-        branch: BRANCH,
-        url: "https://github.com/evil/core"
-      })
-    ).toMatch(
-      /cloned it from https:\/\/github\.com\/acme\/core\.git.*Nothing was pushed/s
+describe("where the parent's reads are", () => {
+  it("names its own checkout", () => {
+    expect(setup().worktrees.where()).toBe(
+      "Your file reads and repo tools run in your own checkout of acme/super, at /workspace/super."
     );
-    // The same remote, spelled without `.git` and with a trailing slash.
-    await expect(
-      worktrees.beforeWrite({
-        tool: "repo_push",
-        dir: "/workspace/super/core/",
-        branch: BRANCH,
-        url: "https://github.com/acme/core/"
-      })
-    ).resolves.toBeUndefined();
   });
 
-  it("refuses a push from a directory that is none of its repositories", async () => {
-    const { worktrees } = inside();
-    expect(
-      await worktrees.beforeWrite({
-        tool: "repo_push",
-        dir: "/workspace/elsewhere",
-        branch: BRANCH,
-        url: CHECKOUT.url
-      })
-    ).toMatch(/not one of this worktree's repositories/);
+  it("names the branch of the worktree they are in", () => {
+    const { worktrees } = setup({ selected: worktreeRepo("acme/super", 2) });
+    expect(worktrees.where()).toMatch(
+      /run in the worktree holding `claude-coordinator\/task-a\/1`, at the same paths as your own checkout of acme\/super/
+    );
   });
 
-  it("holds the worktree after a commit it cannot see, until a push lands", async () => {
-    const { worktrees, pool } = inside();
-    await worktrees.beforeWrite({
-      tool: "repo_commit",
-      dir: "/workspace/super"
+  it("says when their worktree no longer holds a branch", () => {
+    const { worktrees, pool } = setup({
+      selected: worktreeRepo("acme/super", 2)
     });
-    expect(pool.all("acme/super")[0]?.repos[0]?.tip).toBe("");
+    pool.put({ repo: "acme/super", slot: 2, repos: [], usedAt: 1 });
+    expect(worktrees.where()).toMatch(
+      /no longer holds a branch.*back to your own checkout/
+    );
+  });
 
-    await worktrees.afterPush({
-      dir: "/workspace/super",
-      branch: BRANCH,
-      commit: "s1"
-    });
-    expect(pool.all("acme/super")[0]?.repos[0]).toMatchObject({
-      tip: "s1",
-      pushed: "s1"
-    });
+  it("names a scratchpad, and nothing yet", () => {
+    expect(setup({ selected: SCRATCH_REPO }).worktrees.where()).toMatch(
+      /scratchpad/
+    );
+    expect(setup({ selected: null }).worktrees.where()).toMatch(
+      /nowhere to run yet.*repo_clone.*scratch_open/
+    );
   });
 });

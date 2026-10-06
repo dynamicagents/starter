@@ -249,6 +249,10 @@ export async function claimSession(
  * canceled — keeps its work where a `continue` will find it, and every run's
  * worktree is recorded and freed. One whose work could not be secured is held
  * instead. See `keep` in `@/workspace/subtask-workspace`.
+ *
+ * A session that worked on a branch takes the parent's reads with it, so the
+ * report and the files it describes are in front of the parent together. A
+ * planning session's branch is forgotten, and its reads stay where they were.
  */
 export async function settleSession(
   workspaces: SubtaskWorkspaces,
@@ -258,8 +262,9 @@ export async function settleSession(
 ): Promise<void> {
   const run = { taskId: ctx.taskId, runId: ctx.runId };
   const forget = options.forgetBranch ? { forgetBranch: true } : {};
+  const follow = options.forgetBranch ? {} : { follow: true };
   if (ctx.result.status === "completed") {
-    return workspaces.release(run, forget);
+    return workspaces.release(run, { ...forget, ...follow });
   }
   const kept = await workspaces.keep(run);
   if (kept.note) keepNote(storage, ctx.taskId, ctx.runId, kept.note);
@@ -267,7 +272,9 @@ export async function settleSession(
   // how its work is found.
   await workspaces.release(
     run,
-    kept.settled ? { hold: false, ...forget } : { hold: true }
+    kept.settled
+      ? { hold: false, ...forget, ...follow }
+      : { hold: true, ...follow }
   );
 }
 

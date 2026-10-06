@@ -24,6 +24,7 @@ import {
   idleWorktrees,
   parseWorktreeRepo,
   reconcileWorktrees,
+  slotOf,
   sqlPoolStore
 } from "@/workspace/worktree-pool";
 import {
@@ -219,6 +220,12 @@ export class ClaudeCoordinatorAgent extends StepAgent<Env> {
         return true;
       }
     });
+    // Reads left in a worktree emptied above would read a checkout that is
+    // gone, so they go back to the parent's own — which its context says.
+    const reading = parseWorktreeRepo(this.#active.get() ?? "");
+    if (reading && !slotOf(pool, reading.repo, reading.slot)?.branch) {
+      this.#active.set(reading.repo);
+    }
   }
 
   /**
@@ -234,10 +241,12 @@ export class ClaudeCoordinatorAgent extends StepAgent<Env> {
    * clone and a full install. The idle deadline cannot be tuned down to meet the
    * cost instead: it has to exceed a session's whole forty minutes.
    *
-   * **Tools left in a worktree come back to the checkout**, and every worktree
-   * no session is in has its container released too — a backstop, since the
-   * pool releases one when its session settles. The worktrees themselves —
-   * branches, commits — stay; see `@/workspace/worktrees`.
+   * **Reads left in a worktree stay there**: a person's follow-up is usually
+   * about the same work, and moving them here would leave the model's last
+   * `repo_worktree` answer describing a place they no longer are — see
+   * `@/workspace/worktrees`. Every worktree no session is in has its container
+   * released — a backstop, since the pool releases one when its session
+   * settles. A read starts it again.
    *
    * Core contains a throw here, but this is best-effort on its own account too: a
    * container that will not stop is the idle deadline's problem, not the answer's.
@@ -255,7 +264,6 @@ export class ClaudeCoordinatorAgent extends StepAgent<Env> {
 
     const repo = this.#active.get();
     const worktree = repo === undefined ? undefined : parseWorktreeRepo(repo);
-    if (worktree) this.#active.set(worktree.repo);
     const binding = this.env.CLAUDE_COORDINATOR_WORKSPACE;
     const key = this.callerKey();
     const names = new Set([

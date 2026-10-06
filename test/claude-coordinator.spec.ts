@@ -56,6 +56,7 @@ import {
 import { admitSession } from "@/agents/claude-coordinator/plugins";
 import { activeRepo } from "@/workspace/active-repo";
 import { SCRATCH_REPO } from "@/workspace/scratch";
+import { sqlPoolStore, worktreeRepo } from "@/workspace/worktree-pool";
 import { gitIdentity } from "@/workspace/git-identity";
 import type {
   KeptWork,
@@ -117,7 +118,7 @@ const { freshStub: freshWorkspace } = makeDoHelpers<ClaudeCoordinatorWorkspace>(
  * `bash` switched off. Each fails quietly.
  */
 describe("the parent's surface", () => {
-  it("is a checkout to open, pull requests to watch, a scratchpad, a browser, grep, and the sessions", async () => {
+  it("is a checkout to open, pull requests to watch, worktrees to read, a scratchpad, a browser, grep, and the sessions", async () => {
     const tools = await onParent((agent) =>
       Object.keys(agent.getTools()).sort()
     );
@@ -138,10 +139,56 @@ describe("the parent's surface", () => {
       "repo_pr_review_status",
       "repo_pr_threads",
       "repo_pr_view",
+      "repo_worktree",
       "repo_worktrees",
       "scratch_open",
       "search_history"
     ]);
+  });
+
+  /**
+   * Where its reads run moves between turns — a session settling takes them
+   * into its worktree — so it is said every turn rather than remembered from a
+   * `repo_worktree` answer. Moved through a selection of its own, which is the
+   * one the agent's tools read.
+   */
+  it("says where its reads run, again whenever that moves", async () => {
+    const { remind, before, after } = await onParent(async (agent) => {
+      const reads = agent
+        .configureContext()
+        .find((block) => block.label.endsWith(".reads"));
+      const read = async () =>
+        String(await (reads?.provider as { get(): Promise<unknown> }).get());
+      const active = activeRepo(agent.ctx.storage);
+      active.set("acme/api");
+      const before = await read();
+      sqlPoolStore(agent.ctx.storage).put({
+        repo: "acme/api",
+        slot: 0,
+        branch: "claude-coordinator/t/1",
+        dir: "/workspace/api",
+        repos: [],
+        usedAt: 1
+      });
+      active.set(worktreeRepo("acme/api", 0));
+      return { remind: reads?.whenChanged, before, after: await read() };
+    });
+    expect(remind).toBe("remind");
+    expect(before).toMatch(/your own checkout of acme\/api/);
+    expect(after).toMatch(/worktree holding `claude-coordinator\/t\/1`/);
+  });
+
+  it("keeps its reads in a worktree when a task settles", async () => {
+    const selected = await onParent(async (agent) => {
+      activeRepo(agent.ctx.storage).set(worktreeRepo("acme/api", 0));
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+      await (
+        agent as unknown as { onTaskSettled(id: string): Promise<void> }
+      ).onTaskSettled("task-1");
+      warn.mockRestore();
+      return activeRepo(agent.ctx.storage).get();
+    });
+    expect(selected).toBe(worktreeRepo("acme/api", 0));
   });
 
   /**

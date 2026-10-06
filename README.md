@@ -238,6 +238,10 @@ on the conversation that last worked on the branch, in its worktree, so the sess
 that answers a review is the one that wrote the code. A worktree's container stops as
 soon as its session settles, so nothing idles through the wait.
 
+The agent's file reads follow the latest session into its worktree, and stay there
+across tasks until it moves them with `repo_worktree`. Where they run is a context
+block re-read every turn, so a move never goes unannounced.
+
 GitHub is reached as the deployment's account: a session's `gh` and git present a
 placeholder, and the egress gateway swaps in `GITHUB_TOKEN` for GitHub's hosts only.
 [`.env.example`](.env.example) says how to scope that token.

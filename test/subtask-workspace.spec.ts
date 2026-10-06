@@ -783,6 +783,59 @@ describe("handing a worktree to the next session", () => {
  * says nothing about the session's work, so it is kept where a `continue` will
  * find it. Why a cancel resets nothing is on `keep`.
  */
+describe("the parent's reads, after a writing session", () => {
+  const pushedRun = () =>
+    harness({
+      selected: "acme/api",
+      checkout: CHECKOUT,
+      tips: { ".": "c1" },
+      pushed: { ".": "c1" }
+    });
+
+  it("follow the session into the worktree it left on its branch", async () => {
+    const { subtasks, active } = pushedRun();
+    await subtasks.resolve(ctx);
+    await subtasks.release(ctx, { follow: true });
+    expect(active.get()).toBe(worktreeRepo("acme/api", 0));
+  });
+
+  it("stay where they are unless asked to follow", async () => {
+    const { subtasks, active } = pushedRun();
+    await subtasks.resolve(ctx);
+    await subtasks.release(ctx);
+    expect(active.get()).toBe("acme/api");
+  });
+
+  it("stay on another repository the parent moved to meanwhile", async () => {
+    const { subtasks, active } = pushedRun();
+    await subtasks.resolve(ctx);
+    active.set("acme/web");
+    await subtasks.release(ctx, { follow: true });
+    expect(active.get()).toBe("acme/web");
+  });
+
+  it("stay where they are when the branch is forgotten", async () => {
+    const { subtasks, active } = harness({
+      selected: "acme/api",
+      checkout: CHECKOUT,
+      tips: { ".": sha("origin/main") }
+    });
+    await subtasks.resolve(ctx);
+    await subtasks.release(ctx, { forgetBranch: true, follow: true });
+    expect(active.get()).toBe("acme/api");
+  });
+
+  /** Free, since its work is pushed — but the parent is reading it. */
+  it("keep their worktree from the next session's new branch", async () => {
+    const { subtasks } = pushedRun();
+    await subtasks.resolve(ctx);
+    await subtasks.release(ctx, { follow: true });
+    expect(
+      await nameOf(subtasks.resolve({ ...ctx, runId: "detached:2" }))
+    ).toBe(SLOT1);
+  });
+});
+
 describe("keeping what a session that did not complete did", () => {
   const BRANCH = BRANCH_1;
 

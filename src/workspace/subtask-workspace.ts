@@ -440,10 +440,14 @@ export interface SubtaskWorkspaces {
    * commit on one: a planning session's branch is no work to review. Only when
    * its tips read clean, though — one that could not be read, or holds a
    * commit, is held on its branch like any other.
+   *
+   * `follow` points the parent's reads at the worktree once it is released on
+   * its branch — the work the parent is about to hear of — unless the parent
+   * has moved to another repository since, which it chose.
    */
   release(
     ctx: RunRef,
-    options?: { hold?: boolean; forgetBranch?: boolean }
+    options?: { hold?: boolean; forgetBranch?: boolean; follow?: boolean }
   ): Promise<void>;
   /**
    * The run ended without completing — failed or canceled: stop it and keep
@@ -806,10 +810,15 @@ export function subtaskWorkspaces(config: {
       }
 
       const { near, ...run } = ctx;
+      const reading = parseWorktreeRepo(selected ?? "");
       const claimed = claim(
         config.pool,
         repo,
-        { ...run, ...(near?.repo === repo ? { near: near.slot } : {}) },
+        {
+          ...run,
+          ...(near?.repo === repo ? { near: near.slot } : {}),
+          ...(reading?.repo === repo ? { avoid: reading.slot } : {})
+        },
         now()
       );
       const name = nameOf(claimed);
@@ -900,6 +909,14 @@ export function subtaskWorkspaces(config: {
           ? {}
           : { branch: undefined, previous: row.branch ?? row.previous })
       });
+      if (
+        options.follow &&
+        keeps &&
+        row.ready &&
+        selectedRepo(config.active.get()) === row.repo
+      ) {
+        config.active.set(worktreeRepo(row.repo, row.slot));
+      }
       // Nobody works in a worktree between sessions, so its container stops
       // now rather than at the idle deadline. Its files stay for the next run.
       try {

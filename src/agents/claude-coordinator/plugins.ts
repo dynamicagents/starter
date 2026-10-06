@@ -133,9 +133,8 @@ export function sessionWorkspaces(ctx: PluginContext<Env>): SubtaskWorkspaces {
  * The parent: a checkout to open and pull requests to watch, a scratchpad, a
  * browser, and read-only eyes on the checkout.
  *
- * `active` is the agent's own selection, one instance shared with its
- * `workspace`: the selection caches what it last read, so a second instance
- * would go on answering the repository the first had already moved away from.
+ * `active` is the agent's own selection, which its `workspace` reads too — the
+ * one instance `activeRepo` hands everything on this storage.
  */
 export const parentPlugins = (
   env: Env,
@@ -180,7 +179,8 @@ export const parentPlugins = (
         "repo_pr_review_status",
         "repo_pr_threads",
         "repo_pr_checks",
-        "repo_worktrees"
+        "repo_worktrees",
+        "repo_worktree"
       ],
 
       beforeCheckout: ({ owner, repo: repoName }) =>
@@ -208,8 +208,8 @@ export const parentPlugins = (
           ...(repoName ? { repo: repoName } : {})
         });
       },
-      // The worktrees writing sessions commit in: to list what a canceled
-      // session kept, and release what will not be continued.
+      // The worktrees writing sessions commit in: to read one, list what a
+      // canceled session kept, and release what will not be continued.
       worktrees
     }),
     /**
@@ -229,6 +229,15 @@ export const parentPlugins = (
           provider: {
             get: async () => parentWorkspaceContext("the Claude Code sessions")
           }
+        },
+        // Re-read every turn and sent again whenever it moves: a selection
+        // moved without the model hearing of it is one its last `repo_worktree`
+        // answer still describes, so it reads the wrong checkout.
+        {
+          label: "reads",
+          description: "where your file reads and repo tools run right now",
+          whenChanged: "remind",
+          provider: { get: async () => worktrees.where() }
         }
       ]
     }),

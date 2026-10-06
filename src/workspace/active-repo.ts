@@ -141,7 +141,23 @@ export interface ActiveCheckout {
   branch: string;
 }
 
+/**
+ * One selection per storage, whoever asks for it: the parent's tools, its
+ * sub-agents' settle hooks and its task hooks each reach it from somewhere
+ * else, and each instance caches the row — so a second instance goes on
+ * answering what the first has already moved away from.
+ */
+const instances = new WeakMap<DurableObjectStorage, ActiveRepo>();
+
 export function activeRepo(storage: DurableObjectStorage): ActiveRepo {
+  const known = instances.get(storage);
+  if (known) return known;
+  const made = createActiveRepo(storage);
+  instances.set(storage, made);
+  return made;
+}
+
+function createActiveRepo(storage: DurableObjectStorage): ActiveRepo {
   let cached: string | undefined;
   let ready = false;
 

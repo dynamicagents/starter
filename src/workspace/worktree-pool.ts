@@ -166,6 +166,10 @@ export function isFree(worktree: Worktree): boolean {
  * - Otherwise the free worktree used longest ago, or a new slot. The pool grows
  *   with concurrency and has no ceiling of its own. Its branch is `branch`, or
  *   {@link runBranch}, and never one a worktree already holds.
+ *
+ * `avoid` is the slot the parent's reads are in, which only the branch it holds
+ * may be continued in: reset under them for another, they would read that
+ * branch's files believing them this one's.
  */
 export function claim(
   store: PoolStore,
@@ -176,6 +180,7 @@ export function claim(
     continue?: string;
     branch?: string;
     near?: number;
+    avoid?: number;
   },
   now: number
 ): Worktree {
@@ -204,12 +209,13 @@ export function claim(
     );
   }
 
+  const takeable = (row: Worktree) => isFree(row) && row.slot !== ctx.avoid;
   const near =
     ctx.near === undefined
       ? undefined
-      : rows.find((row) => row.slot === ctx.near && isFree(row));
+      : rows.find((row) => row.slot === ctx.near && takeable(row));
   const free =
-    near ?? rows.filter(isFree).sort((a, b) => a.usedAt - b.usedAt)[0];
+    near ?? rows.filter(takeable).sort((a, b) => a.usedAt - b.usedAt)[0];
   const slot =
     holder?.slot ??
     free?.slot ??

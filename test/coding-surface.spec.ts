@@ -73,6 +73,7 @@ describe("the parent's tools", () => {
       // not also speak for this agent in public.
       "repo_issue_view",
       "repo_open_pr",
+      "repo_pr_checks",
       "repo_pr_review_status",
       "repo_pr_threads",
       "repo_pr_view",

@@ -122,7 +122,7 @@ export function worktreeSwitch(config: {
             `- \`${row.branch}\`${row.slot === here ? " (your tools are here)" : ""} — ${summary(row)}`
         ),
         "",
-        `A worktree nothing touches for ${KEPT_DAYS} days is deleted, with any commits in it that were never pushed. \`repo_worktree\` with a branch puts your tools in it.`
+        `A worktree nothing touches for ${KEPT_DAYS} days is deleted, with any commits in it that were never pushed. Delegate with \`continue\` set to a branch to carry its work on.`
       ].join("\n");
     },
 

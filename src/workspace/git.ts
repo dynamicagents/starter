@@ -46,6 +46,8 @@ export function workspaceGit(config: {
   return {
     clone: (req): Promise<RepoGitResult> => stub().gitClone(req),
     fetch: (req): Promise<RepoGitResult> => stub().gitFetch(req),
-    push: (req): Promise<RepoGitResult> => stub().gitPush(req)
+    push: (req): Promise<RepoGitResult> => stub().gitPush(req),
+    // From the object's storage, so a forge tool starts no container.
+    origin: (dir): Promise<string | undefined> => stub().gitOrigin(dir)
   };
 }

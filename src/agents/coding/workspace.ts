@@ -10,7 +10,7 @@ import { gitIdentity } from "@/workspace/git-identity";
  * `coding`'s workspace, bound as `CODING_WORKSPACE`.
  *
  * Everything this object does lives in `@dynamicagents/plugins/workspace`
- * and is shared with `anthropic-coding`: one Durable Object, one container, one repository, with
+ * and is shared with `claude-coordinator`: one Durable Object, one container, one repository, with
  * the checkout in SQLite and `computerd` mounting it over FUSE at `/workspace`.
  * What is *this agent's* is the config below.
  *
@@ -34,7 +34,7 @@ export class CodingWorkspace extends WorkspaceObjectBase {
        * request through a Worker `Fetcher`, and this agent has no reason to put
        * itself on that path: it holds no credential the container needs, since
        * `/repo` runs clone, fetch and push as isomorphic-git inside this object.
-       * `anthropic-coding` is the agent that needs it, and it needs it for exactly
+       * `claude-coordinator` is the agent that needs it, and it needs it for exactly
        * one reason — swapping a credential the container must never hold.
        */
       egress: { mode: "direct" },

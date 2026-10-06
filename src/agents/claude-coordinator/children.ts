@@ -27,7 +27,14 @@ import {
   type SessionPlace,
   type SubtaskWorkspaces
 } from "@/workspace/subtask-workspace";
+import { activeRepo } from "@/workspace/active-repo";
 import { claudeCodeConfig } from "./claude-code";
+import {
+  branchSession,
+  openPullRequest,
+  recordBranchRun,
+  type OpenPullRequest
+} from "./branches";
 import {
   createPlan,
   lastPlanIndex,
@@ -42,9 +49,13 @@ import {
   plannedSession,
   planText,
   recordPlanRun,
+  REVISE_INPUT,
+  REVISER_DESCRIPTION,
   WRITE_INPUT,
+  WRITER_DESCRIPTION,
   type PlannedSession,
   type PlanInput,
+  type ReviseInput,
   type WriteInput
 } from "./plans";
 import { container, sessionWorkspaces } from "./plugins";
@@ -66,11 +77,12 @@ import {
   warningPrompt,
   type RepoStart,
   type Uncommitted,
-  type WritingOutcome
+  type WritingOutcome,
+  WRITE_OUTPUT
 } from "./session";
 
 /**
- * `anthropic-coding`'s sub-agents: a Claude Code session each, not a model loop.
+ * `claude-coordinator`'s sub-agents: a Claude Code session each, not a model loop.
  *
  * The session is the sub-agent's **model** — `claudeCodeModel` in
  * `@dynamicagents/plugins/claude-code` — so Think's recovery drives it: a run
@@ -100,7 +112,7 @@ function ensureKept(storage: DurableObjectStorage): void {
  *
  * `settle` runs in the finish hook, before the parent builds the message that
  * reports the run, and returns nothing — so the note is stored under the run,
- * and `AnthropicCodingAgent.formatDetachedCompletion` reads it back. SQL rather than
+ * and `ClaudeCoordinatorAgent.formatDetachedCompletion` reads it back. SQL rather than
  * `storage.get`, because that formatter is synchronous.
  */
 export function keepNote(
@@ -160,7 +172,7 @@ function placeOf(runtime: Record<string, unknown> | undefined): SessionPlace {
   const dir = runtime?.dir;
   if (!workspaceName || typeof dir !== "string") {
     throw new Error(
-      "anthropic-coding: this run carries no workspace; its spec's prepare supplies one"
+      "claude-coordinator: this run carries no workspace; its spec's prepare supplies one"
     );
   }
   return {
@@ -198,10 +210,13 @@ async function releaseUnused(
   await workspaces
     .release({ taskId: run.taskId, runId: run.runId }, options)
     .catch((released: unknown) =>
-      console.warn("[anthropic-coding] could not release an unused worktree", {
-        runId: run.runId,
-        err: String(released)
-      })
+      console.warn(
+        "[claude-coordinator] could not release an unused worktree",
+        {
+          runId: run.runId,
+          err: String(released)
+        }
+      )
     );
 }
 
@@ -276,6 +291,14 @@ export async function prepareWriter(
 ): Promise<Record<string, unknown>> {
   const plan = ctx.input.plan;
   let planned: PlannedSession | undefined;
+  if (plan === undefined && ctx.input.continue) {
+    if (ctx.input.branch) {
+      throw new Error(
+        "claude_code: pass `continue` to add to a branch, or `branch` to name a new one — not both."
+      );
+    }
+    return await placeOnBranch(ctx, ctx.input.continue, workspaces);
+  }
   if (plan !== undefined) {
     const found = await lookUpPlan(ctx.parent.env, ctx.parent.storage, plan);
     if (!found.ok) throw new Error(`claude_code: ${found.reason}`);
@@ -295,6 +318,7 @@ export async function prepareWriter(
     ...ctx,
     ...(planned?.near ? { near: planned.near } : {})
   });
+  noteBranchRun(ctx, place);
   const resume = carryOn(planned, place, { fork: true });
   return {
     ...runtimeOf(place),
@@ -303,11 +327,79 @@ export async function prepareWriter(
   };
 }
 
+/**
+ * A session sent back to a branch, carrying on the conversation that last
+ * worked on it — in that worktree, which is where the conversation is — and
+ * without a fork: one conversation accumulating is what going back means.
+ * Anywhere else it starts fresh, told the branch holds earlier work.
+ */
+async function placeOnBranch(
+  ctx: SubAgentPrepareContext<{ task: string }, Env>,
+  branch: string,
+  workspaces: SubtaskWorkspaces,
+  pullRequest?: OpenPullRequest
+): Promise<Record<string, unknown>> {
+  const last = await branchSession(
+    ctx.parent.storage,
+    branch,
+    sessionLookup(ctx.parent.env),
+    ctx.runId
+  );
+  const place = await claimPlace(workspaces, {
+    taskId: ctx.taskId,
+    runId: ctx.runId,
+    continue: branch,
+    ...(last?.near ? { near: last.near } : {})
+  });
+  noteBranchRun(ctx, place);
+  const resume = carryOn(last, place, { fork: false });
+  return {
+    ...runtimeOf(place),
+    ...(pullRequest ? { [PR_KEY]: pullRequest } : {}),
+    ...(resume ? { [RESUME_KEY]: resume } : {})
+  };
+}
+
+/** Which conversation a branch now carries: see `./branches.ts`. */
+function noteBranchRun(
+  ctx: Pick<SubAgentPrepareContext<unknown, Env>, "runId" | "parent">,
+  place: SessionPlace
+): void {
+  if (!place.branch) return;
+  recordBranchRun(ctx.parent.storage, {
+    runId: ctx.runId,
+    branch: place.branch,
+    workspaceName: place.workspaceName,
+    ...(place.slot ? { slot: place.slot } : {})
+  });
+}
+
+/**
+ * A revising session goes back to the branch an open pull request is from,
+ * which GitHub names — never a model — and is told which pull request it is.
+ */
+export async function prepareReviser(
+  ctx: SubAgentPrepareContext<ReviseInput, Env>,
+  workspaces: SubtaskWorkspaces = sessionWorkspaces(ctx.parent),
+  lookUp: (number: number) => Promise<OpenPullRequest> = (number) => {
+    const checkout = activeRepo(ctx.parent.storage).checkout();
+    if (!checkout) {
+      throw new Error(
+        "claude_code_revise: there is no repository checked out. Clone the one the pull request is in with `repo_clone` first."
+      );
+    }
+    return openPullRequest(ctx.parent.env.GITHUB_TOKEN, checkout.url, number);
+  }
+): Promise<Record<string, unknown>> {
+  const pullRequest = await lookUp(ctx.input.pr);
+  return await placeOnBranch(ctx, pullRequest.branch, workspaces, pullRequest);
+}
+
 const settleWriter = (ctx: SubAgentSettleContext<Env>): Promise<void> =>
   settleSession(sessionWorkspaces(ctx.parent), ctx.parent.storage, ctx);
 
 function workspaceStub(env: Env, name: string) {
-  const binding = env.ANTHROPIC_CODING_WORKSPACE;
+  const binding = env.CLAUDE_COORDINATOR_WORKSPACE;
   return binding.get(binding.idFromName(name));
 }
 
@@ -497,6 +589,19 @@ export async function reportPlan(
 /** Where a run's plan is kept in what `prepare` hands it. */
 const PLAN_KEY = "plan";
 
+/** Where a revising run's pull request is kept in what `prepare` hands it. */
+const PR_KEY = "pullRequest";
+
+/** The pull request a revising session works on, if it is one. */
+function pullRequestOf(
+  runtime: Record<string, unknown> | undefined
+): OpenPullRequest | undefined {
+  const pr = runtime?.[PR_KEY];
+  return pr && typeof pr === "object" && "number" in pr
+    ? (pr as OpenPullRequest)
+    : undefined;
+}
+
 /** A planning session's plan, as `prepare` hands it over. */
 export interface PlanPlace {
   id: string;
@@ -532,7 +637,7 @@ abstract class ClaudeCodeRun extends SubAgent<Env> {
     const plan = this.kind === "plan" ? planPlaceOf(runtime) : undefined;
     if (this.kind === "plan" && !plan) {
       throw new Error(
-        "anthropic-coding: this planning run carries no plan; its spec's prepare opens one"
+        "claude-coordinator: this planning run carries no plan; its spec's prepare opens one"
       );
     }
     const resume = carryOnOf(runtime);
@@ -551,7 +656,7 @@ abstract class ClaudeCodeRun extends SubAgent<Env> {
       // changes nothing, and has nobody to approve its plan mid-run.
       ...(plan
         ? { jsonSchema: PLAN_OUTPUT, permissionMode: "plan" as const }
-        : {}),
+        : { jsonSchema: WRITE_OUTPUT }),
       ...(resume
         ? {
             resume: {
@@ -575,7 +680,8 @@ abstract class ClaudeCodeRun extends SubAgent<Env> {
               place,
               writes,
               writerPlanOf(runtime),
-              resume !== undefined
+              resume !== undefined,
+              pullRequestOf(runtime)
             ),
       ...(writes
         ? { followUp: (session: SessionEnd) => this.#followUp(session, place) }
@@ -608,7 +714,7 @@ abstract class ClaudeCodeRun extends SubAgent<Env> {
     try {
       await this.#stub(place.workspaceName).noteSession(this.name, note);
     } catch (err) {
-      console.warn("[anthropic-coding] could not record the session", {
+      console.warn("[claude-coordinator] could not record the session", {
         runId: this.name,
         err: String(err)
       });
@@ -620,7 +726,7 @@ abstract class ClaudeCodeRun extends SubAgent<Env> {
     try {
       await this.#stub(place.workspaceName).forgetSession(runId);
     } catch (err) {
-      console.warn("[anthropic-coding] could not forget a lost session", {
+      console.warn("[claude-coordinator] could not forget a lost session", {
         runId,
         err: String(err)
       });
@@ -652,7 +758,8 @@ abstract class ClaudeCodeRun extends SubAgent<Env> {
     place: SessionPlace,
     writes: boolean,
     planId: string | undefined,
-    resumed: boolean
+    resumed: boolean,
+    pullRequest?: OpenPullRequest
   ): Promise<string> {
     const note = sessionAdvisory(
       await this.#stub(place.workspaceName).advisories()
@@ -671,7 +778,10 @@ abstract class ClaudeCodeRun extends SubAgent<Env> {
         submodules,
         continues: place.continues ?? false
       },
-      plan
+      plan,
+      pullRequest
+        ? { number: pullRequest.number, url: pullRequest.url }
+        : undefined
     );
   }
 
@@ -785,7 +895,7 @@ abstract class ClaudeCodeRun extends SubAgent<Env> {
     try {
       await this.#stub(place.workspaceName).claudeNoteRateLimit(info);
     } catch (err) {
-      console.warn("[anthropic-coding] could not record the bucket reading", {
+      console.warn("[claude-coordinator] could not record the bucket reading", {
         err: String(err)
       });
     }
@@ -806,7 +916,7 @@ abstract class ClaudeCodeRun extends SubAgent<Env> {
       ).map((sub) => sub.path);
     } catch (err) {
       console.warn(
-        "[anthropic-coding] could not read the checkout's submodules",
+        "[claude-coordinator] could not read the checkout's submodules",
         {
           err: String(err)
         }
@@ -837,7 +947,7 @@ abstract class ClaudeCodeRun extends SubAgent<Env> {
       }));
     } catch (err) {
       console.warn(
-        "[anthropic-coding] could not read where the session starts",
+        "[claude-coordinator] could not read where the session starts",
         {
           err: String(err)
         }
@@ -871,7 +981,7 @@ abstract class ClaudeCodeRun extends SubAgent<Env> {
       }
       return [...byPath].map(([path, files]) => ({ path, files }));
     } catch (err) {
-      console.warn("[anthropic-coding] could not read what is uncommitted", {
+      console.warn("[claude-coordinator] could not read what is uncommitted", {
         err: String(err)
       });
       return [];
@@ -899,7 +1009,7 @@ abstract class ClaudeCodeRun extends SubAgent<Env> {
       });
       if (!done.success) {
         console.warn(
-          "[anthropic-coding] the uncommitted work was not all deleted",
+          "[claude-coordinator] the uncommitted work was not all deleted",
           {
             stderr: done.stderr.trim().slice(0, 500)
           }
@@ -907,9 +1017,12 @@ abstract class ClaudeCodeRun extends SubAgent<Env> {
       }
       return { files: dirty, failed: !done.success };
     } catch (err) {
-      console.warn("[anthropic-coding] could not delete the uncommitted work", {
-        err: String(err)
-      });
+      console.warn(
+        "[claude-coordinator] could not delete the uncommitted work",
+        {
+          err: String(err)
+        }
+      );
       return { files: dirty, failed: true };
     }
   }
@@ -938,20 +1051,44 @@ abstract class ClaudeCodeRun extends SubAgent<Env> {
           : { path: repo.path };
       });
     } catch (err) {
-      console.warn("[anthropic-coding] could not count the session's commits", {
-        err: String(err)
-      });
+      console.warn(
+        "[claude-coordinator] could not count the session's commits",
+        {
+          err: String(err)
+        }
+      );
       return repos.map((repo) => ({ path: repo.path }));
     }
   }
 }
 
-/** A writing session, in a worktree of its own, carrying out a plan if given one. */
-export class AnthropicCodingWriterChild extends ClaudeCodeRun {
+/**
+ * A writing session, in a worktree of its own, carrying out a plan if given
+ * one, and delivering a pull request.
+ */
+export class ClaudeCoordinatorWriterChild extends ClaudeCodeRun {
   static override spec = {
     ...CLAUDE_CODE_AGENT,
+    description: WRITER_DESCRIPTION,
     inputSchema: WRITE_INPUT,
     prepare: prepareWriter,
+    settle: settleWriter
+  } as SubAgentSpec<never, never>;
+  protected readonly kind = "write";
+}
+
+/**
+ * A writing session sent back to an open pull request, carrying on the
+ * conversation that wrote it — see {@link prepareReviser}.
+ */
+export class ClaudeCoordinatorReviserChild extends ClaudeCodeRun {
+  static override spec = {
+    ...CLAUDE_CODE_AGENT,
+    name: "claude_code_revise",
+    description: REVISER_DESCRIPTION,
+    inputSchema: REVISE_INPUT,
+    prepare: (ctx: SubAgentPrepareContext<ReviseInput, Env>) =>
+      prepareReviser(ctx),
     settle: settleWriter
   } as SubAgentSpec<never, never>;
   protected readonly kind = "write";
@@ -963,7 +1100,7 @@ export class AnthropicCodingWriterChild extends ClaudeCodeRun {
  * — see `./plans.ts`. The writer's spec under another name, description and
  * input, since what makes it a planner is how it is launched.
  */
-export class AnthropicCodingPlannerChild extends ClaudeCodeRun {
+export class ClaudeCoordinatorPlannerChild extends ClaudeCodeRun {
   static override spec = {
     ...CLAUDE_CODE_AGENT,
     name: "claude_code_plan",

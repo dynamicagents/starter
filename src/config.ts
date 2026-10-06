@@ -51,8 +51,8 @@ export const GENERIC: AgentTuning = {
  * longer see it pays a container round trip to rediscover.
  *
  * Do not point the model at a Claude model: reaching one on a subscription
- * credential is what `anthropic-coding` exists for, and it needs a whole container
- * to do safely; see `src/agents/anthropic-coding/agent.ts`.
+ * credential is what `claude-coordinator` exists for, and it needs a whole container
+ * to do safely; see `src/agents/claude-coordinator/agent.ts`.
  */
 export const CODING: AgentTuning = {
   modelId: "@cf/zai-org/glm-5.3-flash",
@@ -62,7 +62,7 @@ export const CODING: AgentTuning = {
 };
 
 /**
- * `anthropic-coding`: `coding`'s shape, with the work done elsewhere.
+ * `claude-coordinator`: `coding`'s shape, with the work done elsewhere.
  *
  * **The flash model, like `coding`.** The full-size `glm-5.3` answers a share of
  * calls with `429` / `3040` "Capacity temporarily exceeded", and nothing falls
@@ -75,11 +75,11 @@ export const CODING: AgentTuning = {
  * the account's limits — the containers block in `wrangler.jsonc` carries the
  * arithmetic — and `npm run cf -- containers` is what shows it.
  */
-export const ANTHROPIC_CODING: AgentTuning = { ...CODING };
+export const CLAUDE_COORDINATOR: AgentTuning = { ...CODING };
 
 /**
  * The size a `coding` workspace's container starts at — 2 vCPU, 6 GiB, 8 GB
- * disk — and the base of {@link ANTHROPIC_CODING_WORKSPACE_INSTANCE}. Asked for
+ * disk — and the base of {@link CLAUDE_COORDINATOR_WORKSPACE_INSTANCE}. Asked for
  * on every start, so changing it replaces each running container when its
  * workspace next connects.
  *
@@ -115,7 +115,7 @@ export const WORKSPACE_INSTANCE: WorkspaceObjectConfig["instance"] = {
 };
 
 /**
- * `anthropic-coding`'s size: {@link WORKSPACE_INSTANCE} with four cores.
+ * `claude-coordinator`'s size: {@link WORKSPACE_INSTANCE} with four cores.
  *
  * About half of a writing session's wall-clock is the target's checks and
  * tests, one process each, which no number of containers speeds up. The same
@@ -123,7 +123,7 @@ export const WORKSPACE_INSTANCE: WorkspaceObjectConfig["instance"] = {
  * custom-size ceiling, and its 3 GiB-per-vCPU floor sets the memory, which
  * bills for the whole run.
  */
-export const ANTHROPIC_CODING_WORKSPACE_INSTANCE: WorkspaceObjectConfig["instance"] =
+export const CLAUDE_COORDINATOR_WORKSPACE_INSTANCE: WorkspaceObjectConfig["instance"] =
   { ...WORKSPACE_INSTANCE, vcpu: 4, memoryMib: 12288 };
 
 /**
@@ -168,7 +168,7 @@ export const CLAUDE_CODE_SESSION = {
    * Forty minutes, and **this is the ceiling on a session**.
    *
    * Longer than the workspace base's twenty-minute container-idle window, so
-   * `AnthropicCodingWorkspace` derives its own from this constant rather than
+   * `ClaudeCoordinatorWorkspace` derives its own from this constant rather than
    * restating it: a session stays detached for its whole timeout, and nothing
    * touches the workspace object while it runs.
    */
@@ -205,5 +205,5 @@ export const CLAUDE_CODE_SESSION = {
    */
   permissionMode: "bypassPermissions"
   // The credentials are the host's to answer, not a setting: see
-  // `src/agents/anthropic-coding/claude-code.ts`.
+  // `src/agents/claude-coordinator/claude-code.ts`.
 } as const satisfies Omit<ClaudeCodeConfig, "credentials">;

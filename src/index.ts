@@ -4,7 +4,7 @@ import { Artifacts, handleArtifactRoute } from "@dynamicagents/core/artifacts";
 import { hostManifest } from "./host-manifest";
 import { generic } from "./agents/generic/definition";
 import { coding } from "./agents/coding/definition";
-import { anthropicCoding } from "./agents/anthropic-coding/definition";
+import { claudeCoordinator } from "./agents/claude-coordinator/definition";
 
 // Durable Objects and Workflows must be exported from the Worker entry so the
 // runtime can resolve them by class name. Each tenant is a task host, the
@@ -29,7 +29,7 @@ export { CodingChild } from "./agents/coding/children";
 // `@dynamicagents/plugins/workspace`; `verify:isolation` keeps each out of
 // the bundles that do not install it.
 export { CodingWorkspace } from "./agents/coding/workspace";
-export { AnthropicCodingWorkspace } from "./agents/anthropic-coding/workspace";
+export { ClaudeCoordinatorWorkspace } from "./agents/claude-coordinator/workspace";
 
 // Not one of our classes, and **not optional**. `ContainerBackend` builds the
 // container's egress loopback with `ctx.exports.WorkspaceProxy`, so the class
@@ -44,13 +44,14 @@ export { WorkspaceProxy } from "@cloudflare/computer";
 // beside the binding in wrangler.jsonc.
 export { Artifacts };
 
-export { AnthropicCodingHost } from "./agents/anthropic-coding/host";
-export { AnthropicCodingWorkflow } from "./agents/anthropic-coding/workflow";
-export { AnthropicCodingAgent } from "./agents/anthropic-coding/agent";
+export { ClaudeCoordinatorHost } from "./agents/claude-coordinator/host";
+export { ClaudeCoordinatorWorkflow } from "./agents/claude-coordinator/workflow";
+export { ClaudeCoordinatorAgent } from "./agents/claude-coordinator/agent";
 export {
-  AnthropicCodingWriterChild,
-  AnthropicCodingPlannerChild
-} from "./agents/anthropic-coding/children";
+  ClaudeCoordinatorWriterChild,
+  ClaudeCoordinatorReviserChild,
+  ClaudeCoordinatorPlannerChild
+} from "./agents/claude-coordinator/children";
 
 /**
  * One Worker, every agent below, addressed by A2A `tenant`.
@@ -77,7 +78,7 @@ export {
  */
 const a2a = createA2AWorker<Env>({
   manifest: hostManifest,
-  agents: [generic, coding, anthropicCoding]
+  agents: [generic, coding, claudeCoordinator]
 });
 
 export default {

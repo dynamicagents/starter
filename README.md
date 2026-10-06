@@ -54,11 +54,11 @@ npm run deploy
 Register each agent with your gatekeeper using the **same endpoint** and its own
 **tenant id**:
 
-| endpoint                    | tenant id          |
-| --------------------------- | ------------------ |
-| `https://<your-worker>/a2a` | `generic`          |
-| `https://<your-worker>/a2a` | `coding`           |
-| `https://<your-worker>/a2a` | `anthropic-coding` |
+| endpoint                    | tenant id            |
+| --------------------------- | -------------------- |
+| `https://<your-worker>/a2a` | `generic`            |
+| `https://<your-worker>/a2a` | `coding`             |
+| `https://<your-worker>/a2a` | `claude-coordinator` |
 
 `/a2a` is core's default, not a requirement — see [Where the endpoints
 live](#where-the-endpoints-live). Register whatever path this deployment actually serves.
@@ -94,7 +94,7 @@ export const generic = defineAgent({
 // src/index.ts — mounted
 createA2AWorker<Env>({
   manifest: hostManifest,
-  agents: [generic, coding, anthropicCoding]
+  agents: [generic, coding, claudeCoordinator]
 });
 ```
 
@@ -185,11 +185,11 @@ request body, and a token minted for one agent would work against any sibling.
 
 ## The agents
 
-| Agent                                               | What it is                                                             | Why it's here                                                                            |
-| --------------------------------------------------- | ---------------------------------------------------------------------- | ---------------------------------------------------------------------------------------- |
-| [`generic/`](src/agents/generic/)                   | Answers, and hands self-contained work to a sub-agent it waits for     | The flagship                                                                             |
-| [`coding/`](src/agents/coding/)                     | Clones a repo into a Linux sandbox, changes it, opens a pull request   | Proves a plugin can own a Durable Object and a container without core knowing            |
-| [`anthropic-coding/`](src/agents/anthropic-coding/) | The same, but each sub-agent is a Claude Code session in the container | **Proves a sub-agent need not be a model loop at all** — its model is the session itself |
+| Agent                                                   | What it is                                                                                                             | Why it's here                                                                            |
+| ------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------- |
+| [`generic/`](src/agents/generic/)                       | Answers, and hands self-contained work to a sub-agent it waits for                                                     | The flagship                                                                             |
+| [`coding/`](src/agents/coding/)                         | Clones a repo into a Linux sandbox, changes it, opens a pull request                                                   | Proves a plugin can own a Durable Object and a container without core knowing            |
+| [`claude-coordinator/`](src/agents/claude-coordinator/) | Coordinates Claude Code sessions in the container, which build the change, open its pull request and answer its review | **Proves a sub-agent need not be a model loop at all** — its model is the session itself |
 
 Each is a task host, a pipeline and a step agent, all three from
 [`@dynamicagents/core`](https://github.com/dynamicagents/core): the host owns the A2A
@@ -199,7 +199,7 @@ fifteen minutes a turn can last runs **in the background**: the job stays open, 
 result arrives as a later turn. A step whose job fails runs once more, told it is a
 retry.
 
-### `anthropic-coding` plans with tools, and a plan is a link
+### `claude-coordinator` plans with tools, and a plan is a link
 
 Planning, approving and building are the agent's own tool calls, so whether a change
 gets a plan — and whether the caller approves it first — is the agent's to judge and the
@@ -219,11 +219,28 @@ all three and goes straight to `claude_code`.
    conversation**, forked, in the worktree that holds it — so the build starts knowing
    what the planner read and found — and is given the plan whole, the text the caller
    read. Where that worktree is busy or gone, it starts fresh from the plan.
-   `prepareWriter` in [`children.ts`](src/agents/anthropic-coding/children.ts) has how.
+   `prepareWriter` in [`children.ts`](src/agents/claude-coordinator/children.ts) has how.
 
 A plan belongs to the caller whose agent opened it
-([`plans.ts`](src/agents/anthropic-coding/plans.ts)): a link is shared by design, but only
+([`plans.ts`](src/agents/claude-coordinator/plans.ts)): a link is shared by design, but only
 that caller's agent edits, approves or builds it.
+
+### `claude-coordinator` coordinates, and the sessions own the pull request
+
+The agent's own model is a small one on Workers AI, so it neither writes nor reviews
+code. A session pushes its branch, opens the pull request — ready for review, which is
+what asks for Copilot's — and answers through `--json-schema` how it ended: done,
+stopped for the person's decision, or blocked. Between sessions the agent watches the
+pull request with `check_back`, `repo_pr_review_status` and `repo_pr_checks`, none of
+which starts a container, and sends it back with **`claude_code_revise`** when a review
+or a failing check lands, or for a self-review it judges worth one. A revision carries
+on the conversation that last worked on the branch, in its worktree, so the session
+that answers a review is the one that wrote the code. A worktree's container stops as
+soon as its session settles, so nothing idles through the wait.
+
+GitHub is reached as the deployment's account: a session's `gh` and git present a
+placeholder, and the egress gateway swaps in `GITHUB_TOKEN` for GitHub's hosts only.
+[`.env.example`](.env.example) says how to scope that token.
 
 ### The two coders need one thing the others do not
 
@@ -232,13 +249,13 @@ Workers AI model — is what every other agent here runs.
 
 The two differ in exactly one place, and it is one level below the agent: what a
 sub-agent _is_. `coding`'s `code` is a Think sub-agent on Workers AI, working in
-the container. An `anthropic-coding` session is one `claude -p` process — its own loop,
+the container. A `claude-coordinator` session is one `claude -p` process — its own loop,
 its own tools, its own context management — so its sub-agent's model is
 `claudeCodeModel`, which runs the session, rather than a model call. Their
 workspace Durable Objects are two thin subclasses of `WorkspaceObjectBase` from
 `@dynamicagents/plugins/workspace`, differing only in a `WorkspaceObjectConfig`.
 
-That egress policy is the whole reason `anthropic-coding` exists. An Anthropic
+That egress policy is the whole reason `claude-coordinator` exists. An Anthropic
 **subscription** credential is refused for raw Messages API calls on every
 frontier model and accepted from the sanctioned client — so reaching Opus on one
 means running that client, and the client runs in a container that also runs a
@@ -328,7 +345,7 @@ A sub-agent reaches its workspace through its spec's `prepare`, which runs on th
 **parent**, where the caller and the repository are known, and hands the
 workspace name to the sub-agent as `runtime()`. It is deliberately not the
 sub-agent's input: the parent's model writes that, and a model could then name
-somebody else's workspace. An `anthropic-coding` writing session gets a worktree of its
+somebody else's workspace. A `claude-coordinator` writing session gets a worktree of its
 own that way, and its `settle` records and frees it when the run ends.
 
 ---
@@ -532,7 +549,7 @@ src/
   agents/
     generic/           ← agent, children (the `general` sub-agent), definition, plugins, soul, manifest
     coding/           ← the same set, plus the `code` spec and the workspace object
-    anthropic-coding/       ← the same set, plus the Claude Code sessions' report and the workspace object
+    claude-coordinator/       ← the same set, plus the Claude Code sessions' report and the workspace object
 test/
 scripts/
 ```

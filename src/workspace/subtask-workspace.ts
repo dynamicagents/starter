@@ -22,7 +22,7 @@ import {
  * workspace no other live session shares, and why. What is here is the half a
  * plugin cannot have: **which Durable Object, how it comes to hold the right
  * checkout on the right branch, and what is kept when the session ends.** The
- * sub-agents' `prepare` and `settle` in `src/agents/anthropic-coding/children.ts`
+ * sub-agents' `prepare` and `settle` in `src/agents/claude-coordinator/children.ts`
  * are what call it.
  *
  * The workspace is a worktree from `./worktree-pool.ts`, and it is **kept**: the
@@ -105,7 +105,7 @@ function assertSubmodulePath(path: string): void {
     path.split("/").some((part) => part === "" || part === "." || part === "..")
   ) {
     throw new Error(
-      `anthropic-coding: refusing a submodule path that could leave the checkout: ${JSON.stringify(path)}`
+      `claude-coordinator: refusing a submodule path that could leave the checkout: ${JSON.stringify(path)}`
     );
   }
 }
@@ -129,7 +129,7 @@ export async function readSubmodules(
   // not a failure. Anything that said why is one.
   if (!listed.success && listed.stderr.trim()) {
     throw new Error(
-      `anthropic-coding: could not read .gitmodules in ${dir}: ${listed.stderr.trim()}`
+      `claude-coordinator: could not read .gitmodules in ${dir}: ${listed.stderr.trim()}`
     );
   }
   const submodules = parseGitmodules(listed.stdout);
@@ -159,7 +159,7 @@ export function submoduleCloneUrl(sub: Submodule, parentUrl: string): string {
   }
   if (parsed?.protocol !== "https:" || parsed.hostname !== host) {
     throw new Error(
-      `anthropic-coding: the submodule at ${sub.path} is cloned from ${sub.url}, and ` +
+      `claude-coordinator: the submodule at ${sub.path} is cloned from ${sub.url}, and ` +
         `a writing session clones only over https from ${host}, where the ` +
         "parent's checkout came from"
     );
@@ -200,7 +200,7 @@ EOF`,
   );
   if (!found.success) {
     throw new Error(
-      `anthropic-coding: could not read which submodules are cloned: ${found.stderr || found.stdout}`
+      `claude-coordinator: could not read which submodules are cloned: ${found.stderr || found.stdout}`
     );
   }
   return new Set(found.stdout.split("\n").filter(Boolean));
@@ -268,10 +268,14 @@ done <<EOF
 $WORKTREE_REPOS
 EOF`;
 
-/** Each listed repository's HEAD, or nothing where it cannot be read. */
+/**
+ * Each listed repository's HEAD, and the last commit pushed on its branch —
+ * nothing where either cannot be read. A session pushes its own branch, and
+ * git records the push in the remote-tracking ref this reads.
+ */
 const READ_TIPS = `while IFS= read -r path; do
   [ -n "$path" ] || continue
-  printf '%s\\t%s\\n' "$path" "$(git -C "$path" rev-parse HEAD 2>/dev/null)"
+  printf '%s\\t%s\\t%s\\n' "$path" "$(git -C "$path" rev-parse HEAD 2>/dev/null)" "$(git -C "$path" rev-parse --verify --quiet "refs/remotes/origin/$WORKTREE_BRANCH" 2>/dev/null)"
 done <<EOF
 $WORKTREE_PATHS
 EOF`;
@@ -517,7 +521,7 @@ export function subtaskWorkspaces(config: {
     if (dir) return dir;
     const note = sessionAdvisory(await stub.advisories());
     throw new Error(
-      "anthropic-coding: there is no checkout in this workspace yet, so there is " +
+      "claude-coordinator: there is no checkout in this workspace yet, so there is " +
         "nothing to work on. Clone a repository with `repo_clone`, or open a " +
         "scratchpad with `scratch_open`, before delegating." +
         (note ? `\n\n${note}` : "")
@@ -563,7 +567,7 @@ export function subtaskWorkspaces(config: {
        */
       if (!/^\/[^/]+\/./.test(checkout.dir)) {
         throw new Error(
-          `anthropic-coding: refusing to clear a checkout path that is not under a workspace directory: ${checkout.dir}`
+          `claude-coordinator: refusing to clear a checkout path that is not under a workspace directory: ${checkout.dir}`
         );
       }
       const cleared = await run('rm -rf "$CHECKOUT_DIR"', {
@@ -572,7 +576,7 @@ export function subtaskWorkspaces(config: {
       });
       if (!cleared.success) {
         throw new Error(
-          `anthropic-coding: could not clear an unfinished clone in a worktree: ${cleared.stderr || cleared.stdout}`
+          `claude-coordinator: could not clear an unfinished clone in a worktree: ${cleared.stderr || cleared.stdout}`
         );
       }
       const cloned = await stub.gitClone({
@@ -588,7 +592,7 @@ export function subtaskWorkspaces(config: {
         // The branch is named because the likeliest cause is one that exists
         // only in the parent's checkout — a worktree clones from the remote.
         throw new Error(
-          `anthropic-coding: could not clone ${checkout.url} at ${checkout.branch} into a worktree: ${cloned.message}`
+          `claude-coordinator: could not clone ${checkout.url} at ${checkout.branch} into a worktree: ${cloned.message}`
         );
       }
       // A worktree whose storage went — reclaimed after a week untouched — no
@@ -609,7 +613,7 @@ export function subtaskWorkspaces(config: {
       const fetched = await stub.gitFetch({ url, dir, allowedHosts: [host] });
       if (!fetched.ok) {
         throw new Error(
-          `anthropic-coding: could not fetch ${what} in a worktree: ${fetched.message}`
+          `claude-coordinator: could not fetch ${what} in a worktree: ${fetched.message}`
         );
       }
     };
@@ -630,7 +634,7 @@ export function subtaskWorkspaces(config: {
       });
       if (!placed.success) {
         throw new Error(
-          `anthropic-coding: could not put a worktree on ${worktree.branch}: ${placed.stderr || placed.stdout}`
+          `claude-coordinator: could not put a worktree on ${worktree.branch}: ${placed.stderr || placed.stdout}`
         );
       }
       return parsePlaced(placed.stdout);
@@ -677,7 +681,7 @@ export function subtaskWorkspaces(config: {
         });
         if (!cloned.ok) {
           throw new Error(
-            `anthropic-coding: could not clone the submodule at ${sub.path}${branch ? ` on ${branch}` : ""}: ${cloned.message}`
+            `claude-coordinator: could not clone the submodule at ${sub.path}${branch ? ` on ${branch}` : ""}: ${cloned.message}`
           );
         }
       }
@@ -702,7 +706,7 @@ export function subtaskWorkspaces(config: {
       ![root, ...placedSubs].some((placed) => placed?.pushed)
     ) {
       throw new Error(
-        `anthropic-coding: no worktree holds ${worktree.branch}, and it is on the remote ` +
+        `claude-coordinator: no worktree holds ${worktree.branch}, and it is on the remote ` +
           "in no repository — it was never pushed, and the worktree that held it " +
           "was released or deleted. Its commits are gone; delegate without " +
           "`continue` to do the work again."
@@ -773,7 +777,7 @@ export function subtaskWorkspaces(config: {
       const checkout = config.active.checkout();
       if (!checkout) {
         throw new Error(
-          "anthropic-coding: there is no recorded checkout for a writing session to " +
+          "claude-coordinator: there is no recorded checkout for a writing session to " +
             "clone. `repo_clone` records one only when it leaves a clean tree on " +
             "a named branch — if its last answer was a refusal (uncommitted " +
             "changes, another repository at that path), deal with that and run " +
@@ -782,7 +786,7 @@ export function subtaskWorkspaces(config: {
       }
       if (ctx.continue !== undefined && !isBranchName(ctx.continue)) {
         throw new Error(
-          `anthropic-coding: \`continue\` names ${JSON.stringify(ctx.continue)}, which is ` +
+          `claude-coordinator: \`continue\` names ${JSON.stringify(ctx.continue)}, which is ` +
             "not a branch name. Pass the branch to add to — the one an earlier " +
             "session's report named, or a pull request's head branch — or leave " +
             "it out to start a new one."
@@ -790,13 +794,13 @@ export function subtaskWorkspaces(config: {
       }
       if (ctx.branch !== undefined && ctx.continue !== undefined) {
         throw new Error(
-          "anthropic-coding: pass `continue` to add to a branch, or `branch` to " +
+          "claude-coordinator: pass `continue` to add to a branch, or `branch` to " +
             "name a new one — not both."
         );
       }
       if (ctx.branch !== undefined && !isBranchName(ctx.branch)) {
         throw new Error(
-          `anthropic-coding: \`branch\` names ${JSON.stringify(ctx.branch)}, which ` +
+          `claude-coordinator: \`branch\` names ${JSON.stringify(ctx.branch)}, which ` +
             "git would not take as a branch name. Pass another, or leave it out."
         );
       }
@@ -839,7 +843,10 @@ export function subtaskWorkspaces(config: {
             READ_TIPS,
             {
               cwd: row.dir,
-              env: { WORKTREE_PATHS: repos.map((repo) => repo.path).join("\n") }
+              env: {
+                WORKTREE_PATHS: repos.map((repo) => repo.path).join("\n"),
+                WORKTREE_BRANCH: row.branch ?? ""
+              }
             },
             nameOf(row)
           );
@@ -847,12 +854,19 @@ export function subtaskWorkspaces(config: {
             read.stdout
               .split("\n")
               .filter(Boolean)
-              .map((line) => line.split("\t") as [string, string])
+              .map((line) => {
+                const [path = "", tip = "", pushed = ""] = line.split("\t");
+                return [path, { tip, pushed }] as const;
+              })
           );
-          repos = repos.map((repo) => ({
-            ...repo,
-            tip: tips.get(repo.path) ?? ""
-          }));
+          repos = repos.map((repo) => {
+            const read = tips.get(repo.path);
+            return {
+              ...repo,
+              tip: read?.tip ?? "",
+              ...(read?.pushed ? { pushed: read.pushed } : {})
+            };
+          });
         } catch (err) {
           // Unknown tips keep the worktree held, which is the side to err on.
           console.warn(
@@ -886,6 +900,21 @@ export function subtaskWorkspaces(config: {
           ? {}
           : { branch: undefined, previous: row.branch ?? row.previous })
       });
+      // Nobody works in a worktree between sessions, so its container stops
+      // now rather than at the idle deadline. Its files stay for the next run.
+      try {
+        await config.binding
+          .get(config.binding.idFromName(nameOf(row)))
+          .releaseContainer();
+      } catch (err) {
+        console.warn(
+          `[${config.label}] could not release a worktree's container`,
+          {
+            slot: row.slot,
+            err: String(err)
+          }
+        );
+      }
     },
 
     /**

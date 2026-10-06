@@ -9,7 +9,7 @@ const CHECKOUT: ActiveCheckout = {
   dir: "/workspace/super",
   branch: "main"
 };
-const BRANCH = "anthropic-coding/task-a/1";
+const BRANCH = "claude-coordinator/task-a/1";
 
 /** A worktree holding {@link BRANCH}: commits in `core`, none in the superproject. */
 const HELD: Worktree = {
@@ -93,7 +93,7 @@ describe("the parent's way into a worktree", () => {
 
   it("says where to look for a branch no worktree holds", async () => {
     const { worktrees, selected } = setup();
-    const answer = await worktrees.use("anthropic-coding/task-a/9");
+    const answer = await worktrees.use("claude-coordinator/task-a/9");
     expect(answer).toMatch(/No worktree holds.*repo_fetch.*continue/s);
     expect(selected()).toBe("acme/super");
   });
@@ -178,7 +178,7 @@ describe("writing from inside a worktree", () => {
         dir: "/workspace/super/core",
         branch: "other"
       })
-    ).toMatch(/holds `anthropic-coding\/task-a\/1`/);
+    ).toMatch(/holds `claude-coordinator\/task-a\/1`/);
     expect(
       await worktrees.beforeWrite({
         tool: "repo_push",

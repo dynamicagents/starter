@@ -48,7 +48,7 @@ process.env.GITHUB_TOKEN ??= "test-token";
 // real deploy takes when an operator leaves them unset.
 process.env.GITHUB_NAME ??= "";
 process.env.GITHUB_EMAIL ??= "";
-// `anthropic-coding`'s credential pool. Never real, and nothing in the suite reaches
+// `claude-coordinator`'s credential pool. Never real, and nothing in the suite reaches
 // Anthropic — the egress gateway is tested against a stubbed `fetch` in
 // `@dynamicagents/plugins`, and no spec here starts a session. One line per
 // entry in `wrangler.jsonc`'s `secrets.required`, since that list is what the
@@ -111,8 +111,8 @@ export default defineConfig({
             useSQLite: true
           },
           TEST_CODING_AGENT: { className: "TestCodingAgent", useSQLite: true },
-          TEST_ANTHROPIC_CODING_AGENT: {
-            className: "TestAnthropicCodingAgent",
+          TEST_CLAUDE_COORDINATOR_AGENT: {
+            className: "TestClaudeCoordinatorAgent",
             useSQLite: true
           },
           TEST_GENERIC_HOST: {
@@ -123,18 +123,22 @@ export default defineConfig({
             className: "TestCodingHost",
             useSQLite: true
           },
-          TEST_ANTHROPIC_CODING_HOST: {
-            className: "TestAnthropicCodingHost",
+          TEST_CLAUDE_COORDINATOR_HOST: {
+            className: "TestClaudeCoordinatorHost",
             useSQLite: true
           },
           GENERIC_GENERAL: { className: "GenericChild", useSQLite: true },
           CODING_CHILD: { className: "CodingChild", useSQLite: true },
-          ANTHROPIC_CODING_WRITER_CHILD: {
-            className: "AnthropicCodingWriterChild",
+          CLAUDE_COORDINATOR_WRITER_CHILD: {
+            className: "ClaudeCoordinatorWriterChild",
             useSQLite: true
           },
-          ANTHROPIC_CODING_PLANNER_CHILD: {
-            className: "AnthropicCodingPlannerChild",
+          CLAUDE_COORDINATOR_REVISER_CHILD: {
+            className: "ClaudeCoordinatorReviserChild",
+            useSQLite: true
+          },
+          CLAUDE_COORDINATOR_PLANNER_CHILD: {
+            className: "ClaudeCoordinatorPlannerChild",
             useSQLite: true
           },
           TEST_GENERIC_CHILD: {
@@ -142,12 +146,12 @@ export default defineConfig({
             useSQLite: true
           },
           TEST_CODING_CHILD: { className: "TestCodingChild", useSQLite: true },
-          TEST_ANTHROPIC_CODING_WRITER_CHILD: {
-            className: "TestAnthropicCodingWriterChild",
+          TEST_CLAUDE_COORDINATOR_WRITER_CHILD: {
+            className: "TestClaudeCoordinatorWriterChild",
             useSQLite: true
           },
-          TEST_ANTHROPIC_CODING_PLANNER_CHILD: {
-            className: "TestAnthropicCodingPlannerChild",
+          TEST_CLAUDE_COORDINATOR_PLANNER_CHILD: {
+            className: "TestClaudeCoordinatorPlannerChild",
             useSQLite: true
           }
         },
@@ -161,9 +165,9 @@ export default defineConfig({
             name: "test-coding-workflow",
             className: "TestCodingWorkflow"
           },
-          TEST_ANTHROPIC_CODING_WORKFLOW: {
-            name: "test-anthropic-coding-workflow",
-            className: "TestAnthropicCodingWorkflow"
+          TEST_CLAUDE_COORDINATOR_WORKFLOW: {
+            name: "test-claude-coordinator-workflow",
+            className: "TestClaudeCoordinatorWorkflow"
           }
         }
       }

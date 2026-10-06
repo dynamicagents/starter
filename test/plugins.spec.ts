@@ -9,11 +9,11 @@ import {
 import { GenericChild } from "@/agents/generic/children";
 import { CodingChild } from "@/agents/coding/children";
 import {
-  AnthropicCodingPlannerChild,
-  AnthropicCodingWriterChild
-} from "@/agents/anthropic-coding/children";
+  ClaudeCoordinatorPlannerChild,
+  ClaudeCoordinatorWriterChild
+} from "@/agents/claude-coordinator/children";
 import { resolveInstallCommand } from "@dynamicagents/plugins/workspace";
-import { CODING, ANTHROPIC_CODING, GENERIC } from "@/config";
+import { CODING, CLAUDE_COORDINATOR, GENERIC } from "@/config";
 import { INSTALL_PLAN } from "@/workspace/install-plan";
 
 /**
@@ -25,8 +25,8 @@ import { INSTALL_PLAN } from "@/workspace/install-plan";
 const SPECS: [string, SubAgentSpec<unknown, unknown>][] = [
   ["GenericChild", GenericChild.spec],
   ["CodingChild", CodingChild.spec],
-  ["AnthropicCodingWriterChild", AnthropicCodingWriterChild.spec],
-  ["AnthropicCodingPlannerChild", AnthropicCodingPlannerChild.spec]
+  ["ClaudeCoordinatorWriterChild", ClaudeCoordinatorWriterChild.spec],
+  ["ClaudeCoordinatorPlannerChild", ClaudeCoordinatorPlannerChild.spec]
 ] as [string, SubAgentSpec<unknown, unknown>][];
 
 describe("a sub-agent this repo binds", () => {
@@ -45,8 +45,8 @@ describe("a sub-agent this repo binds", () => {
     ).toEqual({
       GenericChild: false,
       CodingChild: true,
-      AnthropicCodingWriterChild: true,
-      AnthropicCodingPlannerChild: true
+      ClaudeCoordinatorWriterChild: true,
+      ClaudeCoordinatorPlannerChild: true
     });
   });
 
@@ -85,23 +85,23 @@ describe("tuning", () => {
   it("runs every agent's turns on the flash model", () => {
     expect(GENERIC.modelId).toBe("@cf/zai-org/glm-5.3-flash");
     expect(CODING.modelId).toBe(GENERIC.modelId);
-    // anthropic-coding is `coding`'s tuning whole, so a change to one reaches
+    // claude-coordinator is `coding`'s tuning whole, so a change to one reaches
     // the other.
-    expect(ANTHROPIC_CODING).toEqual(CODING);
+    expect(CLAUDE_COORDINATOR).toEqual(CODING);
   });
 
   it("compacts generic on the flash model", () => {
     expect(GENERIC.compactionModelId).toBe("@cf/zai-org/glm-5.3-flash");
   });
 
-  it.each([CODING, ANTHROPIC_CODING])(
+  it.each([CODING, CLAUDE_COORDINATOR])(
     "compacts a coding agent on the full-size model",
     (tuning) => {
       expect(tuning.compactionModelId).toBe("@cf/zai-org/glm-5.3");
     }
   );
 
-  it.each([GENERIC, CODING, ANTHROPIC_CODING])(
+  it.each([GENERIC, CODING, CLAUDE_COORDINATOR])(
     "keeps a recent tail inside the compaction threshold",
     (tuning) => {
       expect(tuning.keepRecentTokens).toBeLessThan(tuning.compactAfterTokens);

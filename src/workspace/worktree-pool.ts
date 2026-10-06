@@ -30,7 +30,7 @@ export interface PoolRepo {
   start: string;
   /** Where the last run left it. Empty when something moved it unseen. */
   tip: string;
-  /** The last commit the parent pushed from it. */
+  /** The last commit known to be on the remote, as a push left it. */
   pushed?: string;
 }
 
@@ -99,7 +99,7 @@ export function parseWorktreeRepo(
  */
 export function runBranch(ctx: { taskId: string; runId: string }): string {
   const hash = fnv1a(`${ctx.taskId}:${ctx.runId}`) % 36 ** 5;
-  return `anthropic-coding/${hash.toString(36).padStart(5, "0")}`;
+  return `claude-coordinator/${hash.toString(36).padStart(5, "0")}`;
 }
 
 /** FNV-1a, 32-bit: stable and synchronous, for telling ids apart. */
@@ -190,7 +190,7 @@ export function claim(
       : rows.find((row) => row.branch === ctx.continue);
   if (holder?.live) {
     throw new Error(
-      `anthropic-coding: ${ctx.continue} is being worked on by another session ` +
+      `claude-coordinator: ${ctx.continue} is being worked on by another session ` +
         "right now. Wait for its report, then continue the branch."
     );
   }
@@ -198,7 +198,7 @@ export function claim(
   const branch = ctx.continue ?? ctx.branch ?? runBranch(ctx);
   if (ctx.continue === undefined && rows.some((row) => row.branch === branch)) {
     throw new Error(
-      `anthropic-coding: a worktree already holds ${branch}. Delegate with ` +
+      `claude-coordinator: a worktree already holds ${branch}. Delegate with ` +
         "`continue` set to it to add to that work, or name another branch."
     );
   }

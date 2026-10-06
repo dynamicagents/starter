@@ -100,7 +100,7 @@ const AGENTS = [
     // Both coders share one workspace base, from
     // `@dynamicagents/plugins/workspace`, and the whole point of that base is
     // that it knows nothing about Claude Code: the egress policy arrives through
-    // a config seam, and only `anthropic-coding`'s subclass fills it in. If this ever
+    // a config seam, and only `claude-coordinator`'s subclass fills it in. If this ever
     // fails, the shared base has grown an import that belongs in a subclass —
     // which would also put an Anthropic credential path in an agent that has no
     // business with one.
@@ -113,16 +113,16 @@ const AGENTS = [
     maxBytes: 14_910_000
   },
   {
-    name: "anthropic-coding",
+    name: "claude-coordinator",
     entries: [
-      "src/agents/anthropic-coding/host.ts",
-      "src/agents/anthropic-coding/workflow.ts",
-      "src/agents/anthropic-coding/agent.ts",
-      "src/agents/anthropic-coding/children.ts",
+      "src/agents/claude-coordinator/host.ts",
+      "src/agents/claude-coordinator/workflow.ts",
+      "src/agents/claude-coordinator/agent.ts",
+      "src/agents/claude-coordinator/children.ts",
       // Included for the reason `coding`'s is, and more sharply: this subclass
       // is where the credential-egress gateway is wired, so it is the single
       // file this check most needs to be watching.
-      "src/agents/anthropic-coding/workspace.ts"
+      "src/agents/claude-coordinator/workspace.ts"
     ],
     // Nothing to forbid: this agent installs every plugin in this repo, and
     // `coding`'s entry above is the other half of the `/claude-code` pair.

@@ -27,7 +27,7 @@ import worker, { type TestEnv } from "./worker";
 
 const testEnv = env as unknown as TestEnv;
 
-/** `anthropic-coding`'s tasks are a pipeline: `./anthropic-coding-pipeline.spec.ts`. */
+/** `claude-coordinator`'s tasks are a pipeline: `./claude-coordinator-pipeline.spec.ts`. */
 const TENANTS = [
   { tenant: "generic", background: false },
   { tenant: "coding", background: true }

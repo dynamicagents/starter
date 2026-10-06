@@ -8,7 +8,7 @@ import { z } from "zod";
 import type { SessionNote } from "./workspace";
 
 /**
- * A plan, as `anthropic-coding` keeps one: an artifact of its own, which a
+ * A plan, as `claude-coordinator` keeps one: an artifact of its own, which a
  * Claude Code session writes, anyone holding its link reads, the caller
  * approves through `ask_user`, and a writing session is given whole.
  *
@@ -62,6 +62,65 @@ export const WRITE_INPUT = CLAUDE_CODE_WRITE_INPUT.extend({
 });
 
 export type WriteInput = z.infer<typeof WRITE_INPUT>;
+
+/** What the parent model is told `claude_code` does. */
+export const WRITER_DESCRIPTION = [
+  "Hand a change to a Claude Code session in a worktree of its own: it reads,",
+  "edits, runs the project's checks, commits, pushes its branch and opens a pull",
+  "request ready for review — which is what asks for Copilot's review. Its report",
+  "says how it ended — done, stopped for the person's decision, or blocked — and",
+  "names the pull request.",
+  "",
+  "Give it **one coherent change**, described as you would to an engineer: what",
+  "should be true when it is done, and how to tell. It is expensive to start and",
+  "cheap to let run, so 'add the endpoint, its tests and wire it up' is one",
+  "session, not three.",
+  "",
+  "It cannot ask you anything mid-run. It stops instead, with a question for you to",
+  "put to the person.",
+  "",
+  "To build an approved plan, pass its id as `plan`. To add to a branch that has",
+  "no pull request yet — a session that stopped for a decision, or work a cancel",
+  "kept — set `continue` to it: the session carries on the conversation that wrote",
+  "it. To change an open pull request, use claude_code_revise instead.",
+  "",
+  "To find something out rather than change it, say so and that it is to change",
+  "nothing: it pushes nothing and opens nothing."
+].join("\n");
+
+/** `claude_code_revise`'s input: which pull request, and what brought it back. */
+export const REVISE_INPUT = z.object({
+  pr: z
+    .number()
+    .int()
+    .positive()
+    .describe(
+      "The pull request's number, in the repository you have checked out."
+    ),
+  task: z
+    .string()
+    .describe(
+      "What brought it back, in a sentence: a self-review, Copilot's review having landed, a check that failed (by name), or what the person asked for, in their words. Say what happened, not how to answer it."
+    )
+});
+
+export type ReviseInput = z.infer<typeof REVISE_INPUT>;
+
+/** What the parent model is told `claude_code_revise` does. */
+export const REVISER_DESCRIPTION = [
+  "Send a Claude Code session back to an open pull request to work on it: a",
+  "self-review, Copilot's review once it has landed, a failing check, or something",
+  "the person asked for. It carries on the conversation that wrote the pull",
+  "request where it can, so it starts knowing the code.",
+  "",
+  "It already knows how to answer each of those — a review in one pass, every",
+  "thread replied to and resolved, CI's logs read and fixed — so tell it what",
+  "landed, not what to do about it. Before it finishes it looks once at the",
+  "review and the checks, and answers whatever landed while it worked.",
+  "",
+  "One session at a time on a pull request: while one is running, wait for its",
+  "report rather than start another."
+].join("\n");
 
 /** What the parent model is told `claude_code_plan` does. */
 export const PLANNER_DESCRIPTION = [
@@ -130,7 +189,7 @@ export type PlanAnswer = z.infer<typeof PlanAnswer>;
  * build it, or a link forwarded to another caller would hand them this one's
  * plan. A plan is this caller's because this agent opened it.
  */
-const TABLE = "anthropic_coding_plans";
+const TABLE = "claude_coordinator_plans";
 
 function ensure(storage: DurableObjectStorage): void {
   storage.sql.exec(
@@ -189,7 +248,7 @@ export function ownsPlan(storage: DurableObjectStorage, id: string): boolean {
  * about how it went: whether it filed a version is the workspace's record,
  * which a reclaimed workspace takes with the transcript.
  */
-const RUNS_TABLE = "anthropic_coding_plan_runs";
+const RUNS_TABLE = "claude_coordinator_plan_runs";
 
 function ensureRuns(storage: DurableObjectStorage): void {
   storage.sql.exec(

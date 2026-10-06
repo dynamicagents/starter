@@ -68,7 +68,7 @@ export interface ActiveRepo {
    * filesystem, so something has to clone into it — and the honest url to use is
    * **the one the parent actually cloned from**, already allowlist-checked by
    * `/repo`. Reconstructing one from `owner/repo` would mean this file deciding a
-   * forge host, which is a decision `/repo` owns and permits more than one answer
+   * GitHub host, which is a decision `/repo` owns and permits more than one answer
    * to.
    *
    * `undefined` before the first clone, and a caller must treat that as "there is
@@ -141,7 +141,23 @@ export interface ActiveCheckout {
   branch: string;
 }
 
+/**
+ * One selection per storage, whoever asks for it: the parent's tools, its
+ * sub-agents' settle hooks and its task hooks each reach it from somewhere
+ * else, and each instance caches the row — so a second instance goes on
+ * answering what the first has already moved away from.
+ */
+const instances = new WeakMap<DurableObjectStorage, ActiveRepo>();
+
 export function activeRepo(storage: DurableObjectStorage): ActiveRepo {
+  const known = instances.get(storage);
+  if (known) return known;
+  const made = createActiveRepo(storage);
+  instances.set(storage, made);
+  return made;
+}
+
+function createActiveRepo(storage: DurableObjectStorage): ActiveRepo {
   let cached: string | undefined;
   let ready = false;
 

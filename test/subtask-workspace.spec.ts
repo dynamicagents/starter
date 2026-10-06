@@ -75,6 +75,8 @@ function harness(opts: {
   tips?: Record<string, string>;
   /** Throw when release reads the tips. */
   tipsThrow?: boolean;
+  /** Each repository's remote-tracking branch when release reads it: a session's own push. */
+  pushed?: Record<string, string>;
   /** Repositories whose remote has the branch being placed. */
   remote?: string[];
   /** Refuse every session at admission. */
@@ -101,8 +103,13 @@ function harness(opts: {
   const keeps: { cwd: string; env: Record<string, string> }[] = [];
   const stopped: string[] = [];
   const admitted: string[] = [];
+  const released: string[] = [];
   let current = "";
   const stub = {
+    releaseContainer: async () => {
+      released.push(current);
+      return { released: true };
+    },
     checkoutDir: async () => dirs[current],
     advisories: async () => [],
     gitClone: async (req: { dir: string; branch?: string }) => {
@@ -193,7 +200,10 @@ function harness(opts: {
         if (opts.tipsThrow) throw new Error("container unreachable");
         const rows = (env.WORKTREE_PATHS ?? "")
           .split("\n")
-          .map((path) => `${path}\t${opts.tips?.[path] ?? ""}`);
+          .map(
+            (path) =>
+              `${path}\t${opts.tips?.[path] ?? ""}\t${opts.pushed?.[path] ?? ""}`
+          );
         return { success: true, stdout: rows.join("\n"), stderr: "" };
       }
       return { success: true, stdout: "", stderr: "" };
@@ -224,6 +234,7 @@ function harness(opts: {
     keeps,
     stopped,
     admitted,
+    released,
     heal
   };
 }
@@ -467,6 +478,51 @@ describe("handing a worktree to the next session", () => {
     ).toBe(SLOT1);
   });
 
+  /** A session pushes its own branch; git's record of that frees the worktree. */
+  it("frees a worktree whose commits the session pushed itself", async () => {
+    const { subtasks, pool } = harness({
+      selected: "acme/api",
+      checkout: CHECKOUT,
+      tips: { ".": "c1" },
+      pushed: { ".": "c1" }
+    });
+    await subtasks.resolve(ctx);
+    await subtasks.release(ctx);
+
+    expect(pool.rows()[0]?.repos[0]).toMatchObject({ tip: "c1", pushed: "c1" });
+    expect(
+      await nameOf(subtasks.resolve({ ...ctx, runId: "detached:2" }))
+    ).toBe(SLOT0);
+  });
+
+  it("holds one whose last commit is past what it pushed", async () => {
+    const { subtasks } = harness({
+      selected: "acme/api",
+      checkout: CHECKOUT,
+      tips: { ".": "c2" },
+      pushed: { ".": "c1" }
+    });
+    await subtasks.resolve(ctx);
+    await subtasks.release(ctx);
+
+    expect(
+      await nameOf(subtasks.resolve({ ...ctx, runId: "detached:2" }))
+    ).toBe(SLOT1);
+  });
+
+  /** Nobody works in a worktree between sessions, so nothing keeps it running. */
+  it("stops the container of a worktree it releases", async () => {
+    const { subtasks, released } = harness({
+      selected: "acme/api",
+      checkout: CHECKOUT,
+      tips: { ".": sha("origin/main") }
+    });
+    await subtasks.resolve(ctx);
+    await subtasks.release(ctx);
+
+    expect(released).toEqual([SLOT0]);
+  });
+
   /** Unknown tips hold the worktree rather than risk resetting commits. */
   it("holds a worktree whose commits it could not read", async () => {
     const { subtasks, pool } = harness({
@@ -543,7 +599,7 @@ describe("handing a worktree to the next session", () => {
     });
 
     await expect(
-      subtasks.resolve({ ...ctx, continue: "anthropic-coding/task-0/4" })
+      subtasks.resolve({ ...ctx, continue: "claude-coordinator/task-0/4" })
     ).rejects.toThrow(/on the remote in no repository.*commits are gone/s);
     // Never ready, so releasing it frees the worktree rather than holding a
     // branch that has nothing on it.
@@ -727,6 +783,59 @@ describe("handing a worktree to the next session", () => {
  * says nothing about the session's work, so it is kept where a `continue` will
  * find it. Why a cancel resets nothing is on `keep`.
  */
+describe("the parent's reads, after a writing session", () => {
+  const pushedRun = () =>
+    harness({
+      selected: "acme/api",
+      checkout: CHECKOUT,
+      tips: { ".": "c1" },
+      pushed: { ".": "c1" }
+    });
+
+  it("follow the session into the worktree it left on its branch", async () => {
+    const { subtasks, active } = pushedRun();
+    await subtasks.resolve(ctx);
+    await subtasks.release(ctx, { follow: true });
+    expect(active.get()).toBe(worktreeRepo("acme/api", 0));
+  });
+
+  it("stay where they are unless asked to follow", async () => {
+    const { subtasks, active } = pushedRun();
+    await subtasks.resolve(ctx);
+    await subtasks.release(ctx);
+    expect(active.get()).toBe("acme/api");
+  });
+
+  it("stay on another repository the parent moved to meanwhile", async () => {
+    const { subtasks, active } = pushedRun();
+    await subtasks.resolve(ctx);
+    active.set("acme/web");
+    await subtasks.release(ctx, { follow: true });
+    expect(active.get()).toBe("acme/web");
+  });
+
+  it("stay where they are when the branch is forgotten", async () => {
+    const { subtasks, active } = harness({
+      selected: "acme/api",
+      checkout: CHECKOUT,
+      tips: { ".": sha("origin/main") }
+    });
+    await subtasks.resolve(ctx);
+    await subtasks.release(ctx, { forgetBranch: true, follow: true });
+    expect(active.get()).toBe("acme/api");
+  });
+
+  /** Free, since its work is pushed — but the parent is reading it. */
+  it("keep their worktree from the next session's new branch", async () => {
+    const { subtasks } = pushedRun();
+    await subtasks.resolve(ctx);
+    await subtasks.release(ctx, { follow: true });
+    expect(
+      await nameOf(subtasks.resolve({ ...ctx, runId: "detached:2" }))
+    ).toBe(SLOT1);
+  });
+});
+
 describe("keeping what a session that did not complete did", () => {
   const BRANCH = BRANCH_1;
 

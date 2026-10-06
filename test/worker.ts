@@ -25,16 +25,16 @@ import { CodingChild } from "@/agents/coding/children";
 import { CodingHost } from "@/agents/coding/host";
 import { manifest as codingManifest } from "@/agents/coding/manifest";
 import { CodingWorkflow } from "@/agents/coding/workflow";
-import { AnthropicCodingAgent } from "@/agents/anthropic-coding/agent";
+import { ClaudeCoordinatorAgent } from "@/agents/claude-coordinator/agent";
 import {
-  AnthropicCodingPlannerChild,
-  AnthropicCodingWriterChild
-} from "@/agents/anthropic-coding/children";
-import { AnthropicCodingHost } from "@/agents/anthropic-coding/host";
-import { manifest as anthropicCodingManifest } from "@/agents/anthropic-coding/manifest";
-import { createPlan } from "@/agents/anthropic-coding/plans";
-import { RETRY_WORK } from "@/agents/anthropic-coding/soul";
-import { AnthropicCodingWorkflow } from "@/agents/anthropic-coding/workflow";
+  ClaudeCoordinatorPlannerChild,
+  ClaudeCoordinatorWriterChild
+} from "@/agents/claude-coordinator/children";
+import { ClaudeCoordinatorHost } from "@/agents/claude-coordinator/host";
+import { manifest as claudeCoordinatorManifest } from "@/agents/claude-coordinator/manifest";
+import { createPlan } from "@/agents/claude-coordinator/plans";
+import { RETRY_WORK } from "@/agents/claude-coordinator/soul";
+import { ClaudeCoordinatorWorkflow } from "@/agents/claude-coordinator/workflow";
 
 /**
  * The Worker the suite runs: this deployment's own, plus each agent on a
@@ -57,9 +57,9 @@ export interface TestEnv extends Env {
   TEST_CODING_AGENT: DurableObjectNamespace<TestCodingAgent>;
   TEST_CODING_HOST: DurableObjectNamespace<TestCodingHost>;
   TEST_CODING_WORKFLOW: Workflow<TaskParams>;
-  TEST_ANTHROPIC_CODING_AGENT: DurableObjectNamespace<TestAnthropicCodingAgent>;
-  TEST_ANTHROPIC_CODING_HOST: DurableObjectNamespace<TestAnthropicCodingHost>;
-  TEST_ANTHROPIC_CODING_WORKFLOW: Workflow<TaskParams>;
+  TEST_CLAUDE_COORDINATOR_AGENT: DurableObjectNamespace<TestClaudeCoordinatorAgent>;
+  TEST_CLAUDE_COORDINATOR_HOST: DurableObjectNamespace<TestClaudeCoordinatorHost>;
+  TEST_CLAUDE_COORDINATOR_WORKFLOW: Workflow<TaskParams>;
 }
 
 function after(text: string, prefix: string): string | undefined {
@@ -252,7 +252,7 @@ export class TestCodingAgent extends CodingAgent {
   }
 }
 
-// --- anthropic-coding -------------------------------------------------------------
+// --- claude-coordinator -------------------------------------------------------------
 
 /**
  * The writer's spec with a workspace nobody has to clone: the real `prepare`
@@ -260,14 +260,14 @@ export class TestCodingAgent extends CodingAgent {
  * is the real one, and finds no worktree to release.
  */
 const SESSION_SPEC = {
-  ...AnthropicCodingWriterChild.spec,
+  ...ClaudeCoordinatorWriterChild.spec,
   prepare: async () => ({
     workspaceName: "test-workspace",
     dir: "/workspace/t"
   })
 } as SubAgentSpec<never, never>;
 
-export class TestAnthropicCodingWriterChild extends AnthropicCodingWriterChild {
+export class TestClaudeCoordinatorWriterChild extends ClaudeCoordinatorWriterChild {
   static override spec = SESSION_SPEC;
   override getModel(): ThinkModel {
     return scriptedModel(childRule);
@@ -281,10 +281,10 @@ export class TestAnthropicCodingWriterChild extends AnthropicCodingWriterChild {
  * The planner's spec with a reduced `prepare`: it opens a plan, or takes the one
  * named, and hands over the stand-in workspace in place of a worktree. It
  * does not check ownership or the lock, which `preparePlanner` does and
- * `anthropic-coding.spec.ts` covers. `settle` is the real one.
+ * `claude-coordinator.spec.ts` covers. `settle` is the real one.
  */
 const PLANNER_SPEC = {
-  ...AnthropicCodingPlannerChild.spec,
+  ...ClaudeCoordinatorPlannerChild.spec,
   prepare: async (ctx: {
     input: { plan?: string };
     parent: { env: Env; storage: DurableObjectStorage };
@@ -299,7 +299,7 @@ const PLANNER_SPEC = {
   }
 } as SubAgentSpec<never, never>;
 
-export class TestAnthropicCodingPlannerChild extends AnthropicCodingPlannerChild {
+export class TestClaudeCoordinatorPlannerChild extends ClaudeCoordinatorPlannerChild {
   static override spec = PLANNER_SPEC;
   override getModel(): ThinkModel {
     return scriptedModel(childRule);
@@ -310,7 +310,7 @@ export class TestAnthropicCodingPlannerChild extends AnthropicCodingPlannerChild
 }
 
 /** What a job's first message scripts, less where a retry's work is. */
-function anthropicCodingScript(text: string): string {
+function claudeCoordinatorScript(text: string): string {
   return unbrief(text, [RETRY_WORK]);
 }
 
@@ -318,7 +318,7 @@ function anthropicCodingScript(text: string): string {
  * The real agent on a scripted model. `delegate:` starts a writing session and
  * `plan:` a planning one; `approve:<id>` asks the caller to approve a plan.
  */
-export class TestAnthropicCodingAgent extends AnthropicCodingAgent {
+export class TestClaudeCoordinatorAgent extends ClaudeCoordinatorAgent {
   override getModel(): ThinkModel {
     return scriptedModel((view) => {
       const plan = after(
@@ -330,11 +330,14 @@ export class TestAnthropicCodingAgent extends AnthropicCodingAgent {
           ? { text: lastToolOutput(view) }
           : call("claude_code_plan", { task: plan }, "Planning.");
       }
-      return parentRule("claude_code", anthropicCodingScript)(view);
+      return parentRule("claude_code", claudeCoordinatorScript)(view);
     });
   }
   override getSubAgents(): SubAgentClass[] {
-    return [TestAnthropicCodingWriterChild, TestAnthropicCodingPlannerChild];
+    return [
+      TestClaudeCoordinatorWriterChild,
+      TestClaudeCoordinatorPlannerChild
+    ];
   }
   override getTools(): ToolSet {
     return { ...super.getTools(), test_wait: sleepTool("parent") };
@@ -346,16 +349,16 @@ export class TestAnthropicCodingAgent extends AnthropicCodingAgent {
   }
 }
 
-/** `anthropic-coding`'s host, pointed at the scripted pipeline. */
-export class TestAnthropicCodingHost extends AnthropicCodingHost {
+/** `claude-coordinator`'s host, pointed at the scripted pipeline. */
+export class TestClaudeCoordinatorHost extends ClaudeCoordinatorHost {
   protected override readonly workflowBinding =
-    "TEST_ANTHROPIC_CODING_WORKFLOW";
-  protected override readonly hostBinding = "TEST_ANTHROPIC_CODING_HOST";
+    "TEST_CLAUDE_COORDINATOR_WORKFLOW";
+  protected override readonly hostBinding = "TEST_CLAUDE_COORDINATOR_HOST";
 }
 
-/** `anthropic-coding`'s pipeline, on the scripted agent. */
-export class TestAnthropicCodingWorkflow extends AnthropicCodingWorkflow {
-  protected override readonly coder = "TEST_ANTHROPIC_CODING_AGENT";
+/** `claude-coordinator`'s pipeline, on the scripted agent. */
+export class TestClaudeCoordinatorWorkflow extends ClaudeCoordinatorWorkflow {
+  protected override readonly coder = "TEST_CLAUDE_COORDINATOR_AGENT";
   override run(event: WorkflowEvent<TaskParams>, step: WorkflowStep) {
     return super.run(event, step);
   }
@@ -377,9 +380,9 @@ const a2a = createA2AWorker<TestEnv>({
       agent: (env: TestEnv) => env.TEST_CODING_HOST
     }),
     defineAgent({
-      tenant: "anthropic-coding",
-      manifest: anthropicCodingManifest,
-      agent: (env: TestEnv) => env.TEST_ANTHROPIC_CODING_HOST
+      tenant: "claude-coordinator",
+      manifest: claudeCoordinatorManifest,
+      agent: (env: TestEnv) => env.TEST_CLAUDE_COORDINATOR_HOST
     })
   ]
 });

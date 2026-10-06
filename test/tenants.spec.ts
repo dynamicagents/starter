@@ -22,7 +22,7 @@ import worker from "@/index";
  * `createA2AWorker` and has nothing to check.
  */
 
-const TENANTS = ["generic", "coding", "anthropic-coding"] as const;
+const TENANTS = ["generic", "coding", "claude-coordinator"] as const;
 
 const get = (path: string) =>
   worker.fetch(new Request(`${AGENT_ORIGIN}${path}`), env);

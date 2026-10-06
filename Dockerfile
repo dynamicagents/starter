@@ -1,6 +1,6 @@
 # The workspace container, for every agent in this Worker that has one.
 #
-# **One Dockerfile, two images.** `coding` and `anthropic-coding` both point a
+# **One Dockerfile, two images.** `coding` and `claude-coordinator` both point a
 # `containers[]` entry here; the second passes a `CLAUDE_CODE_VERSION` build arg
 # (see the block near the end) and gets the CLI, the first does not and stays
 # smaller. Cloudflare builds once per entry, so two entries naming this file are
@@ -136,7 +136,7 @@ RUN if command -v corepack > /dev/null; then \
 #
 # `build_vars` in wrangler.jsonc is a Docker build arg, so which image gets the
 # CLI is decided per `containers[]` entry rather than per file. The `coding`
-# entry passes nothing and this is a no-op; the `anthropic-coding` entry passes a
+# entry passes nothing and this is a no-op; the `claude-coordinator` entry passes a
 # version.
 #
 # A build arg rather than a second Dockerfile, because everything above encodes
@@ -171,36 +171,18 @@ RUN if [ -n "$CLAUDE_CODE_VERSION" ]; then \
       echo "no CLAUDE_CODE_VERSION build arg: this image has no Claude Code"; \
     fi
 
-# --- The GitHub CLI, for reading a public repository ------------------------
+# --- The GitHub CLI ------------------------------------------------------------
 #
 # Behind its own build arg for the reason Claude Code is: `build_vars` in
 # wrangler.jsonc decides per `containers[]` entry, so the `coding` image passes
 # nothing and stays smaller.
 #
-# **It is unauthenticated, and that is the whole design.** The container holds no
-# forge credential and must not — the `repo` module in `@dynamicagents/plugins`
-# carries the argument, and it has not changed: git executes whatever `.git/config`
-# and `.git/hooks` name, and the model has a root shell on that filesystem. What
-# changed is that *reading a public repository needs no credential*, and reading
-# is most of what a session reaches for `gh` to do.
-#
-# The catch: `gh` refuses to run at all without a token, even against a public
-# repository — it exits asking for `gh auth login` before it makes a request. So
-# the anthropic-coding sessions are launched with a placeholder GH_TOKEN, and the
-# egress gateway deletes the header on the way out: the same swap the Anthropic
-# credential rides on, inverted. The placeholder lives in the session env, not in
-# this image, because it is only harmless behind that gateway — the `anthropic-coding`
-# agent's `claude-code.ts` carries why.
-#
-# What that buys, and what it does not:
-#   - REST reads of public repositories: `gh api repos/<o>/<r>/pulls/<n>`, its
-#     `/comments`, `/files`, `/reviews`. 60 requests an hour for the whole egress
-#     IP, which is shared, so it can be exhausted by someone else.
-#   - **not** `gh pr view`, `gh issue view` or anything else built on GraphQL:
-#     GitHub gives anonymous callers a GraphQL quota of zero.
-#   - no write, and no private repository.
-#   - the forge work — branches, commits, pushes, pull requests, review replies —
-#     belongs to the parent's `repo_*` tools, which hold the credential Worker-side.
+# **Signed in, with no credential in the image or the container.** A
+# claude-coordinator session pushes its branch, opens its pull request and
+# answers its review with `gh` and git. Both present a placeholder token, and the
+# egress gateway swaps in the real one for GitHub's hosts only — `githubToken` in
+# `@dynamicagents/plugins/claude-code`. The placeholder lives in the session env,
+# not here: `coding`'s container egresses `direct`, where nothing would swap it.
 #
 # A pinned release tarball rather than the apt repository: `gh` is a static Go
 # binary that needs no dependency resolution, so this is one layer and no second

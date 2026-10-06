@@ -29,8 +29,8 @@ export const hostManifest: AgentManifest = {
     "the deployment rather than any one agent — call GetExtendedAgentCard with " +
     "a tenant id to fetch an agent's own card. Tenants: `generic` (a " +
     "delegating assistant), `coding` (implements changes in a git repository and opens " +
-    "pull requests), `anthropic-coding` (the same, for larger changes, working " +
-    "several independent strands at once).",
+    "pull requests), `claude-coordinator` (the same, for larger changes, taking " +
+    "the pull request through its review and CI).",
   version: "0.1.0",
   // `extensions` is a required (repeated) protobuf field in v1.0 — we declare no
   // protocol extensions, so it stays empty. `extendedAgentCard` is set by core,

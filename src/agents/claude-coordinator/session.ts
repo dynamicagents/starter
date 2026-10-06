@@ -3,6 +3,7 @@ import type {
   SessionEnd,
   SessionOutcome
 } from "@dynamicagents/plugins/claude-code";
+import { z } from "zod";
 import { CLAUDE_CODE_SESSION } from "@/config";
 
 /**
@@ -62,31 +63,35 @@ export function sessionFooter(result: {
 }
 
 /**
- * What `gh` is, in a container that holds no credential.
+ * What a session is told about GitHub. `gh` and git present a placeholder and
+ * the egress gateway swaps in the deployment's token — see `githubToken` in
+ * `./claude-code.ts` — so both work and neither can leak it.
  *
- * A session reaches for it unprompted — it is the obvious way to read an issue or
- * a review — and until it was installed that cost a turn per attempt to exit 127.
- * It is there now and signed in to nothing, which is a *third* state neither the
- * model nor its training expects — and a narrower one than it sounds: REST reads
- * of public repositories work, while every GraphQL-backed command (`gh pr view`
- * among them) and every write fails in a way that reads like a misconfiguration
- * rather than a boundary.
- *
- * So both halves are stated, and the second names who does hold the credential.
- * The Dockerfile carries why it is unauthenticated.
+ * Every session gets the first half. Only a writer on a branch gets the rules,
+ * because only it pushes, and they are prompt-only: the token can do more than
+ * they allow, which is why the deployment's rulesets back them.
  */
-const GH_NOTE = `## \`gh\` in this container
+const GITHUB_NOTE = `## GitHub
 
-\`gh\` is installed and authenticated as nobody, so only its REST calls work: use
-\`gh api repos/OWNER/REPO/pulls/N\` (and \`/comments\`, \`/files\`, \`/reviews\`), or the
-same under \`issues/N\`, for public repositories. \`gh pr view\`, \`gh issue view\` and
-the other high-level commands go through GitHub's GraphQL API, which refuses anonymous
-callers outright — they will fail however they are phrased. Nothing writes, and no
-private repository can be read. There is no credential here to fix that with.
+\`gh\` and \`git\` are signed in to GitHub. The credential is held outside this
+container and added on the way out, so there is no token here to read or print. Use
+them to read issues, pull requests, reviews and CI.`;
 
-Pull requests and replies to a review belong to the agent that briefed you, which
-holds the credential on the other side of this container. Report what you changed and
-let it deliver.`;
+/**
+ * The rules a writer works under. The last one is why the coordinator exists:
+ * a session that waits on a review keeps a container running for minutes, and
+ * the agent that briefed it watches the pull request for nothing.
+ */
+const OWNERSHIP_NOTE = `This branch and its pull request are yours, within limits that are not negotiable:
+
+- Push this branch and no other. Never push to the default branch, never force-push,
+  never delete a branch.
+- Never merge, approve, or enable auto-merge. Merging is the person's.
+- Never request a reviewer, Copilot included. Opening the pull request asks for its
+  one review, and another costs money.
+- **Never wait for a review or for CI** — no sleeping, no polling. Finish and report.
+  The agent that briefed you watches the pull request and brings you back when
+  something lands. This holds whatever the repository's own instructions say.`;
 
 /**
  * How often a **writing** session runs the project's checks: on the tree it
@@ -101,6 +106,150 @@ something they cover. What the task or the plan says about the base — a test c
 passing suite — was measured already: compare against it instead of running the base
 again. A full run takes minutes in this container, and every repeat is time the person
 asking waits.`;
+
+/**
+ * How a **building** session finishes: the pull request is its own, opened
+ * ready for review because opening it is what requests the one review a pull
+ * request gets.
+ */
+const DELIVERY_NOTE = `## Delivering it
+
+When the work is done and the project's checks pass, push this branch and open a pull
+request from it into the default branch — **ready for review, not a draft**: opening it
+is what asks for its review. If one is already open from this branch, push to it rather
+than open another. Write the description for the person who will merge it: what changed
+and why, how you checked it, and what deserves a close look. Anything broken you noticed
+outside the task goes there, not into the diff.
+
+If the work changed nothing — the task was to find something out, or there was nothing to
+do — push nothing and open nothing.
+
+If you reach a decision only the person who asked can make, do not guess. Commit and push
+what you have, and answer with \`needs_input\` and the question: you will be resumed with
+their answer.`;
+
+/**
+ * How a **revising** session works on the pull request it opened. What brought
+ * it back is its task, in the coordinator's words; how to answer each kind of
+ * thing is said here once, so the coordinator never has to.
+ */
+function reviseNote(pr: { number: number; url?: string }): string {
+  return `## Pull request #${pr.number}
+
+${pr.url ? `${pr.url} is` : "It is"} open from this branch, and it is yours. What brought you back
+is at the top.
+
+- **A self-review**: have a subagent with none of this conversation review the pull
+  request's diff against what it was for, then improve what holds up — correctness and
+  tests first, then simplicity. Nothing outside the task.
+- **A review**: answer it in one pass. Read the review's body as well as its threads,
+  since a review can raise points that are not threads, and read each point against the
+  code — a reviewer is sometimes confidently wrong. Fix what holds up and push, then reply
+  on every thread, naming the commit or saying why not, and resolve it either way
+  (\`resolveReviewThread\`, through \`gh api graphql\`).
+- **A failing check**: read its log (\`gh run view --log-failed\`), fix the cause, push.
+- **Something the person asked for**: do it, on this branch.
+
+Before you finish, look once at the pull request's review and checks, and answer whatever
+landed while you worked. Then stop: do not wait for anything still running.`;
+}
+
+/**
+ * What a writing session must answer, as \`--json-schema\`, so the coordinator
+ * reads fields rather than prose. The descriptions are the session's
+ * instructions for each one.
+ */
+export const WRITE_OUTPUT = {
+  type: "object",
+  properties: {
+    status: {
+      type: "string",
+      enum: ["done", "needs_input", "blocked"],
+      description:
+        "`done`: the work is finished, or there was nothing to change. `needs_input`: you stopped at a decision only the person who asked can make. `blocked`: you could not finish, and `summary` says where you stopped and why."
+    },
+    summary: {
+      type: "string",
+      description:
+        "For the agent that briefed you, which relays it to the person: what you changed and why, or what you found. On a pull request, say whether you answered its review and how its checks stand. Plain and short."
+    },
+    pullRequest: {
+      type: "object",
+      properties: {
+        number: { type: "integer" },
+        url: { type: "string" }
+      },
+      required: ["number", "url"],
+      additionalProperties: false,
+      description:
+        "The pull request you opened or pushed to. Leave it out when you pushed nothing."
+    },
+    checks: {
+      type: "array",
+      items: {
+        type: "object",
+        properties: {
+          command: { type: "string" },
+          passed: { type: "boolean" }
+        },
+        required: ["command", "passed"],
+        additionalProperties: false
+      },
+      description:
+        "What you ran to check the work, each with whether it passed. Only what you ran."
+    },
+    question: {
+      type: "string",
+      description:
+        "Required with `needs_input`: the one question only the person can answer, with the options you see."
+    }
+  },
+  required: ["status", "summary"],
+  additionalProperties: false
+} as const;
+
+/** A writing session's answer, as {@link WRITE_OUTPUT} describes it. */
+export const WriteAnswer = z.object({
+  status: z.enum(["done", "needs_input", "blocked"]),
+  summary: z.string(),
+  pullRequest: z
+    .object({ number: z.number().int(), url: z.string() })
+    .optional(),
+  checks: z
+    .array(z.object({ command: z.string(), passed: z.boolean() }))
+    .optional(),
+  question: z.string().optional()
+});
+
+export type WriteAnswer = z.infer<typeof WriteAnswer>;
+
+/** How the coordinator reads a writing session's answer. */
+export function answerText(answer: WriteAnswer): string {
+  const status = {
+    done: "**Done.**",
+    needs_input: "**Stopped for the person's decision.**",
+    blocked: "**Blocked.**"
+  }[answer.status];
+  const pr = answer.pullRequest
+    ? ` Pull request #${answer.pullRequest.number}: ${answer.pullRequest.url}`
+    : "";
+  const checks = answer.checks?.length
+    ? `Checks run: ${answer.checks
+        .map((c) => `\`${c.command}\` ${c.passed ? "passed" : "FAILED"}`)
+        .join("; ")}.`
+    : "";
+  // A stop for a decision that names none still has to say so, or the
+  // coordinator has nothing to ask and nothing to tell it is missing.
+  const question =
+    answer.status !== "needs_input"
+      ? ""
+      : answer.question?.trim()
+        ? `**Question for the person:** ${answer.question.trim()}`
+        : "**It named no question.** Its summary above is what it stopped on: ask the person what it leaves open, or send it back to say what it needs.";
+  return [`${status}${pr}`, answer.summary.trim(), checks, question]
+    .filter(Boolean)
+    .join("\n\n");
+}
 
 /** One repository a writing session could commit in, and where it started. */
 export interface RepoStart {
@@ -146,12 +295,12 @@ function branchNote(
 You are on \`${branch}\`, checked out for you in a worktree nobody else is working in
 while you are.${continues ? " It already holds earlier work: read its log before you start, and build on it." : ""}
 
-**Commit what you want to keep.** Only commits leave this session — the agent that
-briefed you reviews the commits on this branch and pushes them — and anything left
+**Commit what you want to keep.** Only commits leave this session, and anything left
 uncommitted is deleted when you finish. Commit as you go if that suits you.
 
-Do not push, and do not switch or rename the branch. The name above is how your work
-is found.`;
+Do not switch or rename the branch. The name above is how your work is found.
+
+${OWNERSHIP_NOTE}`;
   if (submodules.length === 0) return note;
   return `${note}
 
@@ -160,9 +309,9 @@ is found.`;
 ${submodules.map((path) => `- \`${path}\``).join("\n")}
 
 Each is a repository of its own, on \`${branch}\` too. **Commit inside each one you
-change** — only a submodule's own commits are kept. Recording the new commit in the
-superproject is a separate commit, and only if the task asks for it. Only one level
-of submodules is checked out.
+change** — only a submodule's own commits are kept — and push it there under the same
+branch name. Recording the new commit in the superproject is a separate commit, and
+only if the task asks for it. Only one level of submodules is checked out.
 
 Dependencies are installed at the top of the checkout only. Run \`npm ci\` in a
 submodule before building or testing it.`;
@@ -195,7 +344,7 @@ export function warningPrompt(dirty: readonly Uncommitted[]): string {
       (repo) => `- ${repoLabel(repo.path, many)}: ${listFiles(repo.files)}`
     ),
     "",
-    "Commit what should be kept, in the repository it belongs to, and leave the rest. " +
+    "Commit what should be kept, in the repository it belongs to, push it, and leave the rest. " +
       "Then reply with one line saying what you committed."
   ].join("\n");
 }
@@ -215,7 +364,7 @@ export function writingNote(writing: WritingOutcome): string {
   const lines: string[] = [];
   if (committed.length === 0) {
     lines.push(
-      `**No commits were made on \`${writing.branch}\`**, so there is nothing to review. ` +
+      `**No commits were made on \`${writing.branch}\`.** ` +
         "Read the report above before delegating it again."
     );
   } else {
@@ -229,10 +378,9 @@ export function writingNote(writing: WritingOutcome): string {
       })
       .join(", ");
     lines.push(
-      `**Committed on \`${writing.branch}\`** in ${where}. Nothing is pushed. ` +
-        `\`repo_worktree\` with that branch puts your tools in the worktree holding it, ` +
-        "to review, push and open the pull request from there. Delegate with " +
-        "`continue` set to it to add to the work."
+      `**Committed on \`${writing.branch}\`** in ${where}. To add to it before ` +
+        "there is a pull request, delegate with `continue` set to that branch; " +
+        "once there is one, `claude_code_revise` with its number."
     );
   }
   if (writing.discarded.length > 0) {
@@ -262,9 +410,8 @@ export function writingNote(writing: WritingOutcome): string {
  * install or a workspace that has stopped accepting writes is the difference
  * between a failure worth retrying and one that never will be.
  *
- * {@link GH_NOTE} is here for the same reason and earns its tokens the same way:
- * what a session cannot find out by looking, and would otherwise spend turns
- * discovering by failing.
+ * A writer on a branch finishes by delivering a pull request, or — given one —
+ * by revising it.
  */
 export function sessionBrief(
   task: string,
@@ -279,9 +426,10 @@ export function sessionBrief(
     text: string;
     /** Whether it carries on from the conversation that wrote the plan. */
     resumed: boolean;
-  }
+  },
+  pullRequest?: { number: number; url?: string }
 ): string {
-  const parts = [task, "", GH_NOTE];
+  const parts = [task, "", GITHUB_NOTE];
   // On a branch only. A scratchpad session has none, and keeps what it leaves
   // in the tree, so a brief that asked it to commit would be wrong about both.
   if (writing) {
@@ -289,7 +437,9 @@ export function sessionBrief(
       "",
       branchNote(writing.branch, writing.submodules, writing.continues),
       "",
-      CHECK_NOTE
+      CHECK_NOTE,
+      "",
+      pullRequest ? reviseNote(pullRequest) : DELIVERY_NOTE
     );
   }
   if (plan) parts.push("", planNote(plan.text, plan.resumed));
@@ -355,7 +505,7 @@ again through the StructuredOutput tool with the whole plan as it should now sta
     : [
         task,
         "",
-        GH_NOTE,
+        GITHUB_NOTE,
         "",
         `## Your answer
 
@@ -559,10 +709,12 @@ export function sessionReport(
       .join("\n\n");
   }
 
-  const text =
-    result.text ||
-    "The session completed and reported nothing. Check the working tree " +
-      "before assuming the change was made.";
+  const answer = WriteAnswer.safeParse(result.structured);
+  const text = answer.success
+    ? answerText(answer.data)
+    : result.text ||
+      "The session completed and reported nothing. Check the working tree " +
+        "before assuming the change was made.";
   const warning = outcome.followUp?.result;
   return [
     text,

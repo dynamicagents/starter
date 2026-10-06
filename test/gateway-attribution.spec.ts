@@ -4,8 +4,8 @@ import { runInDurableObject } from "cloudflare:test";
 import type { LanguageModel } from "ai";
 import { generic } from "@/agents/generic/definition";
 import { coding } from "@/agents/coding/definition";
-import { anthropicCoding } from "@/agents/anthropic-coding/definition";
-import { ANTHROPIC_CODING, CODING, GENERIC } from "@/config";
+import { claudeCoordinator } from "@/agents/claude-coordinator/definition";
+import { CLAUDE_COORDINATOR, CODING, GENERIC } from "@/config";
 
 /**
  * What AI Gateway is told about this Worker's model calls, observed at the
@@ -59,15 +59,15 @@ async function gatewayOf(
   return gateways[0];
 }
 
-const PARENTS = [generic, coding, anthropicCoding];
+const PARENTS = [generic, coding, claudeCoordinator];
 
 /** An agent's own object, by tenant. `resolveAgent` hands back its RPC shape. */
 function parentStub(tenant: string, key: string) {
   const namespaces: Record<string, DurableObjectNamespace> = {
     [generic.tenant]: env.GenericAgent as unknown as DurableObjectNamespace,
     [coding.tenant]: env.CodingAgent as unknown as DurableObjectNamespace,
-    [anthropicCoding.tenant]:
-      env.AnthropicCodingAgent as unknown as DurableObjectNamespace
+    [claudeCoordinator.tenant]:
+      env.ClaudeCoordinatorAgent as unknown as DurableObjectNamespace
   };
   const ns = namespaces[tenant]!;
   return ns.get(ns.idFromName(key));
@@ -114,7 +114,7 @@ describe("an agent's compaction", () => {
   it.each([
     [generic.tenant, GENERIC],
     [coding.tenant, CODING],
-    [anthropicCoding.tenant, ANTHROPIC_CODING]
+    [claudeCoordinator.tenant, CLAUDE_COORDINATOR]
   ])("runs %s on its compaction model", async (tenant, tuning) => {
     const stub = parentStub(tenant, `compaction-model:${tenant}`);
     const modelId = await runInDurableObject(

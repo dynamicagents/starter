@@ -14,7 +14,7 @@ import { copy } from "@/copy";
 import worker, { type TestEnv } from "./worker";
 
 /**
- * `anthropic-coding` through the real host and workflow, on the scripted agent:
+ * `claude-coordinator` through the real host and workflow, on the scripted agent:
  * one step, the whole task, in which planning and approving are the agent's own
  * tool calls. `plan:` starts a planning session, `approve:<id>` asks the caller
  * to approve a plan, `delegate:` starts a writing session.
@@ -23,15 +23,15 @@ import worker, { type TestEnv } from "./worker";
 const testEnv = env as unknown as TestEnv;
 
 function setup(label: string) {
-  const key = `anthropic-coding-pipeline:${label}:${crypto.randomUUID()}`;
+  const key = `claude-coordinator-pipeline:${label}:${crypto.randomUUID()}`;
   const harness = createAgentHarness({
     worker,
     env: testEnv,
-    tenant: "anthropic-coding",
+    tenant: "claude-coordinator",
     identity: { key, name: "Spec Caller", kind: "custom", workspaceId: 1 }
   });
-  const coder = testEnv.TEST_ANTHROPIC_CODING_AGENT.get(
-    testEnv.TEST_ANTHROPIC_CODING_AGENT.idFromName(key)
+  const coder = testEnv.TEST_CLAUDE_COORDINATOR_AGENT.get(
+    testEnv.TEST_CLAUDE_COORDINATOR_AGENT.idFromName(key)
   );
   return { harness, coder };
 }
@@ -89,7 +89,7 @@ async function question(
 }
 
 async function status(taskId: string) {
-  return (await testEnv.TEST_ANTHROPIC_CODING_WORKFLOW.get(taskId)).status();
+  return (await testEnv.TEST_CLAUDE_COORDINATOR_WORKFLOW.get(taskId)).status();
 }
 
 async function cancel(harness: AgentHarness, taskId: string) {
@@ -97,7 +97,7 @@ async function cancel(harness: AgentHarness, taskId: string) {
     jsonrpc: "2.0",
     id: 2,
     method: "CancelTask",
-    params: { tenant: "anthropic-coding", id: taskId }
+    params: { tenant: "claude-coordinator", id: taskId }
   });
   const body = await res.json<{ error?: { message: string } }>();
   if (body.error) throw new Error(body.error.message);
@@ -109,7 +109,7 @@ describe("a task is one step", () => {
     using _ = harness.interceptGatekeeper();
     const task = await harness.send("delegate:sleep:1");
     await using instance = await introspectWorkflowInstance(
-      testEnv.TEST_ANTHROPIC_CODING_WORKFLOW,
+      testEnv.TEST_CLAUDE_COORDINATOR_WORKFLOW,
       task.id
     );
 
@@ -129,7 +129,7 @@ describe("a task is one step", () => {
     using _ = harness.interceptGatekeeper();
     const task = await harness.send("flaky");
     await using instance = await introspectWorkflowInstance(
-      testEnv.TEST_ANTHROPIC_CODING_WORKFLOW,
+      testEnv.TEST_CLAUDE_COORDINATOR_WORKFLOW,
       task.id
     );
 

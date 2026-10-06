@@ -6,17 +6,15 @@ import type { AgentManifest } from "@dynamicagents/core/a2a";
  * agent's tenant id) and the security scheme. Served via `GetExtendedAgentCard`,
  * since the well-known path carries the deployment's stub card.
  *
- * Deliberately does **not** name Claude Code or the model behind it. A card is
- * what a gatekeeper operator reads to decide what to route here, and the engine is
- * an implementation detail that would go stale the first time it changed. What
- * belongs here is the difference an operator can act on: this one takes larger,
- * self-contained changes, and works several strands at once when they are genuinely
- * independent.
+ * Names no model. A card is what a gatekeeper operator reads to decide what to
+ * route here, and what belongs on it is what they can act on: this one takes a
+ * change to a merge-ready pull request, review and CI included, and asks the
+ * person only what nobody else can answer.
  */
 export const manifest: AgentManifest = {
-  name: "Anthropic Coding Agent",
+  name: "Claude Coordinator",
   description:
-    "A senior software engineer for substantial changes. Give it a repository and a change to make; for anything substantial it has a plan written and sends you its link to approve, comment on or reject — unless you have told it you do not approve plans. It then delegates the implementation to long-running coding sessions that each work in an isolated checkout, reviews the branches they push, runs the project's own tests and opens a pull request, and replies with its URL. At its best on work too large to specify step by step, and can carry several independent strands in parallel. Never commits to a default branch.",
+    "Carries a change through a repository to a pull request ready for you to merge. For anything substantial it has a plan written and sends you its link to approve, comment on or reject — unless you have told it you do not approve plans. Long-running coding sessions then build it in isolated checkouts, open the pull request, and answer its review and CI, while it watches the pull request between them and brings you only the questions nobody else can answer. Replies with the pull request's URL and what is left for you. Never merges, and never commits to a default branch.",
   version: "0.1.0",
   // `extensions` is a required (repeated) protobuf field in v1.0 — we declare no
   // protocol extensions, so it stays empty.
@@ -28,7 +26,7 @@ export const manifest: AgentManifest = {
       id: "implement-change",
       name: "Implement a substantial change",
       description:
-        "Carry a described change through a repository end to end: a plan you approve by its link, then the implementation, tests and a pull request. Suited to work that spans several files or needs judgement the request cannot fully specify.",
+        "Carry a described change through a repository end to end: a plan you approve by its link, then the implementation and tests, a pull request, and its review and CI answered. Suited to work that spans several files or needs judgement the request cannot fully specify.",
       tags: ["code", "git", "pull-request"],
       examples: [
         "In github.com/acme/api, add rate limiting to the public endpoints, with tests and docs.",

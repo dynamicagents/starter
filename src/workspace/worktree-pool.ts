@@ -30,7 +30,7 @@ export interface PoolRepo {
   start: string;
   /** Where the last run left it. Empty when something moved it unseen. */
   tip: string;
-  /** The last commit the parent pushed from it. */
+  /** The last commit known to be on the remote, as a push left it. */
   pushed?: string;
 }
 
@@ -72,7 +72,7 @@ export interface PoolStore {
  * The repository slot a worktree's workspace is keyed on.
  *
  * A sentinel in the same namespace as `owner/repo`, for the reason
- * `SCRATCH_REPO` in `./scratch.ts` gives: angle brackets no forge name can
+ * `SCRATCH_REPO` in `./scratch.ts` gives: angle brackets no GitHub name can
  * contain, and never `|`, the separator `workspaceName` joins on.
  */
 export function worktreeRepo(repo: string, slot: number): string {
@@ -99,7 +99,7 @@ export function parseWorktreeRepo(
  */
 export function runBranch(ctx: { taskId: string; runId: string }): string {
   const hash = fnv1a(`${ctx.taskId}:${ctx.runId}`) % 36 ** 5;
-  return `anthropic-coding/${hash.toString(36).padStart(5, "0")}`;
+  return `claude-coordinator/${hash.toString(36).padStart(5, "0")}`;
 }
 
 /** FNV-1a, 32-bit: stable and synchronous, for telling ids apart. */
@@ -161,10 +161,15 @@ export function isFree(worktree: Worktree): boolean {
  *   When none holds it — it was pushed and released, or its worktree went to
  *   another run — a free one adopts it from the remote.
  * - Otherwise `near`, when that slot is free: it holds a conversation the run
- *   continues — a planning session's transcript is in the workspace that ran it.
+ *   continues — a session's transcript is in the workspace that ran it, which
+ *   is why an adopted branch goes there too.
  * - Otherwise the free worktree used longest ago, or a new slot. The pool grows
  *   with concurrency and has no ceiling of its own. Its branch is `branch`, or
  *   {@link runBranch}, and never one a worktree already holds.
+ *
+ * `avoid` is the slot the parent's reads are in, which only the branch it holds
+ * may be continued in: reset under them for another, they would read that
+ * branch's files believing them this one's.
  */
 export function claim(
   store: PoolStore,
@@ -175,6 +180,7 @@ export function claim(
     continue?: string;
     branch?: string;
     near?: number;
+    avoid?: number;
   },
   now: number
 ): Worktree {
@@ -190,7 +196,7 @@ export function claim(
       : rows.find((row) => row.branch === ctx.continue);
   if (holder?.live) {
     throw new Error(
-      `anthropic-coding: ${ctx.continue} is being worked on by another session ` +
+      `claude-coordinator: ${ctx.continue} is being worked on by another session ` +
         "right now. Wait for its report, then continue the branch."
     );
   }
@@ -198,17 +204,18 @@ export function claim(
   const branch = ctx.continue ?? ctx.branch ?? runBranch(ctx);
   if (ctx.continue === undefined && rows.some((row) => row.branch === branch)) {
     throw new Error(
-      `anthropic-coding: a worktree already holds ${branch}. Delegate with ` +
+      `claude-coordinator: a worktree already holds ${branch}. Delegate with ` +
         "`continue` set to it to add to that work, or name another branch."
     );
   }
 
+  const takeable = (row: Worktree) => isFree(row) && row.slot !== ctx.avoid;
   const near =
-    ctx.continue === undefined && ctx.near !== undefined
-      ? rows.find((row) => row.slot === ctx.near && isFree(row))
-      : undefined;
+    ctx.near === undefined
+      ? undefined
+      : rows.find((row) => row.slot === ctx.near && takeable(row));
   const free =
-    near ?? rows.filter(isFree).sort((a, b) => a.usedAt - b.usedAt)[0];
+    near ?? rows.filter(takeable).sort((a, b) => a.usedAt - b.usedAt)[0];
   const slot =
     holder?.slot ??
     free?.slot ??

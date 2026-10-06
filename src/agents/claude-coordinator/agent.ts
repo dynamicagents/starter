@@ -13,7 +13,7 @@ import { workspaceName } from "@dynamicagents/plugins/workspace";
 import type { AgentToolLifecycleResult, AgentToolRunInfo } from "agents";
 import type { ContextConfig } from "agents/context";
 import type { LanguageModel, ToolSet } from "ai";
-import { ANTHROPIC_CODING } from "@/config";
+import { CLAUDE_COORDINATOR } from "@/config";
 import { RETRY_BRIEF } from "@/copy";
 import { agentModel } from "@/model";
 import { activeRepo } from "@/workspace/active-repo";
@@ -24,24 +24,26 @@ import {
   idleWorktrees,
   parseWorktreeRepo,
   reconcileWorktrees,
+  slotOf,
   sqlPoolStore
 } from "@/workspace/worktree-pool";
 import {
-  AnthropicCodingPlannerChild,
-  AnthropicCodingWriterChild,
+  ClaudeCoordinatorPlannerChild,
+  ClaudeCoordinatorReviserChild,
+  ClaudeCoordinatorWriterChild,
   forgetKept,
   keptNote
 } from "./children";
-import { anthropicCoding } from "./definition";
+import { claudeCoordinator } from "./definition";
 import { container, parentPlugins, sessionWorkspaces } from "./plugins";
 import { ownsPlan } from "./plans";
 import { MEMORY, RETRY_WORK, SOUL } from "./soul";
 
 /** This agent's log prefix and workspace label. */
-const LABEL = "anthropic-coding";
+const LABEL = "claude-coordinator";
 
 /**
- * The anthropic-coding agent — `coding`'s sibling, with a different engine.
+ * The claude-coordinator agent — `coding`'s sibling, with a different engine.
  *
  * The parent is an ordinary agent on Workers AI: it clones, reviews diffs,
  * commits, pushes and opens pull requests, and it has no shell, no editor and
@@ -54,9 +56,9 @@ const LABEL = "anthropic-coding";
  * to reach Opus on a subscription is to run the client, and the way to do that
  * safely is to keep the credential on this side of the container boundary.
  */
-export class AnthropicCodingAgent extends StepAgent<Env> {
-  protected readonly compactAfterTokens = ANTHROPIC_CODING.compactAfterTokens;
-  protected readonly keepRecentTokens = ANTHROPIC_CODING.keepRecentTokens;
+export class ClaudeCoordinatorAgent extends StepAgent<Env> {
+  protected readonly compactAfterTokens = CLAUDE_COORDINATOR.compactAfterTokens;
+  protected readonly keepRecentTokens = CLAUDE_COORDINATOR.keepRecentTokens;
 
   /**
    * Which repository the caller is working on — or which worktree the parent
@@ -79,9 +81,9 @@ export class AnthropicCodingAgent extends StepAgent<Env> {
   override getModel(): ThinkModel {
     return agentModel(
       this.env,
-      { modelId: ANTHROPIC_CODING.modelId, name: this.name },
+      { modelId: CLAUDE_COORDINATOR.modelId, name: this.name },
       {
-        agent: anthropicCoding.tenant,
+        agent: claudeCoordinator.tenant,
         taskId: this.turnTaskId(),
         phase: "turn"
       }
@@ -92,8 +94,8 @@ export class AnthropicCodingAgent extends StepAgent<Env> {
   protected override compactionModel(): LanguageModel {
     return agentModel(
       this.env,
-      { modelId: ANTHROPIC_CODING.compactionModelId, name: this.name },
-      { agent: anthropicCoding.tenant, phase: "compaction" }
+      { modelId: CLAUDE_COORDINATOR.compactionModelId, name: this.name },
+      { agent: claudeCoordinator.tenant, phase: "compaction" }
     );
   }
 
@@ -114,9 +116,13 @@ export class AnthropicCodingAgent extends StepAgent<Env> {
     );
   }
 
-  /** Writing first, then planning: the order the delegating model is shown them. */
+  /** Building, revising, then planning: the order the delegating model is shown them. */
   override getSubAgents(): SubAgentClass[] {
-    return [AnthropicCodingWriterChild, AnthropicCodingPlannerChild];
+    return [
+      ClaudeCoordinatorWriterChild,
+      ClaudeCoordinatorReviserChild,
+      ClaudeCoordinatorPlannerChild
+    ];
   }
 
   /**
@@ -127,7 +133,7 @@ export class AnthropicCodingAgent extends StepAgent<Env> {
     return ownsPlan(this.ctx.storage, id) && (await super.mayAskApproval(id));
   }
 
-  /** `check_back`, for the wait between opening a pull request and its review. */
+  /** `check_back`, for the wait between a pull request opening and its review and CI landing. */
   override getTools(): ToolSet {
     return { ...super.getTools(), check_back: this.checkBackTool() };
   }
@@ -187,7 +193,7 @@ export class AnthropicCodingAgent extends StepAgent<Env> {
 
   async #reclaim(): Promise<void> {
     const pool = sqlPoolStore(this.ctx.storage);
-    const binding = this.env.ANTHROPIC_CODING_WORKSPACE;
+    const binding = this.env.CLAUDE_COORDINATOR_WORKSPACE;
     const key = this.callerKey();
     await sweepIdleWorkspaces({
       storage: this.ctx.storage,
@@ -214,6 +220,12 @@ export class AnthropicCodingAgent extends StepAgent<Env> {
         return true;
       }
     });
+    // Reads left in a worktree emptied above would read a checkout that is
+    // gone, so they go back to the parent's own — which its context says.
+    const reading = parseWorktreeRepo(this.#active.get() ?? "");
+    if (reading && !slotOf(pool, reading.repo, reading.slot)?.branch) {
+      this.#active.set(reading.repo);
+    }
   }
 
   /**
@@ -229,11 +241,12 @@ export class AnthropicCodingAgent extends StepAgent<Env> {
    * clone and a full install. The idle deadline cannot be tuned down to meet the
    * cost instead: it has to exceed a session's whole forty minutes.
    *
-   * **Tools left in a worktree come back to the checkout**, and every worktree
-   * no session is in has its container released too: each stays up after its
-   * session so the parent can review in it, and at the end of the task nothing
-   * is left to review. The worktrees themselves — branches, commits — stay; see
-   * `@/workspace/worktrees`.
+   * **Reads left in a worktree stay there**: a person's follow-up is usually
+   * about the same work, and moving them here would leave the model's last
+   * `repo_worktree` answer describing a place they no longer are — see
+   * `@/workspace/worktrees`. Every worktree no session is in has its container
+   * released — a backstop, since the pool releases one when its session
+   * settles. A read starts it again.
    *
    * Core contains a throw here, but this is best-effort on its own account too: a
    * container that will not stop is the idle deadline's problem, not the answer's.
@@ -251,8 +264,7 @@ export class AnthropicCodingAgent extends StepAgent<Env> {
 
     const repo = this.#active.get();
     const worktree = repo === undefined ? undefined : parseWorktreeRepo(repo);
-    if (worktree) this.#active.set(worktree.repo);
-    const binding = this.env.ANTHROPIC_CODING_WORKSPACE;
+    const binding = this.env.CLAUDE_COORDINATOR_WORKSPACE;
     const key = this.callerKey();
     const names = new Set([
       workspaceName(key, repo),

@@ -26,7 +26,7 @@ import { workspaceGit } from "@/workspace/git";
 import { gitIdentity } from "@/workspace/git-identity";
 import { hostScratch } from "@/workspace/scratch";
 import { claudeCodeConfig } from "./claude-code";
-import { anthropicCoding } from "./definition";
+import { claudeCoordinator } from "./definition";
 
 /**
  * The one file you edit to add or remove a capability for this agent.
@@ -47,7 +47,7 @@ import { anthropicCoding } from "./definition";
  * See the outage comment on `@/workspace/container.ts`.
  */
 export function container(env: Env, name: () => string): ComputerConfig {
-  return workspaceContainer(env.ANTHROPIC_CODING_WORKSPACE, name);
+  return workspaceContainer(env.CLAUDE_COORDINATOR_WORKSPACE, name);
 }
 
 /** Stop a run's session in a workspace: both execs. */
@@ -56,7 +56,7 @@ export async function stopSession(
   workspace: string,
   runId: string
 ): Promise<void> {
-  const binding = env.ANTHROPIC_CODING_WORKSPACE;
+  const binding = env.CLAUDE_COORDINATOR_WORKSPACE;
   using opened = await openWorkspace(
     binding.get(binding.idFromName(workspace))
   );
@@ -94,7 +94,7 @@ function exhausted(retryAt: number | undefined): string {
  * see `./workspace.ts`.
  */
 export async function admitSession(env: Env, workspace: string): Promise<void> {
-  const binding = env.ANTHROPIC_CODING_WORKSPACE;
+  const binding = env.CLAUDE_COORDINATOR_WORKSPACE;
   const lead = await binding
     .get(binding.idFromName(workspace))
     .claudeCredentials();
@@ -111,7 +111,7 @@ export async function admitSession(env: Env, workspace: string): Promise<void> {
 export function sessionWorkspaces(ctx: PluginContext<Env>): SubtaskWorkspaces {
   const env = ctx.env;
   return subtaskWorkspaces({
-    binding: env.ANTHROPIC_CODING_WORKSPACE,
+    binding: env.CLAUDE_COORDINATOR_WORKSPACE,
     callerKey: () => ctx.callerKey(),
     // The same settings the parent's own tools run under — `shell: "bash"`
     // above all — pointed at whichever worktree is being prepared. A partial
@@ -125,16 +125,16 @@ export function sessionWorkspaces(ctx: PluginContext<Env>): SubtaskWorkspaces {
     pool: sqlPoolStore(ctx.storage),
     // The tenant id is where this name lives; `./agent.ts` spells its own log
     // prefix from the same place.
-    label: anthropicCoding.tenant
+    label: claudeCoordinator.tenant
   });
 }
 
 /**
- * The parent: git, a scratchpad, a browser, and read-only eyes on the checkout.
+ * The parent: a checkout to open and pull requests to watch, a scratchpad, a
+ * browser, and read-only eyes on the checkout.
  *
- * `active` is the agent's own selection, one instance shared with its
- * `workspace`: the selection caches what it last read, so a second instance
- * would go on answering the repository the first had already moved away from.
+ * `active` is the agent's own selection, which its `workspace` reads too — the
+ * one instance `activeRepo` hands everything on this storage.
  */
 export const parentPlugins = (
   env: Env,
@@ -142,8 +142,8 @@ export const parentPlugins = (
   active: ActiveRepo,
   config: ComputerConfig
 ): AgentPlugin<Env>[] => {
-  const binding = env.ANTHROPIC_CODING_WORKSPACE;
-  /** How the parent's tools move into the worktrees and back — see `@/workspace/worktrees`. */
+  const binding = env.CLAUDE_COORDINATOR_WORKSPACE;
+  /** The writing sessions' worktrees — see `@/workspace/worktrees`. */
   const worktrees = worktreeSwitch({
     active,
     pool: sqlPoolStore(ctx.storage),
@@ -167,10 +167,21 @@ export const parentPlugins = (
       // They go to the workspace object, which reads `GITHUB_TOKEN` from its own
       // environment — so the container never holds the credential at all.
       git: workspaceGit({ binding, workspaceName: config.workspaceName }),
-      // Still needed, and now only for `repo_open_pr` — the one credentialed
-      // call this side makes directly.
+      // For the GitHub reads the coordinator watches a pull request with.
       token: () => env.GITHUB_TOKEN,
       author,
+      // The coordinator reads; the sessions write. A pull request, its review
+      // and its replies are a session's — see `githubToken` in `./claude-code.ts`.
+      tools: [
+        "repo_clone",
+        "repo_issue_view",
+        "repo_pr_view",
+        "repo_pr_review_status",
+        "repo_pr_threads",
+        "repo_pr_checks",
+        "repo_worktrees",
+        "repo_worktree"
+      ],
 
       beforeCheckout: ({ owner, repo: repoName }) =>
         active.set(`${owner}/${repoName}`),
@@ -197,12 +208,9 @@ export const parentPlugins = (
           ...(repoName ? { repo: repoName } : {})
         });
       },
-      // The worktrees writing sessions commit in, and the switch into them. The
-      // hooks are what a worktree adds to this plugin's own guards: a session may
-      // still be in it, and a session had a shell over its `.git/config`.
-      worktrees,
-      beforeWrite: worktrees.beforeWrite,
-      afterPush: worktrees.afterPush
+      // The worktrees writing sessions commit in: to read one, list what a
+      // canceled session kept, and release what will not be continued.
+      worktrees
     }),
     /**
      * A place to work when the work is not a repository.
@@ -221,6 +229,15 @@ export const parentPlugins = (
           provider: {
             get: async () => parentWorkspaceContext("the Claude Code sessions")
           }
+        },
+        // Re-read every turn and sent again whenever it moves: a selection
+        // moved without the model hearing of it is one its last `repo_worktree`
+        // answer still describes, so it reads the wrong checkout.
+        {
+          label: "reads",
+          description: "where your file reads and repo tools run right now",
+          whenChanged: "remind",
+          provider: { get: async () => worktrees.where() }
         }
       ]
     }),

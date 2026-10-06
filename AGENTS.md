@@ -54,7 +54,7 @@ Scaffolding an agent belongs to `npm create dynamicagents`, not to a script here
 Deleting one never edits a deployed migration tag: its Durable Object class goes into
 `deleted_classes` in a new one — the `migrations` comments in `wrangler.jsonc` say why.
 
-**An agent is named for what it does:** `coding`, `anthropic-coding`. One with no
+**An agent is named for what it does:** `coding`, `claude-coordinator`. One with no
 specialty is named for its purpose instead: `generic`. Every tenant's classes then take
 one shape, each in the file named for it:
 
@@ -66,8 +66,8 @@ one shape, each in the file named for it:
 | `<Tenant>Child`     | `children.ts`  |
 | `<Tenant>Workspace` | `workspace.ts` |
 
-An agent with more than one child names each by what it does: `AnthropicCodingWriterChild`,
-`AnthropicCodingPlannerChild`.
+An agent with more than one child names each by what it does: `ClaudeCoordinatorWriterChild`,
+`ClaudeCoordinatorPlannerChild`.
 
 **A new class takes a name no deployment has used.** A Durable Object namespace is keyed
 by class name, so a class under a live name inherits every object stored under it. An

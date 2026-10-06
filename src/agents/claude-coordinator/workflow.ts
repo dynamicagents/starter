@@ -7,17 +7,17 @@ import {
 } from "@dynamicagents/core/workflow";
 
 /**
- * `anthropic-coding`'s pipeline: one step, the whole task, on the caller's own
- * `AnthropicCodingAgent`.
+ * `claude-coordinator`'s pipeline: one step, the whole task, on the caller's own
+ * `ClaudeCoordinatorAgent`.
  *
  * Planning and approving are the agent's tools, not steps here: whether a
  * change gets a plan, and whether the caller approves it before it is built, is
  * the agent's to judge and the caller's to set — see `./soul.ts`. A step every
  * task needs, whatever it asks, goes here.
  */
-export class AnthropicCodingWorkflow extends TaskWorkflow<Env> {
+export class ClaudeCoordinatorWorkflow extends TaskWorkflow<Env> {
   /** The step agent's binding. A test worker points it at a scripted one. */
-  protected readonly coder: string = "AnthropicCodingAgent";
+  protected readonly coder: string = "ClaudeCoordinatorAgent";
 
   override run(event: WorkflowEvent<TaskParams>, step: WorkflowStep) {
     return super.run(event, step);

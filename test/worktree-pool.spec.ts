@@ -65,7 +65,7 @@ describe("addressing a worktree", () => {
    */
   it("derives a short branch name, and lets a caller name any branch git accepts", () => {
     const branch = runBranch({ taskId: "task-a", runId: "detached:3" });
-    expect(branch).toBe("anthropic-coding/vx78x");
+    expect(branch).toBe("claude-coordinator/vx78x");
     expect(runBranch({ taskId: "task-a", runId: "detached:3" })).toBe(branch);
     // A tool call id is unique only within its conversation, so the same one
     // in another task is another branch.
@@ -81,7 +81,7 @@ describe("addressing a worktree", () => {
       "detached:call_b976fe13cad640a786e155df::cf-wai-tool-call::1TgarImMx5TqDqJF"
     ]) {
       expect(runBranch({ taskId: "task-a", runId })).toMatch(
-        /^anthropic-coding\/[0-9a-z]{5}$/
+        /^claude-coordinator\/[0-9a-z]{5}$/
       );
     }
     for (const name of [branch, "feature/artifacts", "tiago/fix-1", "a.b/c"]) {
@@ -119,7 +119,7 @@ describe("whether a worktree can go to the next session", () => {
   const worktree = (over: Partial<Worktree> = {}): Worktree => ({
     repo: REPO,
     slot: 0,
-    branch: "anthropic-coding/t/1",
+    branch: "claude-coordinator/t/1",
     repos: [repo()],
     usedAt: 0,
     ...over
@@ -184,21 +184,21 @@ describe("claiming a worktree", () => {
     pool.put({
       repo: REPO,
       slot: 0,
-      branch: "anthropic-coding/t/1",
+      branch: "claude-coordinator/t/1",
       repos: [repo()],
       usedAt: 5
     });
     pool.put({
       repo: REPO,
       slot: 1,
-      branch: "anthropic-coding/t/2",
+      branch: "claude-coordinator/t/2",
       repos: [repo()],
       usedAt: 3
     });
     pool.put({
       repo: REPO,
       slot: 2,
-      branch: "anthropic-coding/t/3",
+      branch: "claude-coordinator/t/3",
       repos: [repo({ tip: "c1" })],
       usedAt: 1
     });
@@ -206,7 +206,7 @@ describe("claiming a worktree", () => {
     const claimed = claim(pool, REPO, ctx, 10);
 
     expect(claimed.slot).toBe(1);
-    expect(claimed.previous).toBe("anthropic-coding/t/2");
+    expect(claimed.previous).toBe("claude-coordinator/t/2");
     expect(claimed.mode).toBe("new");
   });
 
@@ -220,14 +220,14 @@ describe("claiming a worktree", () => {
       pool.put({
         repo: REPO,
         slot: 0,
-        branch: "anthropic-coding/t/1",
+        branch: "claude-coordinator/t/1",
         repos: [repo()],
         usedAt: 1
       });
       pool.put({
         repo: REPO,
         slot: 1,
-        branch: "anthropic-coding/t/2",
+        branch: "claude-coordinator/t/2",
         repos: [repo()],
         usedAt: 5
       });
@@ -237,7 +237,7 @@ describe("claiming a worktree", () => {
     it("takes that worktree when it is free", () => {
       const claimed = claim(pooled(), REPO, { ...ctx, near: 1 }, 10);
       expect(claimed.slot).toBe(1);
-      expect(claimed.previous).toBe("anthropic-coding/t/2");
+      expect(claimed.previous).toBe("claude-coordinator/t/2");
       expect(claimed.mode).toBe("new");
     });
 
@@ -254,7 +254,67 @@ describe("claiming a worktree", () => {
       const claimed = claim(
         pooled(),
         REPO,
-        { ...ctx, continue: "anthropic-coding/t/1", near: 1 },
+        { ...ctx, continue: "claude-coordinator/t/1", near: 1 },
+        10
+      );
+      expect(claimed.slot).toBe(0);
+      expect(claimed.mode).toBe("continue");
+    });
+
+    /** Its conversation is in that workspace, wherever the branch went since. */
+    it("adopts a branch no worktree holds into it", () => {
+      const claimed = claim(
+        pooled(),
+        REPO,
+        { ...ctx, continue: "feat/pushed-and-released", near: 1 },
+        10
+      );
+      expect(claimed.slot).toBe(1);
+      expect(claimed.mode).toBe("adopt");
+    });
+  });
+
+  /**
+   * `avoid` is the worktree the parent's reads are in: reset under them for
+   * another branch, they would read its files believing them their own.
+   */
+  describe("with `avoid`", () => {
+    const free = (slot: number, usedAt: number) => ({
+      repo: REPO,
+      slot,
+      branch: `claude-coordinator/t/${slot}`,
+      repos: [repo()],
+      usedAt
+    });
+
+    it("gives another branch the next free worktree instead", () => {
+      const pool = memoryPoolStore();
+      pool.put(free(0, 1));
+      pool.put(free(1, 5));
+      expect(claim(pool, REPO, { ...ctx, avoid: 0 }, 10).slot).toBe(1);
+    });
+
+    it("opens a new worktree rather than take the only free one", () => {
+      const pool = memoryPoolStore();
+      pool.put(free(0, 1));
+      expect(claim(pool, REPO, { ...ctx, avoid: 0 }, 10).slot).toBe(1);
+      expect(pool.all(REPO)[0]?.branch).toBe("claude-coordinator/t/0");
+    });
+
+    it("passes over `near` when it is that worktree", () => {
+      const pool = memoryPoolStore();
+      pool.put(free(0, 1));
+      pool.put(free(1, 5));
+      expect(claim(pool, REPO, { ...ctx, near: 0, avoid: 0 }, 10).slot).toBe(1);
+    });
+
+    it("still continues the branch it holds, in it", () => {
+      const pool = memoryPoolStore();
+      pool.put(free(0, 1));
+      const claimed = claim(
+        pool,
+        REPO,
+        { ...ctx, continue: "claude-coordinator/t/0", avoid: 0 },
         10
       );
       expect(claimed.slot).toBe(0);
@@ -275,7 +335,7 @@ describe("claiming a worktree", () => {
     pool.put({
       repo: REPO,
       slot: 0,
-      branch: "anthropic-coding/t/1",
+      branch: "claude-coordinator/t/1",
       repos: [repo({ tip: "c1" })],
       usedAt: 5
     });
@@ -283,13 +343,13 @@ describe("claiming a worktree", () => {
     const claimed = claim(
       pool,
       REPO,
-      { ...ctx, continue: "anthropic-coding/t/1" },
+      { ...ctx, continue: "claude-coordinator/t/1" },
       10
     );
 
     expect(claimed).toMatchObject({
       slot: 0,
-      branch: "anthropic-coding/t/1",
+      branch: "claude-coordinator/t/1",
       mode: "continue"
     });
     expect(claimed.previous).toBeUndefined();
@@ -301,15 +361,15 @@ describe("claiming a worktree", () => {
     pool.put({
       repo: REPO,
       slot: 0,
-      branch: "anthropic-coding/t/1",
+      branch: "claude-coordinator/t/1",
       live: { taskId: "t", runId: "detached:1" },
       repos: [],
       usedAt: 5
     });
 
     expect(() =>
-      claim(pool, REPO, { ...ctx, continue: "anthropic-coding/t/1" }, 10)
-    ).toThrow(/anthropic-coding\/t\/1 is being worked on by another session/);
+      claim(pool, REPO, { ...ctx, continue: "claude-coordinator/t/1" }, 10)
+    ).toThrow(/claude-coordinator\/t\/1 is being worked on by another session/);
   });
 
   it("adopts a branch no worktree holds into a free one", () => {
@@ -317,12 +377,12 @@ describe("claiming a worktree", () => {
     const claimed = claim(
       pool,
       REPO,
-      { ...ctx, continue: "anthropic-coding/t/1" },
+      { ...ctx, continue: "claude-coordinator/t/1" },
       10
     );
     expect(claimed).toMatchObject({
       slot: 0,
-      branch: "anthropic-coding/t/1",
+      branch: "claude-coordinator/t/1",
       mode: "adopt"
     });
   });
@@ -362,7 +422,7 @@ describe("a worktree whose workspace was reclaimed", () => {
     pool.put({
       repo: REPO,
       slot: 3,
-      branch: "anthropic-coding/t/1",
+      branch: "claude-coordinator/t/1",
       live: { taskId: "t", runId: "detached:1" },
       repos: [repo({ tip: "c1" })],
       usedAt: 7
@@ -397,15 +457,15 @@ describe("a worktree whose workspace was reclaimed", () => {
 
 describe("the pool in the parent's SQLite", () => {
   it("keeps rows per repository and slot, and finds them across repositories", async () => {
-    const stub = env.ANTHROPIC_CODING_WORKSPACE.get(
-      env.ANTHROPIC_CODING_WORKSPACE.idFromName("pool-spec")
+    const stub = env.CLAUDE_COORDINATOR_WORKSPACE.get(
+      env.CLAUDE_COORDINATOR_WORKSPACE.idFromName("pool-spec")
     );
     await runInDurableObject(stub, (_instance, state) => {
       const pool = sqlPoolStore(state.storage);
       const row: Worktree = {
         repo: REPO,
         slot: 0,
-        branch: "anthropic-coding/t/1",
+        branch: "claude-coordinator/t/1",
         repos: [repo()],
         usedAt: 1
       };
@@ -435,7 +495,7 @@ describe("reconciling the pool against the worktrees that are left", () => {
   const held = (slot: number): Worktree => ({
     repo: REPO,
     slot,
-    branch: `anthropic-coding/task-1/${slot}`,
+    branch: `claude-coordinator/task-1/${slot}`,
     repos: [repo({ tip: "unpushed" })],
     usedAt: 1
   });

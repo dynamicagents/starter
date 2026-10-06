@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import { env } from "cloudflare:workers";
 import { runInDurableObject } from "cloudflare:test";
 import type { TurnConfig, TurnContext } from "@cloudflare/think";
@@ -11,43 +11,52 @@ import {
 import { openWorkspace, workspaceName } from "@dynamicagents/plugins/workspace";
 import type { AgentToolLifecycleResult, AgentToolRunInfo } from "agents";
 import type { ContextConfig } from "agents/context";
-import type { AnthropicCodingWorkspace } from "@/index";
+import type { ClaudeCoordinatorWorkspace } from "@/index";
 import { requireArtifactsStub } from "@dynamicagents/core/artifacts";
 import {
-  AnthropicCodingPlannerChild,
-  AnthropicCodingWriterChild,
+  ClaudeCoordinatorPlannerChild,
+  ClaudeCoordinatorReviserChild,
+  ClaudeCoordinatorWriterChild,
   claimSession,
   forgetKept,
   keepNote,
   preparePlanner,
+  prepareReviser,
   prepareWriter,
   reportPlan,
   settlePlanner,
   settleSession
-} from "@/agents/anthropic-coding/children";
+} from "@/agents/claude-coordinator/children";
+import {
+  branchSession,
+  openPullRequest,
+  recordBranchRun
+} from "@/agents/claude-coordinator/branches";
 import {
   createPlan,
   ownsPlan,
   PLAN_LABEL
-} from "@/agents/anthropic-coding/plans";
+} from "@/agents/claude-coordinator/plans";
 import {
   notResumable,
   planBrief,
   sessionBrief,
   sessionFooter,
+  sessionReport,
   unresumableReport,
   warningPrompt,
+  WRITE_OUTPUT,
   writingNote
-} from "@/agents/anthropic-coding/session";
+} from "@/agents/claude-coordinator/session";
 import { CLAUDE_CODE_SESSION } from "@/config";
 import {
   claudeCodeConfig,
-  CREDENTIALS_KEY,
-  GH_TOKEN_PLACEHOLDER
-} from "@/agents/anthropic-coding/claude-code";
-import { admitSession } from "@/agents/anthropic-coding/plugins";
+  CREDENTIALS_KEY
+} from "@/agents/claude-coordinator/claude-code";
+import { admitSession } from "@/agents/claude-coordinator/plugins";
 import { activeRepo } from "@/workspace/active-repo";
 import { SCRATCH_REPO } from "@/workspace/scratch";
+import { sqlPoolStore, worktreeRepo } from "@/workspace/worktree-pool";
 import { gitIdentity } from "@/workspace/git-identity";
 import type {
   KeptWork,
@@ -56,7 +65,7 @@ import type {
 } from "@/workspace/subtask-workspace";
 
 /**
- * `anthropic-coding`'s wiring, pinned.
+ * `claude-coordinator`'s wiring, pinned.
  *
  * The division of labour between this file and `@dynamicagents/plugins` is worth
  * stating, because it is what keeps both suites small. The *machine* — the
@@ -90,17 +99,17 @@ interface Parent {
 
 const onParent = <T>(
   read: (agent: Parent) => T | Promise<T>,
-  key = `anthropic-coding-spec:${crypto.randomUUID()}`
+  key = `claude-coordinator-spec:${crypto.randomUUID()}`
 ) =>
   runInDurableObject(
-    (env.AnthropicCodingAgent as unknown as DurableObjectNamespace).get(
-      env.AnthropicCodingAgent.idFromName(key)
+    (env.ClaudeCoordinatorAgent as unknown as DurableObjectNamespace).get(
+      env.ClaudeCoordinatorAgent.idFromName(key)
     ),
     (instance) => read(instance as unknown as Parent)
   );
 
-const { freshStub: freshWorkspace } = makeDoHelpers<AnthropicCodingWorkspace>(
-  env.ANTHROPIC_CODING_WORKSPACE
+const { freshStub: freshWorkspace } = makeDoHelpers<ClaudeCoordinatorWorkspace>(
+  env.CLAUDE_COORDINATOR_WORKSPACE
 );
 
 /**
@@ -109,7 +118,7 @@ const { freshStub: freshWorkspace } = makeDoHelpers<AnthropicCodingWorkspace>(
  * `bash` switched off. Each fails quietly.
  */
 describe("the parent's surface", () => {
-  it("is git and its worktrees, a scratchpad, a browser, grep, and the sessions", async () => {
+  it("is a checkout to open, pull requests to watch, worktrees to read, a scratchpad, a browser, grep, and the sessions", async () => {
     const tools = await onParent((agent) =>
       Object.keys(agent.getTools()).sort()
     );
@@ -122,20 +131,14 @@ describe("the parent's surface", () => {
       "check_back",
       "claude_code",
       "claude_code_plan",
+      "claude_code_revise",
       "grep",
       "repo_clone",
-      "repo_commit",
-      "repo_diff",
-      "repo_fetch",
       "repo_issue_view",
-      "repo_open_pr",
+      "repo_pr_checks",
       "repo_pr_review_status",
       "repo_pr_threads",
       "repo_pr_view",
-      "repo_push",
-      "repo_status",
-      // The switch into a writing session's worktree, which is the parent's
-      // alone: a session moving the parent's tools would move them mid-review.
       "repo_worktree",
       "repo_worktrees",
       "scratch_open",
@@ -143,15 +146,66 @@ describe("the parent's surface", () => {
     ]);
   });
 
-  it("can find out whether a review has landed, read it, and answer it", async () => {
+  /**
+   * Where its reads run moves between turns — a session settling takes them
+   * into its worktree — so it is said every turn rather than remembered from a
+   * `repo_worktree` answer. Moved through a selection of its own, which is the
+   * one the agent's tools read.
+   */
+  it("says where its reads run, again whenever that moves", async () => {
+    const { remind, before, after } = await onParent(async (agent) => {
+      const reads = agent
+        .configureContext()
+        .find((block) => block.label.endsWith(".reads"));
+      const read = async () =>
+        String(await (reads?.provider as { get(): Promise<unknown> }).get());
+      const active = activeRepo(agent.ctx.storage);
+      active.set("acme/api");
+      const before = await read();
+      sqlPoolStore(agent.ctx.storage).put({
+        repo: "acme/api",
+        slot: 0,
+        branch: "claude-coordinator/t/1",
+        dir: "/workspace/api",
+        repos: [],
+        usedAt: 1
+      });
+      active.set(worktreeRepo("acme/api", 0));
+      return { remind: reads?.whenChanged, before, after: await read() };
+    });
+    expect(remind).toBe("remind");
+    expect(before).toMatch(/your own checkout of acme\/api/);
+    expect(after).toMatch(/worktree holding `claude-coordinator\/t\/1`/);
+  });
+
+  it("keeps its reads in a worktree when a task settles", async () => {
+    const selected = await onParent(async (agent) => {
+      activeRepo(agent.ctx.storage).set(worktreeRepo("acme/api", 0));
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+      await (
+        agent as unknown as { onTaskSettled(id: string): Promise<void> }
+      ).onTaskSettled("task-1");
+      warn.mockRestore();
+      return activeRepo(agent.ctx.storage).get();
+    });
+    expect(selected).toBe(worktreeRepo("acme/api", 0));
+  });
+
+  /**
+   * A pull request's commits, replies and resolutions are its session's: one
+   * written here would be the smaller model answering a review it cannot judge.
+   */
+  it("watches a pull request's review and checks, and answers neither itself", async () => {
     const { tools, actions } = await onParent((agent) => ({
       tools: Object.keys(agent.getTools()),
-      actions: Object.keys(agent.getActions()).sort()
+      actions: Object.keys(agent.getActions())
     }));
     expect(tools).toContain("repo_pr_review_status");
-    expect(tools).toContain("repo_pr_threads");
-    // Actions, so a recovered turn never posts the same reply twice.
-    expect(actions).toEqual(["repo_pr_comment", "repo_pr_thread_reply"]);
+    expect(tools).toContain("repo_pr_checks");
+    for (const writer of ["repo_commit", "repo_push", "repo_open_pr"]) {
+      expect(tools).not.toContain(writer);
+    }
+    expect(actions).toEqual([]);
   });
 
   it("has no shell, no writer and no editor", async () => {
@@ -170,32 +224,35 @@ describe("the parent's surface", () => {
     }
   });
 
-  it("offers the writing session first, then the planning one", async () => {
+  it("offers building, then revising, then planning", async () => {
     const names = await onParent((agent) =>
       agent.getSubAgents().map((Cls) => Cls.name)
     );
     expect(names).toEqual([
-      "AnthropicCodingWriterChild",
-      "AnthropicCodingPlannerChild"
+      "ClaudeCoordinatorWriterChild",
+      "ClaudeCoordinatorReviserChild",
+      "ClaudeCoordinatorPlannerChild"
     ]);
   });
 });
 
 describe("the sessions", () => {
   it("run in the background, because a session outlasts a turn", () => {
-    expect(AnthropicCodingWriterChild.spec.detached).toBe(true);
-    expect(AnthropicCodingPlannerChild.spec.detached).toBe(true);
+    expect(ClaudeCoordinatorWriterChild.spec.detached).toBe(true);
+    expect(ClaudeCoordinatorReviserChild.spec.detached).toBe(true);
+    expect(ClaudeCoordinatorPlannerChild.spec.detached).toBe(true);
   });
 
   it.each([
-    ["ANTHROPIC_CODING_WRITER_CHILD"],
-    ["ANTHROPIC_CODING_PLANNER_CHILD"]
+    ["CLAUDE_COORDINATOR_WRITER_CHILD"],
+    ["CLAUDE_COORDINATOR_REVISER_CHILD"],
+    ["CLAUDE_COORDINATOR_PLANNER_CHILD"]
   ])("install no tools on %s: the session brings its own", async (binding) => {
     const ns = (env as unknown as Record<string, DurableObjectNamespace>)[
       binding
     ]!;
     const tools = await runInDurableObject(
-      ns.get(ns.idFromName(`anthropic-coding-spec:${crypto.randomUUID()}`)),
+      ns.get(ns.idFromName(`claude-coordinator-spec:${crypto.randomUUID()}`)),
       (instance) =>
         Object.keys((instance as unknown as { getTools(): object }).getTools())
     );
@@ -210,8 +267,8 @@ describe("the sessions", () => {
  */
 describe("preparing a session", () => {
   it.each([
-    ["writing", AnthropicCodingWriterChild],
-    ["planning", AnthropicCodingPlannerChild]
+    ["writing", ClaudeCoordinatorWriterChild],
+    ["planning", ClaudeCoordinatorPlannerChild]
   ])(
     "refuses a %s session in a workspace with nothing checked out",
     async (_label, Cls) => {
@@ -232,10 +289,10 @@ describe("preparing a session", () => {
 
   it("does not mistake a checkout with nothing to install for an empty workspace", async () => {
     const dir = "/workspace/scratch";
-    const key = `anthropic-coding-spec:${crypto.randomUUID()}`;
+    const key = `claude-coordinator-spec:${crypto.randomUUID()}`;
     const name = workspaceName(key, SCRATCH_REPO);
-    const workspace = env.ANTHROPIC_CODING_WORKSPACE.get(
-      env.ANTHROPIC_CODING_WORKSPACE.idFromName(name)
+    const workspace = env.CLAUDE_COORDINATOR_WORKSPACE.get(
+      env.CLAUDE_COORDINATOR_WORKSPACE.idFromName(name)
     );
 
     // A scratchpad — a git repository of its own — with no lockfile: opened,
@@ -248,7 +305,7 @@ describe("preparing a session", () => {
 
     const runtime = await onParent((agent) => {
       activeRepo(agent.ctx.storage).set(SCRATCH_REPO);
-      return AnthropicCodingWriterChild.spec.prepare!({
+      return ClaudeCoordinatorWriterChild.spec.prepare!({
         input: { task: TASK } as never,
         taskId: "task-1",
         runId: "detached:call_1",
@@ -262,7 +319,7 @@ describe("preparing a session", () => {
 /**
  * A plan: opened on the parent for this caller, written by a planning session,
  * put to the caller by id, and carried out by a writing session given it whole.
- * What travels between them is the id — see `@/agents/anthropic-coding/plans`.
+ * What travels between them is the id — see `@/agents/claude-coordinator/plans`.
  */
 describe("a plan", () => {
   const planning = (plan?: string) =>
@@ -529,7 +586,7 @@ describe("a plan", () => {
     const brief = sessionBrief(
       TASK,
       undefined,
-      { branch: "anthropic-coding/t/c", submodules: [], continues: false },
+      { branch: "claude-coordinator/t/c", submodules: [], continues: false },
       { text: "# The plan\n\nDo the thing.", resumed: false }
     );
     expect(brief).toContain("## The plan");
@@ -545,7 +602,7 @@ describe("a plan", () => {
     const brief = sessionBrief(
       TASK,
       undefined,
-      { branch: "anthropic-coding/t/c", submodules: [], continues: false },
+      { branch: "claude-coordinator/t/c", submodules: [], continues: false },
       { text: "# The plan\n\nDo the thing.", resumed: true }
     );
     expect(brief).toContain("## Carrying out your plan");
@@ -593,7 +650,7 @@ describe("a plan", () => {
 /**
  * An approved plan is built, and a plan is revised, by carrying on from the
  * conversation that wrote it — in the worktree that holds it, which is where
- * its transcript is. See `prepareWriter` in `@/agents/anthropic-coding/children`.
+ * its transcript is. See `prepareWriter` in `@/agents/claude-coordinator/children`.
  */
 describe("carrying a plan on from the session that wrote it", () => {
   const planning = (plan?: string) =>
@@ -766,7 +823,7 @@ describe("carrying a plan on from the session that wrote it", () => {
 
   /** A recovered turn reports the handle again, without the plan it filed. */
   it("keeps the plan a session filed, and forgets a session found gone", async () => {
-    const stub = workspaceAt(`anthropic-coding-spec:${crypto.randomUUID()}`);
+    const stub = workspaceAt(`claude-coordinator-spec:${crypto.randomUUID()}`);
     await stub.noteSession("run-1", {
       sessionId: "s1",
       plan: "p1",
@@ -805,9 +862,9 @@ describe("carrying a plan on from the session that wrote it", () => {
 /** A worktree of a planning or writing session, in a workspace of its own. */
 function worktree(slot = 3): SessionPlace {
   return {
-    workspaceName: `anthropic-coding-spec:${crypto.randomUUID()}`,
+    workspaceName: `claude-coordinator-spec:${crypto.randomUUID()}`,
     dir: "/workspace/plan",
-    branch: "anthropic-coding/p",
+    branch: "claude-coordinator/p",
     slot: { repo: "acme/plan", slot }
   };
 }
@@ -831,8 +888,8 @@ function placingPool(place: SessionPlace) {
 
 /** The workspace object a session ran in, where its handle is recorded. */
 function workspaceAt(name: string) {
-  return env.ANTHROPIC_CODING_WORKSPACE.get(
-    env.ANTHROPIC_CODING_WORKSPACE.idFromName(name)
+  return env.CLAUDE_COORDINATOR_WORKSPACE.get(
+    env.CLAUDE_COORDINATOR_WORKSPACE.idFromName(name)
   );
 }
 
@@ -840,7 +897,7 @@ function workspaceAt(name: string) {
 function recordingPool(
   resolve?: () => Promise<never>,
   kept: KeptWork = {
-    note: "Its work up to that point is kept on `anthropic-coding/task-1/call_1`.",
+    note: "Its work up to that point is kept on `claude-coordinator/task-1/call_1`.",
     settled: true
   }
 ) {
@@ -851,7 +908,7 @@ function recordingPool(
       (async () => ({
         workspaceName: "w",
         dir: "/workspace/w",
-        branch: "anthropic-coding/task-1/call_1"
+        branch: "claude-coordinator/task-1/call_1"
       })),
     release: async (_ctx, options) => {
       calls.push(
@@ -898,7 +955,7 @@ describe("a writing session's worktree", () => {
     expect(runtime).toEqual({
       workspaceName: "w",
       dir: "/workspace/w",
-      branch: "anthropic-coding/task-1/call_1"
+      branch: "claude-coordinator/task-1/call_1"
     });
   });
 
@@ -978,7 +1035,7 @@ describe("a writing session's worktree", () => {
       keepNote(agent.ctx.storage, "task-1", "detached:call_1", "kept on b");
       const run = {
         runId: "detached:call_1",
-        agentType: "AnthropicCodingWriterChild",
+        agentType: "ClaudeCoordinatorWriterChild",
         displayOrder: 1
       } as unknown as AgentToolRunInfo;
       const failed = { status: "error", error: "boom" } as const;
@@ -991,7 +1048,7 @@ describe("a writing session's worktree", () => {
   });
 });
 
-/** The pre-flight: see `admitSession` in `@/agents/anthropic-coding/plugins`. */
+/** The pre-flight: see `admitSession` in `@/agents/claude-coordinator/plugins`. */
 describe("the credential pool", () => {
   it("reports a fresh pool as usable", async () => {
     const workspace = freshWorkspace("fresh-pool");
@@ -1015,7 +1072,7 @@ describe("the credential pool", () => {
   it("refuses a session once every credential is spent, saying when one resets", async () => {
     const name = `admit-spent:${crypto.randomUUID()}`;
     const resetAt = Date.now() + 60 * 60_000;
-    const binding = env.ANTHROPIC_CODING_WORKSPACE;
+    const binding = env.CLAUDE_COORDINATOR_WORKSPACE;
     await runInDurableObject(
       binding.get(binding.idFromName(name)),
       async (_, state) => {
@@ -1053,14 +1110,12 @@ describe("the brief a session starts from", () => {
     const brief = sessionBrief(TASK);
 
     expect(brief.startsWith(TASK)).toBe(true);
-    // Unconditional, because it is true of every session: a model reaches for
-    // `gh` unprompted, this one is authenticated as nobody, and neither "it is
-    // missing" nor "it is signed in" is what it will assume.
-    expect(brief).toContain("`gh` in this container");
-    expect(brief).toContain("authenticated as nobody");
-    // …and who does hold the credential, or the session tries to route around
-    // the boundary rather than reporting back through it.
-    expect(brief).toContain("belong to the agent");
+    // Unconditional: a model reaches for `gh` unprompted, and should know it
+    // works and that there is no token in reach.
+    expect(brief).toContain("## GitHub");
+    expect(brief).toContain("there is no token here to read or print");
+    // The rules are a writer's, on a branch.
+    expect(brief).not.toContain("Never merge");
   });
 
   /**
@@ -1079,12 +1134,12 @@ describe("the brief a session starts from", () => {
 describe("the branch a writing session is told about", () => {
   it("names the submodules, and says to commit inside each one", () => {
     const brief = sessionBrief(TASK, undefined, {
-      branch: "anthropic-coding/task-1/1",
+      branch: "claude-coordinator/task-1/1",
       submodules: ["core", "starter"],
       continues: false
     });
 
-    expect(brief).toContain("You are on `anthropic-coding/task-1/1`");
+    expect(brief).toContain("You are on `claude-coordinator/task-1/1`");
     expect(brief).toContain("- `core`\n- `starter`");
     expect(brief).toMatch(/Commit inside each one you\nchange/);
     // The install is the root's alone, and a session that does not know that
@@ -1093,9 +1148,9 @@ describe("the branch a writing session is told about", () => {
   });
 
   /** Only commits leave a session, and it has to hear that before it starts. */
-  it("says uncommitted work is deleted, and that the parent pushes", () => {
+  it("says uncommitted work is deleted, and what the branch's owner may not do", () => {
     const brief = sessionBrief(TASK, undefined, {
-      branch: "anthropic-coding/task-1/1",
+      branch: "claude-coordinator/task-1/1",
       submodules: [],
       continues: false
     });
@@ -1104,15 +1159,50 @@ describe("the branch a writing session is told about", () => {
     expect(brief).toMatch(
       /anything left\nuncommitted is deleted when you finish/
     );
-    expect(brief).toMatch(/Do not push/);
+    expect(brief).toContain("Push this branch and no other.");
+    expect(brief).toContain("Never merge");
+    expect(brief).toContain("Never request a reviewer");
+    // What makes the coordinator worth having: a session that waits on a review
+    // holds its container for nothing.
+    expect(brief).toContain("**Never wait for a review or for CI**");
     expect(brief).not.toContain("Submodules");
     expect(brief).not.toContain("earlier work");
+  });
+
+  it("asks a build to open its pull request ready for review, and to stop for a decision", () => {
+    const brief = sessionBrief(TASK, undefined, {
+      branch: "claude-coordinator/task-1/1",
+      submodules: [],
+      continues: false
+    });
+
+    expect(brief).toContain("## Delivering it");
+    expect(brief).toContain("**ready for review, not a draft**");
+    expect(brief).toContain("`needs_input`");
+    expect(brief).not.toContain("## Pull request #");
+  });
+
+  it("tells a revision which pull request is its own, and how to answer what landed", () => {
+    const brief = sessionBrief(
+      "Copilot has reviewed it.",
+      undefined,
+      { branch: "feat/x", submodules: [], continues: true },
+      undefined,
+      { number: 12, url: "https://github.com/acme/api/pull/12" }
+    );
+
+    expect(brief.startsWith("Copilot has reviewed it.")).toBe(true);
+    expect(brief).toContain("## Pull request #12");
+    expect(brief).toContain("https://github.com/acme/api/pull/12 is");
+    expect(brief).toContain("resolve it either way");
+    expect(brief).toContain("Before you finish, look once");
+    expect(brief).not.toContain("## Delivering it");
   });
 
   /** Each full run is minutes of the person's wait, and a baseline it was given is one. */
   it("says to check once, against the base the brief already gives", () => {
     const brief = sessionBrief(TASK, undefined, {
-      branch: "anthropic-coding/task-1/1",
+      branch: "claude-coordinator/task-1/1",
       submodules: [],
       continues: false
     });
@@ -1127,7 +1217,7 @@ describe("the branch a writing session is told about", () => {
 
   it("tells a continuing session the branch already holds work", () => {
     const brief = sessionBrief(TASK, undefined, {
-      branch: "anthropic-coding/task-1/1",
+      branch: "claude-coordinator/task-1/1",
       submodules: [],
       continues: true
     });
@@ -1170,9 +1260,9 @@ describe("the warning round", () => {
  * the discard runs after the session exits.
  */
 describe("the note on what a writing session kept", () => {
-  const branch = "anthropic-coding/task-1/1";
+  const branch = "claude-coordinator/task-1/1";
 
-  it("names each repository with commits, and how to reach the worktree", () => {
+  it("names each repository with commits, and how to add to the branch", () => {
     const note = writingNote({
       branch,
       commits: [
@@ -1186,9 +1276,8 @@ describe("the note on what a writing session kept", () => {
     expect(note).toContain(
       `**Committed on \`${branch}\`** in \`starter\` (2 commits), \`core\` (1 commit).`
     );
-    expect(note).toContain("Nothing is pushed.");
-    expect(note).toContain("`repo_worktree`");
     expect(note).toContain("`continue`");
+    expect(note).toContain("`claude_code_revise`");
     // Nothing is said about a repository the session did not change.
     expect(note).not.toContain("superproject");
   });
@@ -1201,7 +1290,7 @@ describe("the note on what a writing session kept", () => {
     });
 
     expect(note).toMatch(
-      /No commits were made on `anthropic-coding\/task-1\/1`/
+      /No commits were made on `claude-coordinator\/task-1\/1`/
     );
   });
 
@@ -1325,7 +1414,7 @@ describe("how hard this deployment asks a session to think", () => {
  * because the egress gateway spends entry 0 first, and the empty entry an unset
  * secret produces, which would otherwise be sent as a bare `Bearer `.
  */
-describe("anthropic-coding's credential pool", () => {
+describe("claude-coordinator's credential pool", () => {
   it("hands over every configured credential, in declared order", () => {
     const config = claudeCodeConfig(env as never);
 
@@ -1356,7 +1445,7 @@ describe("anthropic-coding's credential pool", () => {
  * Who a session's commits belong to.
  *
  * Why the session needs an identity of its own is beside the option, in
- * `@/agents/anthropic-coding/claude-code.ts`. What only this side can get wrong is
+ * `@/agents/claude-coordinator/claude-code.ts`. What only this side can get wrong is
  * answering it with a *different* identity from the workspace object's, which
  * is the disagreement `@/workspace/git-identity` exists to prevent — so this
  * pins that they are one answer, not any particular name.
@@ -1370,25 +1459,294 @@ describe("who a session commits as", () => {
 });
 
 /**
- * Where `gh`'s placeholder token lives, which is the whole of its safety.
- *
- * It is only harmless behind the sessions' egress gateway, which strips it. In
- * the image it would also reach `coding`'s container, whose egress is `direct`,
- * and be presented to GitHub as a credential by anything that reads `GH_TOKEN`.
+ * GitHub as the deployment's account, for the sessions. What only this side
+ * can get wrong is which secret backs it, and leaving a token where the
+ * container could read it.
  */
-describe("gh's placeholder token", () => {
-  it("rides in the session env, which only the gateway-fronted sessions get", () => {
-    const config = claudeCodeConfig(env as never);
+describe("the sessions' GitHub token", () => {
+  it("is the deployment's, handed to the egress gateway and not the container", () => {
+    const config = claudeCodeConfig({
+      ...(env as object),
+      GITHUB_TOKEN: "ghp_deployment"
+    } as never);
 
-    expect(config.env?.GH_TOKEN).toBe(GH_TOKEN_PLACEHOLDER);
+    expect(config.githubToken?.()).toBe("ghp_deployment");
+    expect(config.env?.GH_TOKEN).toBeUndefined();
+  });
+});
+
+/**
+ * A session sent back to a branch carries on the conversation that last worked
+ * on it — see `./branches.ts` — so the one that answers a review is the one that
+ * wrote the code.
+ */
+describe("going back to a branch", () => {
+  const BRANCH = "claude-coordinator/abcde";
+
+  /** A run placed in `place` on `BRANCH`, whose session its workspace recorded. */
+  async function worked(agent: Parent, place: SessionPlace, sessionId: string) {
+    const runId = `detached:${crypto.randomUUID()}`;
+    recordBranchRun(agent.ctx.storage, {
+      runId,
+      branch: BRANCH,
+      workspaceName: place.workspaceName,
+      ...(place.slot ? { slot: place.slot } : {})
+    });
+    await workspaceAt(place.workspaceName).noteSession(runId, { sessionId });
+    return runId;
+  }
+
+  const continuing = (agent: Parent, place: SessionPlace) => {
+    const placing = placingPool(place);
+    return prepareWriter(
+      {
+        input: { task: "carry on, they chose JSON", continue: BRANCH },
+        taskId: "task-1",
+        runId: `detached:${crypto.randomUUID()}`,
+        parent: agent.pluginContext()
+      },
+      placing.pool
+    ).then((runtime) => ({ runtime, asked: placing.asked }));
+  };
+
+  it("carries on the branch's conversation, in its worktree, without a fork", async () => {
+    const place = { ...worktree(3), branch: BRANCH };
+    const { runtime, asked, runId } = await onParent(async (agent) => {
+      const runId = await worked(agent, place, "s-build");
+      return { ...(await continuing(agent, place)), runId };
+    });
+
+    expect(asked[0]).toMatchObject({
+      continue: BRANCH,
+      near: { repo: "acme/plan", slot: 3 }
+    });
+    expect(runtime).toMatchObject({
+      resume: { sessionId: "s-build", fromRun: runId }
+    });
+    expect(
+      (runtime as { resume: Record<string, unknown> }).resume
+    ).not.toHaveProperty("fork");
   });
 
-  it("tells the session which gh commands can work at all", () => {
-    const brief = sessionBrief("look at the issue");
+  it("starts fresh on the branch when it lands in another worktree", async () => {
+    const runtime = await onParent(async (agent) => {
+      await worked(agent, { ...worktree(3), branch: BRANCH }, "s-build");
+      return (await continuing(agent, { ...worktree(4), branch: BRANCH }))
+        .runtime;
+    });
 
-    // GitHub gives anonymous callers a GraphQL quota of zero, so the high-level
-    // commands a model reaches for first are the ones that cannot work.
-    expect(brief).toContain("gh api repos/");
-    expect(brief).toContain("GraphQL");
+    expect(runtime).toMatchObject({ branch: BRANCH });
+    expect(runtime).not.toHaveProperty("resume");
+  });
+
+  it("passes over a run whose conversation its workspace no longer holds", async () => {
+    const found = await onParent(async (agent) => {
+      const kept = { ...worktree(3), branch: BRANCH };
+      await worked(agent, kept, "s-kept");
+      // A later run on the branch, in a workspace with no record of it.
+      recordBranchRun(agent.ctx.storage, {
+        runId: "detached:gone",
+        branch: BRANCH,
+        workspaceName: worktree(5).workspaceName
+      });
+      return branchSession(agent.ctx.storage, BRANCH, (name, runId) =>
+        workspaceAt(name).sessionOf(runId)
+      );
+    });
+
+    expect(found).toMatchObject({ sessionId: "s-kept" });
+  });
+
+  it("refuses a branch to continue and a new one to name together", async () => {
+    const refused = await onParent((agent) =>
+      prepareWriter(
+        {
+          input: { task: TASK, continue: BRANCH, branch: "docs/x" },
+          taskId: "task-1",
+          runId: "detached:call_1",
+          parent: agent.pluginContext()
+        },
+        placingPool(worktree()).pool
+      ).then(
+        () => "",
+        (err: unknown) => String(err)
+      )
+    );
+    expect(refused).toContain("not both");
+  });
+
+  it("sends a revision to the pull request's own branch, and tells it which one", async () => {
+    const place = { ...worktree(3), branch: "feat/rate-limit" };
+    const pullRequest = {
+      number: 12,
+      branch: "feat/rate-limit",
+      url: "https://github.com/acme/api/pull/12"
+    };
+    const { runtime, asked } = await onParent(async (agent) => {
+      const placing = placingPool(place);
+      const runtime = await prepareReviser(
+        {
+          input: { pr: 12, task: "Copilot has reviewed it." },
+          taskId: "task-1",
+          runId: `detached:${crypto.randomUUID()}`,
+          parent: agent.pluginContext()
+        },
+        placing.pool,
+        async () => pullRequest
+      );
+      return { runtime, asked: placing.asked };
+    });
+
+    expect(asked[0]).toMatchObject({ continue: "feat/rate-limit" });
+    expect(runtime).toMatchObject({ pullRequest });
+  });
+});
+
+/** The pull request a revision goes back to is GitHub's answer, never a model's. */
+describe("looking up a pull request to revise", () => {
+  const answering = (status: number, body: unknown) =>
+    vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValue(new Response(JSON.stringify(body), { status }));
+  const repo = { full_name: "acme/api" };
+
+  it("answers an open pull request's head branch", async () => {
+    const spy = answering(200, {
+      state: "open",
+      html_url: "https://github.com/acme/api/pull/12",
+      head: { ref: "feat/x", repo },
+      base: { repo }
+    });
+    try {
+      expect(
+        await openPullRequest("t", "https://github.com/acme/api", 12)
+      ).toEqual({
+        number: 12,
+        branch: "feat/x",
+        url: "https://github.com/acme/api/pull/12"
+      });
+      expect(String(spy.mock.calls[0]![0])).toBe(
+        "https://api.github.com/repos/acme/api/pulls/12"
+      );
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it.each([
+    [
+      "a merged one",
+      {
+        state: "closed",
+        merged: true,
+        head: { ref: "x", repo },
+        base: { repo }
+      },
+      "is merged"
+    ],
+    [
+      "one from a fork",
+      {
+        state: "open",
+        head: { ref: "x", repo: { full_name: "someone/api" } },
+        base: { repo }
+      },
+      "from a fork"
+    ]
+  ])("refuses %s", async (_label, body, said) => {
+    const spy = answering(200, body);
+    try {
+      await expect(
+        openPullRequest("t", "https://github.com/acme/api", 12)
+      ).rejects.toThrow(said);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("refuses a number that is not a pull request", async () => {
+    const spy = answering(404, { message: "Not Found" });
+    try {
+      await expect(
+        openPullRequest("t", "https://github.com/acme/api", 99)
+      ).rejects.toThrow("is not a pull request in acme/api");
+    } finally {
+      spy.mockRestore();
+    }
+  });
+});
+
+/** A writing session answers as data, so the coordinator reads fields, not prose. */
+describe("a writing session's answer", () => {
+  const ended = (structured: unknown) =>
+    ({
+      session: {
+        exitCode: 0,
+        result: {
+          subtype: "success",
+          isError: false,
+          text: JSON.stringify(structured),
+          sessionId: "s1",
+          numTurns: 3,
+          durationMs: 12_000,
+          apiErrorStatus: null,
+          costUsd: 0.2,
+          usage: { input: 1, output: 2, cacheRead: 3, cacheWrite: 4 },
+          permissionDenials: 0,
+          structured
+        }
+      }
+    }) as never;
+
+  it("asks for how it ended and what it did, and nothing more", () => {
+    expect(WRITE_OUTPUT.required).toEqual(["status", "summary"]);
+    expect(WRITE_OUTPUT.properties.status.enum).toEqual([
+      "done",
+      "needs_input",
+      "blocked"
+    ]);
+  });
+
+  it("is reported with its pull request and the checks it ran", () => {
+    const report = sessionReport(
+      ended({
+        status: "done",
+        summary: "Added --json, with tests.",
+        pullRequest: { number: 12, url: "https://github.com/acme/api/pull/12" },
+        checks: [
+          { command: "npm test", passed: true },
+          { command: "npm run lint", passed: false }
+        ]
+      })
+    );
+
+    expect(report).toContain(
+      "**Done.** Pull request #12: https://github.com/acme/api/pull/12"
+    );
+    expect(report).toContain("Added --json, with tests.");
+    expect(report).toContain("`npm test` passed; `npm run lint` FAILED");
+  });
+
+  it("carries the question a session stopped on", () => {
+    const report = sessionReport(
+      ended({
+        status: "needs_input",
+        summary: "Two output shapes would work.",
+        question: "Nested or flat JSON?"
+      })
+    );
+
+    expect(report).toContain("**Stopped for the person's decision.**");
+    expect(report).toContain(
+      "**Question for the person:** Nested or flat JSON?"
+    );
+  });
+
+  it("says so when a session stopped for a decision and named none", () => {
+    const report = sessionReport(
+      ended({ status: "needs_input", summary: "Unsure which shape." })
+    );
+
+    expect(report).toContain("**It named no question.**");
   });
 });

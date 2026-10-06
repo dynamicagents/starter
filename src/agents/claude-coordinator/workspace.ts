@@ -12,7 +12,7 @@ import {
   type WorkspaceObjectConfig
 } from "@dynamicagents/plugins/workspace";
 import {
-  ANTHROPIC_CODING_WORKSPACE_INSTANCE,
+  CLAUDE_COORDINATOR_WORKSPACE_INSTANCE,
   CLAUDE_CODE_SESSION
 } from "@/config";
 import { INSTALL_PLAN } from "@/workspace/install-plan";
@@ -20,7 +20,7 @@ import { gitIdentity } from "@/workspace/git-identity";
 import { claudeCodeConfig, CREDENTIALS_KEY } from "./claude-code";
 
 /**
- * `anthropic-coding`'s workspace, bound as `ANTHROPIC_CODING_WORKSPACE`.
+ * `claude-coordinator`'s workspace, bound as `CLAUDE_COORDINATOR_WORKSPACE`.
  *
  * Everything a workspace does is in `@dynamicagents/plugins/workspace`,
  * shared with `coding`. Two things are this agent's own, and both exist so that the container
@@ -42,7 +42,7 @@ import { claudeCodeConfig, CREDENTIALS_KEY } from "./claude-code";
  * full reasoning — including why it cannot live in the image's entrypoint, where
  * Cloudflare's own recipe puts it. Changing this mode means reading it.
  */
-export class AnthropicCodingWorkspace extends WorkspaceObjectBase {
+export class ClaudeCoordinatorWorkspace extends WorkspaceObjectBase {
   /**
    * The credential pool's `{ index → resetAt }` map.
    *
@@ -71,10 +71,10 @@ export class AnthropicCodingWorkspace extends WorkspaceObjectBase {
 
   protected workspaceConfig(): WorkspaceObjectConfig {
     return {
-      binding: "ANTHROPIC_CODING_WORKSPACE",
-      label: "anthropic-coding-workspace",
+      binding: "CLAUDE_COORDINATOR_WORKSPACE",
+      label: "claude-coordinator-workspace",
       installPlan: INSTALL_PLAN,
-      instance: ANTHROPIC_CODING_WORKSPACE_INSTANCE,
+      instance: CLAUDE_COORDINATOR_WORKSPACE_INSTANCE,
       // Above the whole session.
       //
       // The base's default is twenty minutes, and its rule is that the window
@@ -146,7 +146,7 @@ export class AnthropicCodingWorkspace extends WorkspaceObjectBase {
     if (!lead.ok) return;
     await pool.spend(lead.id, resetAt);
     console.warn(
-      "[anthropic-coding-workspace] retiring a credential on the " +
+      "[claude-coordinator-workspace] retiring a credential on the " +
         "client's own bucket reading",
       {
         id: lead.id,
@@ -193,7 +193,7 @@ export class AnthropicCodingWorkspace extends WorkspaceObjectBase {
   }
 }
 
-/** Where {@link AnthropicCodingWorkspace.noteSession} keeps a run's session. */
+/** Where {@link ClaudeCoordinatorWorkspace.noteSession} keeps a run's session. */
 const SESSION_KEY = "claude-session:";
 
 /** A run's Claude Code session, as this workspace records it. */

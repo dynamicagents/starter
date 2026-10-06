@@ -88,7 +88,7 @@
   //
   // **The object starts its own container** (`scheduling_policy`), from the
   // image under `images.app` and at the size its workspace config passes:
-  // `WORKSPACE_INSTANCE` and `ANTHROPIC_CODING_WORKSPACE_INSTANCE` in
+  // `WORKSPACE_INSTANCE` and `CLAUDE_COORDINATOR_WORKSPACE_INSTANCE` in
   // `src/config.ts`, which say why. The policy is fixed when
   // an application is created: one made under another policy is deleted before
   // the deploy that moves it, never switched. `@dynamicagents/plugins/workspace`
@@ -97,13 +97,13 @@
   // **One Dockerfile, an image per entry.** Cloudflare builds each entry's
   // `images` on its own, so every entry naming this Dockerfile gets an image of
   // its own — and `build_vars` is a Docker build arg, which is how
-  // `anthropic-coding`'s image gets the Claude Code CLI and `coding`'s does not.
+  // `claude-coordinator`'s image gets the Claude Code CLI and `coding`'s does not.
   //
   // **Nothing here caps how many run.** Running containers count against the
-  // account's limits rather than a ceiling per entry, and for `anthropic-coding`
+  // account's limits rather than a ceiling per entry, and for `claude-coordinator`
   // that is what bounds the fan-out: a writing or planning session works in a
   // worktree of its own while the parent keeps one, so N sessions at once want N+1
-  // instances of `AnthropicCodingWorkspace` — `ANTHROPIC_CODING` in
+  // instances of `ClaudeCoordinatorWorkspace` — `CLAUDE_COORDINATOR` in
   // `src/config.ts` carries why. A full fan-out plus its parent, three times over,
   // is around 4% of the concurrent vCPU Cloudflare documents per account, and 3%
   // of the memory. What the width costs is the bill, because memory and disk are billed
@@ -127,7 +127,7 @@
       "observability": { "logs": { "enabled": true } }
     },
     {
-      "class_name": "AnthropicCodingWorkspace",
+      "class_name": "ClaudeCoordinatorWorkspace",
       "scheduling_policy": "durable_object",
       "images": {
         "app": {
@@ -190,8 +190,14 @@
       { "class_name": "GenericAgent", "name": "GenericAgent" },
       { "class_name": "CodingHost", "name": "CodingHost" },
       { "class_name": "CodingAgent", "name": "CodingAgent" },
-      { "class_name": "AnthropicCodingHost", "name": "AnthropicCodingHost" },
-      { "class_name": "AnthropicCodingAgent", "name": "AnthropicCodingAgent" },
+      {
+        "class_name": "ClaudeCoordinatorHost",
+        "name": "ClaudeCoordinatorHost"
+      },
+      {
+        "class_name": "ClaudeCoordinatorAgent",
+        "name": "ClaudeCoordinatorAgent"
+      },
 
       // Not agents — the workspaces. One object per caller per repository,
       // holding that checkout's filesystem in SQLite and owning the container
@@ -205,8 +211,8 @@
       // same repository through both would get one container for both.
       { "class_name": "CodingWorkspace", "name": "CODING_WORKSPACE" },
       {
-        "class_name": "AnthropicCodingWorkspace",
-        "name": "ANTHROPIC_CODING_WORKSPACE"
+        "class_name": "ClaudeCoordinatorWorkspace",
+        "name": "CLAUDE_COORDINATOR_WORKSPACE"
       },
 
       // Not an agent, and not optional. Core files every sub-agent note on the
@@ -317,6 +323,22 @@
         "AnthropicCodingAgent",
         "AnthropicCodingWorkspace"
       ]
+    },
+    {
+      // `anthropic-coding` becomes `claude-coordinator`, under classes no
+      // deployment has used, and starts empty: every task, plan, memory and
+      // worktree the old classes held is dropped, unpushed branches included.
+      "tag": "v12",
+      "deleted_classes": [
+        "AnthropicCodingHost",
+        "AnthropicCodingAgent",
+        "AnthropicCodingWorkspace"
+      ],
+      "new_sqlite_classes": [
+        "ClaudeCoordinatorHost",
+        "ClaudeCoordinatorAgent",
+        "ClaudeCoordinatorWorkspace"
+      ]
     }
   ],
 
@@ -337,9 +359,9 @@
       "class_name": "CodingWorkflow"
     },
     {
-      "name": "anthropic-coding-workflow",
-      "binding": "ANTHROPIC_CODING_WORKFLOW",
-      "class_name": "AnthropicCodingWorkflow"
+      "name": "claude-coordinator-workflow",
+      "binding": "CLAUDE_COORDINATOR_WORKFLOW",
+      "class_name": "ClaudeCoordinatorWorkflow"
     }
   ],
 
@@ -368,7 +390,7 @@
       "GITHUB_NAME",
       "GITHUB_EMAIL",
 
-      // `anthropic-coding` only, and a credential pool rather than a secret — see
+      // `claude-coordinator` only, and a credential pool rather than a secret — see
       // `.env.example`, which is where an operator sets them, for how rotation
       // works and why none of them ever enters the container.
       //
@@ -377,7 +399,7 @@
       // missing-secret warnings, so a name left here and unset is typed as a
       // definite string that is undefined at runtime and warns on every local
       // run. Adding or dropping one is the same edit in this list *and* in the
-      // pool in `src/agents/anthropic-coding/claude-code.ts`.
+      // pool in `src/agents/claude-coordinator/claude-code.ts`.
       "CLAUDE_CODE_OAUTH_TOKEN_1",
       "CLAUDE_CODE_OAUTH_TOKEN_2",
       "CLAUDE_CODE_OAUTH_TOKEN_3"

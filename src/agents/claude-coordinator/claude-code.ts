@@ -6,26 +6,6 @@ import { gitIdentity } from "@/workspace/git-identity";
 export const CREDENTIALS_KEY = "claude-credentials";
 
 /**
- * What `gh` is given so that it will start at all — never a credential.
- *
- * `gh` refuses to make any request without a token, even against a public
- * repository. The sessions' egress gateway deletes `authorization` from every
- * request not bound for Anthropic, so what reaches GitHub is anonymous: REST
- * reads of public repositories work, and GraphQL — which GitHub gives anonymous
- * callers a quota of zero on — does not, so `gh pr view` and `gh issue view`
- * fail where `gh api repos/…` succeeds.
- *
- * Set here rather than in the image because it is only harmless **behind that
- * gateway**. The Dockerfile is shared with `coding`, whose workspace egresses
- * `direct`: there nothing strips the header, and anything reading `GH_TOKEN` —
- * a repository script, an `npx`'d client — would present this as a credential
- * and get a 401 where it would otherwise have had anonymous access. A session's
- * env reaches only `claude` and the commands it runs, which is exactly the
- * process tree the gateway covers.
- */
-export const GH_TOKEN_PLACEHOLDER = "not-a-credential-the-gateway-strips-this";
-
-/**
  * One `ClaudeCodeConfig`, built the same way by everything that needs it.
  *
  * Two places hold this config and they must hold the *same* one: the workspace
@@ -33,13 +13,13 @@ export const GH_TOKEN_PLACEHOLDER = "not-a-credential-the-gateway-strips-this";
  * sub-agent, which drives the session. A partial copy of a config like this has
  * already cost an outage — see `@/workspace/container.ts`.
  *
- * ## The credential never enters the container, and barely leaves this file
+ * ## The credentials never enter the container, and barely leave this file
  *
- * `credentials` is read by **`.egress()`**, which runs inside the workspace
+ * `credentials` and `githubToken` are read by **`.egress()`**, which runs inside the workspace
  * object. A sub-agent holds this same config and reads the thunk only to check
  * one is configured at all — it needs the model name and the timeouts, none of
- * which is secret. The container is launched with `CREDENTIAL_PLACEHOLDER` and
- * the swap happens on the Worker side of the boundary.
+ * which is secret. The container is launched with placeholders and the swap
+ * happens on the Worker side of the boundary.
  *
  * ## The pool
  *
@@ -58,7 +38,12 @@ export function claudeCodeConfig(env: Env): ClaudeCodeConfig {
         env.CLAUDE_CODE_OAUTH_TOKEN_3
       ].filter(Boolean),
     ...CLAUDE_CODE_SESSION,
-    env: { GH_TOKEN: GH_TOKEN_PLACEHOLDER },
+    /**
+     * GitHub as the deployment's account: the session pushes its branch, opens
+     * its pull request and answers its review. The token reaches GitHub's hosts
+     * through the egress gateway and never the container.
+     */
+    githubToken: () => env.GITHUB_TOKEN,
     /**
      * The same identity the workspace and the repo plugin answer with — see
      * `@/workspace/git-identity`.
@@ -82,8 +67,10 @@ export function claudeCodeConfig(env: Env): ClaudeCodeConfig {
      * a `postinstall` whose error mentions nothing about egress.
      *
      * What that gives up is a bound on exfiltration: this container holds the
-     * checkout and can send it anywhere. The containment that does hold, and the
-     * only one, is that it holds no credential.
+     * checkout and can send it anywhere. The containment that does hold is
+     * that it holds no credential — though anything in it can act on GitHub as
+     * the token's account while a session runs, which is why the token is
+     * scoped to the repositories this deployment works on (`.env.example`).
      */
   };
 }

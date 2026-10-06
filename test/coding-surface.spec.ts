@@ -68,11 +68,12 @@ describe("the parent's tools", () => {
       "repo_commit",
       "repo_diff",
       "repo_fetch",
-      // The ones that read the forge's own state. They are the parent's for the
+      // The ones that read GitHub's own state. They are the parent's for the
       // same reason the rest of git is: the sub-agent holds the shell and must
       // not also speak for this agent in public.
       "repo_issue_view",
       "repo_open_pr",
+      "repo_pr_checks",
       "repo_pr_review_status",
       "repo_pr_threads",
       "repo_pr_view",

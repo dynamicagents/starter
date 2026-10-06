@@ -47,7 +47,7 @@
 //   npm run cf -- logs --since 2h --level error
 //   npm run cf -- logs --worker da-starter --grep "[agent]"
 //   npm run cf -- logs --worker da-starter --app --since 30m
-//   npm run cf -- logs --container da-starter-anthropiccodingworkspace --since 2h
+//   npm run cf -- logs --container da-starter-claudecoordinatorworkspace --since 2h
 //   npm run cf -- spans --name agent_start --since 6h
 //   npm run cf -- spans --object 8e4d430c --app --since 1h
 //   npm run cf -- ai --since 2h
@@ -55,8 +55,8 @@
 //   npm run cf -- ai --agent generic --phase turn --since 1d
 //   npm run cf -- ai 01KY4PSY6T1HBA7A2V22NKCFZC
 //   npm run cf -- containers
-//   npm run cf -- wf anthropic-coding-workflow
-//   npm run cf -- wf anthropic-coding-workflow <taskId>
+//   npm run cf -- wf claude-coordinator-workflow
+//   npm run cf -- wf claude-coordinator-workflow <taskId>
 //   npm run cf -- GET workers/scripts
 //
 // `npm run cf -- wf` with no name lists the workflows this Worker actually has

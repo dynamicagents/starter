@@ -560,7 +560,7 @@ abstract class ClaudeCodeRun extends SubAgent<Env> {
             }
           }
         : {}),
-      note: (key, text) => this.note(key, text),
+      note: (key, text, detail) => this.note(key, text, detail),
       // Every run's, so a later one can carry on from it: see `noteSession`
       // on the workspace.
       onSession: (record) =>

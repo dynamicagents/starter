@@ -18,11 +18,13 @@ import {
   openWorkspace,
   sessionAdvisory,
   workspaceExec,
+  workspaceName,
   workspaceNameFromRuntime,
   WORKSPACE_RUNTIME_KEY
 } from "@dynamicagents/plugins/workspace";
 import {
   readSubmodules,
+  selectedRepo,
   type RunRef,
   type SessionPlace,
   type SubtaskWorkspaces
@@ -33,6 +35,7 @@ import {
   branchSession,
   openPullRequest,
   recordBranchRun,
+  type BranchScope,
   type OpenPullRequest
 } from "./branches";
 import {
@@ -349,6 +352,7 @@ async function placeOnBranch(
   const last = await branchSession(
     ctx.parent.storage,
     branch,
+    branchScope(ctx.parent),
     sessionLookup(ctx.parent.env),
     ctx.runId
   );
@@ -365,6 +369,24 @@ async function placeOnBranch(
     ...(pullRequest ? { [PR_KEY]: pullRequest } : {}),
     ...(resume ? { [RESUME_KEY]: resume } : {})
   };
+}
+
+/**
+ * Which of this caller's runs on a branch name are *this* branch's: the ones
+ * placed where this session will be. Read from the parent's selection, which is
+ * what `resolve` in `@/workspace/subtask-workspace.ts` places the session from —
+ * a worktree in the selected repository, or the parent's own workspace when the
+ * selection names no repository. See {@link BranchScope}.
+ */
+function branchScope(parent: {
+  storage: DurableObjectStorage;
+  callerKey: () => string;
+}): BranchScope {
+  const selected = activeRepo(parent.storage).get();
+  const repo = selectedRepo(selected);
+  return repo === undefined
+    ? { workspaceName: workspaceName(parent.callerKey(), selected) }
+    : { repo };
 }
 
 /** Which conversation a branch now carries: see `./branches.ts`. */

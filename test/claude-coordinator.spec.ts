@@ -859,13 +859,16 @@ describe("carrying a plan on from the session that wrote it", () => {
   });
 });
 
+/** The repository a spec's worktrees are a pool of, unless one names another. */
+const POOL_REPO = "acme/plan";
+
 /** A worktree of a planning or writing session, in a workspace of its own. */
-function worktree(slot = 3): SessionPlace {
+function worktree(slot = 3, repo = POOL_REPO): SessionPlace {
   return {
     workspaceName: `claude-coordinator-spec:${crypto.randomUUID()}`,
     dir: "/workspace/plan",
     branch: "claude-coordinator/p",
-    slot: { repo: "acme/plan", slot }
+    slot: { repo, slot }
   };
 }
 
@@ -1496,7 +1499,13 @@ describe("going back to a branch", () => {
     return runId;
   }
 
+  /**
+   * A session sent back to `BRANCH`, with the parent selecting what `place` is:
+   * a worktree of a repository, or — with no worktree — its own workspace. That
+   * selection is what scopes the ledger lookup; see `BranchScope`.
+   */
   const continuing = (agent: Parent, place: SessionPlace) => {
+    activeRepo(agent.ctx.storage).set(place.slot?.repo ?? SCRATCH_REPO);
     const placing = placingPool(place);
     return prepareWriter(
       {
@@ -1518,7 +1527,7 @@ describe("going back to a branch", () => {
 
     expect(asked[0]).toMatchObject({
       continue: BRANCH,
-      near: { repo: "acme/plan", slot: 3 }
+      near: { repo: POOL_REPO, slot: 3 }
     });
     expect(runtime).toMatchObject({
       resume: { sessionId: "s-build", fromRun: runId }
@@ -1543,18 +1552,64 @@ describe("going back to a branch", () => {
     const found = await onParent(async (agent) => {
       const kept = { ...worktree(3), branch: BRANCH };
       await worked(agent, kept, "s-kept");
-      // A later run on the branch, in a workspace with no record of it.
+      // A later run on the branch, in the same pool, whose workspace has no
+      // record of it.
       recordBranchRun(agent.ctx.storage, {
         runId: "detached:gone",
         branch: BRANCH,
-        workspaceName: worktree(5).workspaceName
+        workspaceName: worktree(5).workspaceName,
+        slot: { repo: POOL_REPO, slot: 5 }
       });
-      return branchSession(agent.ctx.storage, BRANCH, (name, runId) =>
-        workspaceAt(name).sessionOf(runId)
+      return branchSession(
+        agent.ctx.storage,
+        BRANCH,
+        { repo: POOL_REPO },
+        (name, runId) => workspaceAt(name).sessionOf(runId)
       );
     });
 
     expect(found).toMatchObject({ sessionId: "s-kept" });
+  });
+
+  /**
+   * One caller's ledger holds every repository they have worked on, and a
+   * branch name scopes nothing across them: a caller passes `continue` the name
+   * an earlier report gave, or a pull request's head branch, and `fix-ci` is a
+   * name two repositories both have.
+   */
+  it("passes over a newer run on the same branch name in another repository", async () => {
+    const mine = { ...worktree(3), branch: BRANCH };
+    const { runtime, asked, runId } = await onParent(async (agent) => {
+      const runId = await worked(agent, mine, "s-mine");
+      // Later, so it is the latest run on the name, and elsewhere.
+      await worked(
+        agent,
+        { ...worktree(4, "acme/other"), branch: BRANCH },
+        "s-theirs"
+      );
+      return { ...(await continuing(agent, mine)), runId };
+    });
+
+    expect(asked[0]).toMatchObject({ near: { repo: POOL_REPO, slot: 3 } });
+    expect(runtime).toMatchObject({
+      resume: { sessionId: "s-mine", fromRun: runId }
+    });
+  });
+
+  /**
+   * With no repository selected a session runs in the parent's own workspace —
+   * a scratchpad — which holds one tree and no branch. Another repository's run
+   * on the name is not its work, and not a worktree to ask for either.
+   */
+  it("asks for no worktree in a scratchpad, and starts fresh", async () => {
+    const scratch = { workspaceName: "scratch", dir: "/workspace/s" };
+    const { runtime, asked } = await onParent(async (agent) => {
+      await worked(agent, { ...worktree(3), branch: BRANCH }, "s-repo");
+      return continuing(agent, scratch);
+    });
+
+    expect(asked[0]).not.toHaveProperty("near");
+    expect(runtime).not.toHaveProperty("resume");
   });
 
   it("refuses a branch to continue and a new one to name together", async () => {

@@ -48,12 +48,31 @@ export function recordBranchRun(
 }
 
 /**
- * The latest run on `branch` whose workspace still holds its conversation.
- * `except` is the run asking, whose own row a repeated `prepare` has written.
+ * Where a branch's runs are looked up, which is **not** the branch name alone:
+ * a name is unique within a repository and nothing scopes it across them, so a
+ * run on another repository's `feature/x` is not this branch's work. One
+ * caller's ledger holds every repository they have worked on.
+ *
+ * A repository for a session in a worktree of its own; the workspace a session
+ * runs in when the parent has selected no repository. `branchScope` in
+ * `src/agents/claude-coordinator/children.ts` reads it from the selection that
+ * places the run.
+ */
+export type BranchScope = { repo: string } | { workspaceName: string };
+
+/**
+ * The latest run on `branch` **within `scope`** whose workspace still holds its
+ * conversation. `except` is the run asking, whose own row a repeated `prepare`
+ * has written.
+ *
+ * Scoped before the latest is chosen, never after: a newer run on the same
+ * branch name elsewhere would otherwise be selected and then rejected by
+ * `carryOn`, and this branch's own conversation — still there — never read.
  */
 export async function branchSession(
   storage: DurableObjectStorage,
   branch: string,
+  scope: BranchScope,
   sessionOf: (
     workspaceName: string,
     runId: string
@@ -61,6 +80,10 @@ export async function branchSession(
   except?: string
 ): Promise<PlannedSession | undefined> {
   ensure(storage);
+  const within =
+    "repo" in scope
+      ? { sql: "repo = ?", value: scope.repo }
+      : { sql: "repo IS NULL AND workspace = ?", value: scope.workspaceName };
   const runs = storage.sql
     .exec<{
       run_id: string;
@@ -68,8 +91,9 @@ export async function branchSession(
       repo: string | null;
       slot: number | null;
     }>(
-      `SELECT run_id, workspace, repo, slot FROM ${TABLE} WHERE branch = ? ORDER BY created_at DESC, rowid DESC`,
-      branch
+      `SELECT run_id, workspace, repo, slot FROM ${TABLE} WHERE branch = ? AND ${within.sql} ORDER BY created_at DESC, rowid DESC`,
+      branch,
+      within.value
     )
     .toArray();
   for (const run of runs) {

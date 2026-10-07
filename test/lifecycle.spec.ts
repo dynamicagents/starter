@@ -8,7 +8,7 @@ import {
 } from "@dynamicagents/core/testing";
 import type { HitlRequestData } from "@dynamicagents/g2a-protocol";
 import { copy } from "@/copy";
-import worker, { type TestEnv } from "./worker";
+import worker, { waits, type TestEnv } from "./worker";
 
 /**
  * Each one-step tenant's A2A lifecycle, driven end to end through core's edge,
@@ -48,6 +48,24 @@ function harnessFor(tenant: string, label: string): AgentHarness {
 }
 
 const pause = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+/**
+ * Poll until `ready` answers something, so a spec synchronizes on the agent
+ * rather than on a sleep long enough to usually be enough.
+ */
+async function until<T>(
+  what: string,
+  ready: () => T | undefined,
+  timeoutMs: number
+): Promise<T> {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    const got = ready();
+    if (got !== undefined) return got;
+    if (Date.now() >= deadline) throw new Error(`${what}: still waiting`);
+    await pause(50);
+  }
+}
 
 function terminals(harness: AgentHarness, taskId: string): CapturedCallback[] {
   return harness.callbacks.filter(
@@ -142,10 +160,25 @@ describe.each(TENANTS)("$tenant", ({ tenant, background }) => {
     const harness = harnessFor(tenant, "cancel");
     using _ = harness.interceptGatekeeper();
 
+    const from = waits.length;
     const accepted = await harness.send("wait:20");
-    await pause(1_500);
+    /**
+     * Synchronized on the wait at both ends, because a pause is neither.
+     * The cancel has to land while the turn is *inside* the tool, and what is
+     * asserted below — that no callback said the task was done — only holds
+     * once that tool is over: a turn still running would call back later, long
+     * after a pause that looked settled.
+     */
+    const waiting = await until(
+      "the turn to reach its wait",
+      () => waits.slice(from).find((call) => call.tool === "parent"),
+      20_000
+    );
     await cancel(harness, tenant, accepted.id);
-    await pause(1_500);
+    await until("the wait to end", () => waiting.ended, 30_000);
+    // What is left after it is local and bounded: the model turn that would
+    // answer, and the settle core's ledger refuses against a canceled task.
+    await pause(1_000);
 
     const task = await harness.rpc({
       jsonrpc: "2.0",
@@ -158,6 +191,8 @@ describe.each(TENANTS)("$tenant", ({ tenant, background }) => {
     }>();
     expect(body.result?.status?.state).toBe("TASK_STATE_CANCELED");
     expect(terminals(harness, accepted.id)).toHaveLength(0);
+    // And the work was not started again, so there is no later turn to answer.
+    expect(waits.slice(from)).toEqual([waiting]);
   });
 
   if (background) {

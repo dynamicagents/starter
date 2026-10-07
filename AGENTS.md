@@ -1,10 +1,11 @@
 # AGENTS.md — working in `da-starter`
 
-This is the repo you fork. It composes
+This is the reference deployment of the train. It composes
 [`@dynamicagents/core`](https://github.com/dynamicagents/core) (the mandatory
 foundation) and
 [`@dynamicagents/plugins`](https://github.com/dynamicagents/plugins) (optional
-capabilities) into a deployable Worker.
+capabilities) into a deployable Worker, and `agents.loopingai.org` runs from its
+`main`. A project of your own starts at `npm create dynamicagents`.
 
 The single most useful thing to know: **almost nothing here is framework.** The
 turn is `@cloudflare/think`'s; the A2A task, the workflow that runs its steps,
@@ -128,22 +129,18 @@ repo is always briefly behind. `PLUGIN_CONTRACT_VERSION` is asserted at DO start
 a skew fails with a sentence naming the plugin rather than a structural-type error
 several frames away.
 
-### The branches, and what each installs
+### `main`, and what it installs
 
-This repo is not versioned and publishes nothing, but it still has a released line:
-**`main` is what a fork builds.** It pins published versions of core and plugins, and
-nothing on it may depend on a commit that is not released. Development lands on
-`next`, by squash-merged PR, and each green push to `next` deploys agents.loopingai.org —
-see "Continuous deployment" in the README.
+**`main` is the only branch.** A PR into it squash-merges, and each green push deploys
+agents.loopingai.org — see "Continuous deployment" in the README.
 
-**`next` pins published versions too, by default.** A change that needs core or
-plugins work not yet published may point `next` at their `main` by git ref for as long
-as it needs to, which is how a contract change is exercised end-to-end before any of it
-ships. The ref installs only because those repos carry a `prepare` that builds and
-because `allowScripts` here lets npm run it — drop either and every subpath resolves
-to a missing file. npm pins the ref to a SHA in the lockfile, so a merge upstream does
-not reach this repo until someone reinstalls; a plain reinstall of the lockfile keeps
-the old commit.
+**`main` may name core or plugins by git ref onto their `main`**, so the deployment may
+run library mains that are not published, which is how a contract change is exercised
+end-to-end: nothing checks it, and exercising it there is the point. The ref installs
+only because those repos carry a `prepare` that builds and because `allowScripts` here
+lets npm run it — drop either and every subpath resolves to a missing file. npm pins the
+ref to a SHA in the lockfile, so a merge upstream does not reach this repo until someone
+reinstalls; a plain reinstall of the lockfile keeps the old commit.
 
 **A git dependency is allowed by its own key, written without a committish.** The
 `@dynamicagents/*` entries in `allowScripts` are registry keys and match nothing while
@@ -154,12 +151,6 @@ resolved SHA must start with, so a pinned one approves exactly one commit and go
 unreviewed — the build silently losing `dist/` — the next time core or plugins merges.
 Without a committish it matches the repo at any commit, which is the only form that
 survives a moving ref.
-
-**A release is a PR from `next` into `main`, merged with a merge commit.** Before it,
-once core and plugins are published, a PR into `next` pins the new versions and removes
-any git ref; Test fails a PR into `main` that still names one. Nothing reaches `main`
-any other way, a fix included, so `main` only ever gains merges of `next` and a release
-never needs merging back.
 
 Use `npm run link:local` for work that is not committed anywhere yet; a git ref only
 reaches what is on a branch.

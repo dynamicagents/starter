@@ -329,10 +329,12 @@ the container over FUSE at `/workspace`, so commands run against the same tree t
 Worker reads over RPC — and the tree survives the container being replaced.
 
 `node_modules` does not. It is a bind mount of the container's own disk, so an
-install runs at disk speed and never crosses the wire, and a new container
-reinstalls. The workspace arms that install as soon as a container comes up or a
-command is about to start one; see `src/workspace/install-plan.ts`. Container
-directory snapshots are the intended fix for the reinstall.
+install runs at disk speed and never crosses the wire. A finished install is
+snapshotted with the container, and a new container starts from that snapshot when
+it fits the checkout; otherwise it reinstalls, which the workspace arms as soon as a
+container comes up or a command is about to start one — see
+`src/workspace/install-plan.ts`. A writing session's worktree starts from the
+parent's snapshot, at the same path.
 
 **There is deliberately no R2 bucket** — the checkout is already durable.
 [`wrangler.jsonc`](wrangler.jsonc) records why the snapshot approach it replaces

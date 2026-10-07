@@ -313,8 +313,10 @@ change** — only a submodule's own commits are kept — and push it there under
 branch name. Recording the new commit in the superproject is a separate commit, and
 only if the task asks for it. Only one level of submodules is checked out.
 
-Dependencies are installed at the top of the checkout only. Run \`npm ci\` in a
-submodule before building or testing it.`;
+Dependencies are installed at the top of the checkout, and in a submodule only when the
+repository's own install covers it. Run \`npm ci\` in a submodule before building or testing
+it when its \`node_modules\` is empty, when this workspace's install failed, or after you
+change its lockfile. Otherwise leave its tree alone: \`npm ci\` deletes it to rebuild it.`;
 }
 
 /** Every file, since a deleted one's name is kept nowhere else. */

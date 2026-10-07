@@ -136,9 +136,11 @@ agents.loopingai.org — see "Continuous deployment" in the README.
 
 **`main` may name core or plugins by git ref onto their `main`**, so the deployment may
 run library mains that are not published, which is how a contract change is exercised
-end-to-end: nothing checks it, and exercising it there is the point. The ref installs
-only because those repos carry a `prepare` that builds and because `allowScripts` here
-lets npm run it — drop either and every subpath resolves to a missing file. npm pins the
+end-to-end. Publication status is what goes unenforced, and nothing else: Test still runs
+`npm run check`, the suite and `verify:isolation` on every PR, the deploy still smoke-tests
+the domain, and `PLUGIN_CONTRACT_VERSION` still catches a skew at DO start. The ref
+installs only because those repos carry a `prepare` that builds and because `allowScripts`
+here lets npm run it — drop either and every subpath resolves to a missing file. npm pins the
 ref to a SHA in the lockfile, so a merge upstream does not reach this repo until someone
 reinstalls; a plain reinstall of the lockfile keeps the old commit.
 

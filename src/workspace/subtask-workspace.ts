@@ -1,0 +1,1047 @@
+import {
+  sessionAdvisory,
+  workspaceName,
+  type WorkspaceObjectBase
+} from "@dynamicagents/plugins/workspace";
+import type { ActiveCheckout, ActiveRepo } from "./active-repo";
+import { SCRATCH_REPO } from "./scratch";
+import {
+  claim,
+  isBranchName,
+  parseWorktreeRepo,
+  worktreeRepo,
+  type PoolRepo,
+  type PoolStore,
+  type Worktree
+} from "./worktree-pool";
+
+/**
+ * Where a Claude Code session works, and what becomes of it afterwards.
+ *
+ * `@dynamicagents/plugins/claude-code` owns *that* a writing session needs a
+ * workspace no other live session shares, and why. What is here is the half a
+ * plugin cannot have: **which Durable Object, how it comes to hold the right
+ * checkout on the right branch, and what is kept when the session ends.** The
+ * sub-agents' `prepare` and `settle` in `src/agents/claude-coordinator/children.ts`
+ * are what call it.
+ *
+ * The workspace is a worktree from `./worktree-pool.ts`, and it is **kept**: the
+ * branch and its commits stay in it for the parent to switch into — see
+ * `./worktrees.ts` — and push. Nothing here pushes.
+ */
+
+/**
+ * Whether the parent's current selection names a repository a worktree can be
+ * cloned from — itself, or the pool of a worktree it has switched into.
+ *
+ * Stated as "not a sentinel" for everything else, so a sentinel added later is
+ * refused by default instead of being mistaken for a repository name.
+ */
+export function selectedRepo(selected: string | undefined): string | undefined {
+  if (selected === undefined || selected === SCRATCH_REPO) return undefined;
+  const worktree = parseWorktreeRepo(selected);
+  if (worktree) return worktree.repo;
+  return selected.startsWith("<") ? undefined : selected;
+}
+
+/** One submodule a writing session's clone carries, as `.gitmodules` declares it. */
+export interface Submodule {
+  path: string;
+  url: string;
+  /** Absent when `.gitmodules` names none: the superproject's pinned commit. */
+  branch?: string;
+}
+
+/** Enough of a shell in one checkout to read what it declares. */
+type Run = (
+  command: string,
+  options: { cwd: string; env?: Record<string, string> }
+) => Promise<{ success: boolean; stdout: string; stderr: string }>;
+
+/**
+ * Parse `git config --null --get-regexp` over `.gitmodules`.
+ *
+ * NUL-separated because a value may hold anything but NUL, and the subsection —
+ * the submodule's name — may hold dots, which is why the key is matched from its
+ * end. An entry without both a path and a url is not one git could check out
+ * either, and is dropped.
+ */
+export function parseGitmodules(out: string): Submodule[] {
+  const byName = new Map<string, Partial<Submodule>>();
+  for (const entry of out.split("\0")) {
+    const newline = entry.indexOf("\n");
+    if (newline < 0) continue;
+    const match = /^submodule\.(.+)\.(path|url|branch)$/.exec(
+      entry.slice(0, newline)
+    );
+    if (!match) continue;
+    const [, name, field] = match as unknown as [
+      string,
+      string,
+      keyof Submodule
+    ];
+    const sub = byName.get(name) ?? {};
+    sub[field] = entry.slice(newline + 1);
+    byName.set(name, sub);
+  }
+  return [...byName.values()].filter((sub): sub is Submodule =>
+    Boolean(sub.path && sub.url)
+  );
+}
+
+/**
+ * Refuse a submodule path that could leave the checkout or split a line.
+ *
+ * `.gitmodules` is repository content, and its paths become clone targets, the
+ * cwd of git commands, and rows of the tab- and newline-separated lists the
+ * branch script reads. A control character would turn one path into two rows —
+ * `safe\n../outside` runs git outside the checkout — so each is refused here,
+ * before any of those uses, along with every segment that walks out.
+ */
+function assertSubmodulePath(path: string): void {
+  if (
+    /[\u0000-\u001f\u007f]/.test(path) ||
+    path.startsWith("/") ||
+    path.split("/").some((part) => part === "" || part === "." || part === "..")
+  ) {
+    throw new Error(
+      `claude-coordinator: refusing a submodule path that could leave the checkout: ${JSON.stringify(path)}`
+    );
+  }
+}
+
+/**
+ * The submodules a checkout declares — one level, never theirs — each with a
+ * path that stays inside it.
+ *
+ * Nested submodules are left alone: each level would be another clone in front
+ * of the session, and the ones this workspace has met have none.
+ */
+export async function readSubmodules(
+  run: Run,
+  dir: string
+): Promise<Submodule[]> {
+  const listed = await run(
+    "[ ! -f .gitmodules ] || git config -f .gitmodules --null --get-regexp '^submodule\\..*\\.(path|url|branch)$'",
+    { cwd: dir }
+  );
+  // `--get-regexp` exits 1 on no match, which is a file with nothing in it —
+  // not a failure. Anything that said why is one.
+  if (!listed.success && listed.stderr.trim()) {
+    throw new Error(
+      `claude-coordinator: could not read .gitmodules in ${dir}: ${listed.stderr.trim()}`
+    );
+  }
+  const submodules = parseGitmodules(listed.stdout);
+  for (const sub of submodules) assertSubmodulePath(sub.path);
+  return submodules;
+}
+
+/**
+ * Where to clone one submodule from, or why not.
+ *
+ * A relative url is resolved the way git resolves it, against the superproject's
+ * own. An absolute one must be https on the host the parent's checkout came from:
+ * that host has passed `/repo`'s allowlist, and a `.gitmodules` is repository
+ * content — a url in it has passed nothing.
+ */
+export function submoduleCloneUrl(sub: Submodule, parentUrl: string): string {
+  const url =
+    sub.url.startsWith("./") || sub.url.startsWith("../")
+      ? new URL(sub.url, parentUrl.replace(/\/*$/, "/")).href
+      : sub.url;
+  const host = new URL(parentUrl).hostname;
+  let parsed: URL | undefined;
+  try {
+    parsed = new URL(url);
+  } catch {
+    parsed = undefined;
+  }
+  if (parsed?.protocol !== "https:" || parsed.hostname !== host) {
+    throw new Error(
+      `claude-coordinator: the submodule at ${sub.path} is cloned from ${sub.url}, and ` +
+        `a writing session clones only over https from ${host}, where the ` +
+        "parent's checkout came from"
+    );
+  }
+  return url;
+}
+
+/**
+ * Which submodules a previous attempt already cloned, clearing any it left
+ * half-done.
+ *
+ * Present means a repository of its own with a commit checked out, asked of its
+ * own `.git` — `git -C` there would walk up to the superproject and answer for
+ * it. A `.git` with no commit behind it is a clone that failed part-way, and is
+ * cleared so the next one is not refused as "already exists".
+ */
+async function populated(
+  run: Run,
+  dir: string,
+  submodules: readonly Submodule[]
+): Promise<Set<string>> {
+  if (submodules.length === 0) return new Set();
+  const found = await run(
+    `while IFS= read -r p; do
+  [ -n "$p" ] || continue
+  if [ -e "$p/.git" ] && git --git-dir="$p/.git" rev-parse --verify --quiet HEAD >/dev/null 2>&1; then
+    printf '%s\\n' "$p"
+  elif [ -e "$p/.git" ]; then
+    rm -rf "$p" || exit 1
+  fi
+done <<EOF
+$SUBMODULE_PATHS
+EOF`,
+    {
+      cwd: dir,
+      env: { SUBMODULE_PATHS: submodules.map((sub) => sub.path).join("\n") }
+    }
+  );
+  if (!found.success) {
+    throw new Error(
+      `claude-coordinator: could not read which submodules are cloned: ${found.stderr || found.stdout}`
+    );
+  }
+  return new Set(found.stdout.split("\n").filter(Boolean));
+}
+
+/**
+ * Put each repository listed on the worktree's branch, and say where it started.
+ *
+ * One line in per repository — path, then the commit to start from — and one
+ * out: path, base, start, and what the remote has of the branch. Paths reach the
+ * script as values, never as command text.
+ *
+ * - `new` starts the branch at the base, discarding whatever the worktree held
+ *   before: that was pushed, or released, or it would not have been free. It
+ *   refuses a name the remote already has, the default branch included: work
+ *   started beside that branch could never be pushed onto it.
+ * - `continue` keeps the branch this worktree already holds, and only a
+ *   repository that lacks it — a submodule added since — starts one at its base.
+ * - `adopt` takes the branch from the remote where it is there — a session's
+ *   pushed branch, or the head of a pull request somebody else opened.
+ *
+ * `continue` and `adopt` refuse a repository's default branch, read from the
+ * `origin/HEAD` the fetch before this wrote: a session's commits there could
+ * only reach a pull request under another name, and `/repo` refuses the push.
+ *
+ * `-f` and `clean -x` because nothing uncommitted in a worktree is kept, and
+ * `-e node_modules` because a dependency tree is a mount point `clean` cannot
+ * remove. `@pinned` is the commit the superproject records for a submodule that
+ * declares no branch, read after the superproject is on its own.
+ */
+const PUT_ON_BRANCH = `tab="$(printf '\\t')"
+while IFS="$tab" read -r path base; do
+  [ -n "$path" ] || continue
+  if [ "$WORKTREE_MODE" != new ] && [ "$(git -C "$path" symbolic-ref --short -q refs/remotes/origin/HEAD 2>/dev/null)" = "origin/$WORKTREE_BRANCH" ]; then
+    echo "$WORKTREE_BRANCH is the default branch of the repository at $path — work goes on a branch a pull request proposes, never onto the one it is proposed against" >&2; exit 1
+  fi
+  if [ "$WORKTREE_MODE" = new ] && git -C "$path" rev-parse --verify --quiet "refs/remotes/origin/$WORKTREE_BRANCH" >/dev/null; then
+    echo "$WORKTREE_BRANCH is already on the remote of the repository at $path — continue it to add to it, or name another branch for new work" >&2; exit 1
+  fi
+  if [ "$base" = "@pinned" ]; then
+    base="$(git rev-parse "HEAD:$path")" || { echo "the superproject records no commit for $path" >&2; exit 1; }
+  fi
+  target="$base"
+  case "$WORKTREE_MODE" in
+    continue)
+      if git -C "$path" rev-parse --verify --quiet "refs/heads/$WORKTREE_BRANCH" >/dev/null; then
+        target=""
+        git -C "$path" checkout -f -q "$WORKTREE_BRANCH" || exit 1
+      fi ;;
+    adopt)
+      if git -C "$path" rev-parse --verify --quiet "refs/remotes/origin/$WORKTREE_BRANCH" >/dev/null; then
+        target="origin/$WORKTREE_BRANCH"
+      fi ;;
+  esac
+  if [ -n "$target" ]; then
+    git -C "$path" rev-parse --verify --quiet "$target^{commit}" >/dev/null || { echo "$path has no $target — it is not on the remote" >&2; exit 1; }
+    git -C "$path" checkout -f -q -B "$WORKTREE_BRANCH" "$target" || exit 1
+  fi
+  git -C "$path" clean -ffdxq -e node_modules || exit 1
+  if [ -n "$WORKTREE_PREVIOUS" ] && [ "$WORKTREE_PREVIOUS" != "$WORKTREE_BRANCH" ]; then
+    git -C "$path" branch -D -q "$WORKTREE_PREVIOUS" >/dev/null 2>&1 || true
+  fi
+  printf '%s\\t%s\\t%s\\t%s\\n' "$path" "$(git -C "$path" rev-parse "$base^{commit}")" "$(git -C "$path" rev-parse HEAD)" "$(git -C "$path" rev-parse --verify --quiet "refs/remotes/origin/$WORKTREE_BRANCH" || true)"
+done <<EOF
+$WORKTREE_REPOS
+EOF`;
+
+/**
+ * Each listed repository's HEAD, and the last commit pushed on its branch —
+ * nothing where either cannot be read. A session pushes its own branch, and
+ * git records the push in the remote-tracking ref this reads.
+ */
+const READ_TIPS = `while IFS= read -r path; do
+  [ -n "$path" ] || continue
+  printf '%s\\t%s\\t%s\\n' "$path" "$(git -C "$path" rev-parse HEAD 2>/dev/null)" "$(git -C "$path" rev-parse --verify --quiet "refs/remotes/origin/$WORKTREE_BRANCH" 2>/dev/null)"
+done <<EOF
+$WORKTREE_PATHS
+EOF`;
+
+/** See {@link KEEP_INTERRUPTED}. */
+const KEEP_WAIT_SECONDS = 30;
+
+/** The commit {@link KEEP_INTERRUPTED} makes, as a person reading the log sees it. */
+const WIP_MESSAGE =
+  "WIP: interrupted session\n\n" +
+  "What the session had not committed when its run stopped, committed by the " +
+  "host so it is not lost. It may be half-finished: check it before building on it.";
+
+/**
+ * What the delegating model reads about a stopped run's kept work, appended to
+ * the message that reports the run's end.
+ */
+export function keptWorkNote(branch: string, wip: boolean): string {
+  return (
+    `Its work up to that point is kept on \`${branch}\`` +
+    (wip ? ", with what it had not committed in a WIP commit on top." : ".") +
+    ` Delegate again with \`continue\` set to \`${branch}\` to pick up from ` +
+    "there rather than start over."
+  );
+}
+
+/**
+ * Commit what an interrupted session left uncommitted, in each repository listed,
+ * and say where each one's branch now is — path, HEAD, and `wip` where this
+ * committed. Every repository is reported even when one fails, and the command
+ * fails after: a commit the session made is still there to name when the one
+ * made for it could not be.
+ *
+ * **Waits for the session's processes to leave the worktree first**, because
+ * `stopSession` delivers `SIGTERM` and returns: a commit taken while the session
+ * is still unwinding races its last writes, and a lock it held is not yet stale.
+ * Only once nothing is left does an `index.lock` mean a git process that died,
+ * which is when it is safe to remove. Run from `/` so this command's own shell is
+ * not one of the processes it waits for. The bound is a ceiling for something
+ * the session started that outlives it — a server — not a measurement; past it
+ * the commit goes ahead around whatever is still running.
+ *
+ * `--no-verify`, because a hook that refuses a half-finished tree would lose the
+ * tree. Submodule pointers are left out of the superproject's commit — moving a
+ * pin is a decision, and the continuing session places each submodule on the
+ * branch by itself — and so is any `node_modules`, which `.gitignore` may not
+ * name.
+ */
+const KEEP_INTERRUPTED = `waited=0
+busy=""
+failed=""
+while [ "$waited" -lt ${KEEP_WAIT_SECONDS} ]; do
+  busy=""
+  for p in /proc/[0-9]*; do
+    case "$(readlink "$p/cwd" 2>/dev/null)" in
+      "$WORKTREE_DIR"|"$WORKTREE_DIR"/*) busy=1; break ;;
+    esac
+  done
+  [ -z "$busy" ] && break
+  sleep 1
+  waited=$((waited + 1))
+done
+while IFS= read -r path; do
+  [ -n "$path" ] || continue
+  repo="$WORKTREE_DIR/$path"
+  [ -n "$busy" ] || rm -f "$repo/.git/index.lock"
+  set -- . ':(exclude,glob)**/node_modules/**'
+  if [ "$path" = "." ]; then
+    while IFS= read -r sub; do
+      [ -n "$sub" ] && set -- "$@" ":(exclude)$sub"
+    done <<SUBS
+$WORKTREE_KEEP_SUBMODULES
+SUBS
+  fi
+  wip=""
+  if ! git -C "$repo" add -A -- "$@"; then
+    failed=1
+  elif ! git -C "$repo" diff --cached --quiet; then
+    if git -C "$repo" commit --no-verify -q -m "$WIP_MESSAGE"; then
+      wip="wip"
+    else
+      failed=1
+    fi
+  fi
+  printf '%s\t%s\t%s\n' "$path" "$(git -C "$repo" rev-parse HEAD)" "$wip"
+done <<EOF
+$WORKTREE_KEEP_PATHS
+EOF
+[ -z "$failed" ]`;
+
+/** What {@link PUT_ON_BRANCH} reports for one repository. */
+interface Placed {
+  path: string;
+  base: string;
+  start: string;
+  pushed?: string;
+}
+
+function parsePlaced(out: string): Placed[] {
+  return out
+    .split("\n")
+    .filter(Boolean)
+    .map((line) => {
+      const [path = "", base = "", start = "", pushed = ""] = line.split("\t");
+      return { path, base, start, ...(pushed ? { pushed } : {}) };
+    });
+}
+
+/** One sub-agent run, as the pool knows it. */
+export interface RunRef {
+  taskId: string;
+  runId: string;
+}
+
+/** Where a session runs, as its `prepare` hands it to the sub-agent. */
+export interface SessionPlace {
+  workspaceName: string;
+  /** The checkout, as the workspace recorded it. */
+  dir: string;
+  /** A writing session's branch, when it works in a worktree of its own. */
+  branch?: string;
+  /** Whether that branch already holds earlier work. */
+  continues?: boolean;
+  /** The worktree it was placed in, for a later run to ask for it by `near`. */
+  slot?: { repo: string; slot: number };
+}
+
+/** What keeping a run's work found. */
+export interface KeptWork {
+  /** Where the work is, for the delegating model — nothing when it did nothing. */
+  note?: string;
+  /**
+   * Whether the session stopped and nothing it left is uncommitted. Until both
+   * hold, the worktree may be the only copy of an edit, or still be written to,
+   * so it is held whatever its tips read: see {@link SubtaskWorkspaces.release}.
+   */
+  settled: boolean;
+}
+
+export interface SubtaskWorkspaces {
+  /**
+   * Claim a worktree, put it on the run's branch, and answer where it is. A
+   * scratchpad is the parent's own, and answers that.
+   */
+  resolve(
+    ctx: RunRef & {
+      continue?: string;
+      branch?: string;
+      /**
+       * The worktree to place it in when that one is free — where a
+       * conversation it continues was recorded. See `claim` in
+       * `./worktree-pool.ts`.
+       */
+      near?: { repo: string; slot: number };
+    }
+  ): Promise<SessionPlace>;
+  /**
+   * The run is over: record where it left each repository and free it. `hold`
+   * keeps it from the next session whatever its tips read — a run whose work
+   * {@link keep} could not secure — until a push says otherwise.
+   * `forgetBranch` frees it without its branch, for a run that never meant to
+   * commit on one: a planning session's branch is no work to review. Only when
+   * its tips read clean, though — one that could not be read, or holds a
+   * commit, is held on its branch like any other.
+   *
+   * `follow` points the parent's reads at the worktree once it is released on
+   * its branch — the work the parent is about to hear of — unless the parent
+   * has moved to another repository since, which it chose.
+   */
+  release(
+    ctx: RunRef,
+    options?: { hold?: boolean; forgetBranch?: boolean; follow?: boolean }
+  ): Promise<void>;
+  /**
+   * The run ended without completing — failed or canceled: stop it and keep
+   * what it did, answering where, and whether that is secured.
+   */
+  keep(ctx: RunRef): Promise<KeptWork>;
+  /**
+   * Free every worktree still claimed for a task that has ended. A claim whose
+   * run never started — the turn was cut between the two — has no `settle` to
+   * free it, and a claim left live is passed over for good.
+   */
+  releaseTask(taskId: string): Promise<void>;
+}
+
+export function subtaskWorkspaces(config: {
+  binding: DurableObjectNamespace<WorkspaceObjectBase>;
+  /** The verified caller. */
+  callerKey: () => string;
+  /**
+   * Run a command in a named workspace's container.
+   *
+   * Takes the name per call rather than closing over one: every other `exec` in
+   * this Worker is bound to the workspace its agent is working in, and this one is
+   * deliberately not — it addresses whichever worktree is being prepared.
+   */
+  exec: (
+    command: string,
+    options: { cwd: string; env?: Record<string, string> },
+    workspace: string
+  ) => Promise<{ success: boolean; stdout: string; stderr: string }>;
+  /** Stop a run's session in a workspace, before what it left is committed. */
+  stopSession: (workspace: string, runId: string) => Promise<void>;
+  /**
+   * Refuse a session by throwing, handed the workspace it would run in. Asked
+   * before anything reaches that workspace's container, a writer's clone
+   * included.
+   */
+  admit: (workspace: string) => Promise<void>;
+  active: ActiveRepo;
+  pool: PoolStore;
+  label: string;
+  now?: () => number;
+}): SubtaskWorkspaces {
+  const now = config.now ?? Date.now;
+  const nameOf = (worktree: Worktree) =>
+    workspaceName(
+      config.callerKey(),
+      worktreeRepo(worktree.repo, worktree.slot)
+    );
+  const stubFor = (name: string) =>
+    config.binding.get(config.binding.idFromName(name));
+  /**
+   * The row a run holds, whichever pool it is in: the parent may have moved to
+   * another repository since the run was resolved.
+   */
+  const liveRow = (ctx: RunRef) =>
+    config.pool
+      .every()
+      .find(
+        (row) => row.live?.taskId === ctx.taskId && row.live.runId === ctx.runId
+      );
+
+  /**
+   * The checkout a workspace recorded, or the sentence that refuses a session
+   * with nothing to work on.
+   *
+   * The advisories are worth the extra RPC here: a refusal that names only the
+   * ordering mistake is the wrong sentence for a workspace that is full, or
+   * whose install broke, and neither is "you forgot to clone". Only on the way
+   * to refusing, so a workspace with a checkout costs one RPC.
+   */
+  const checkoutIn = async (name: string): Promise<string> => {
+    const stub = stubFor(name);
+    const dir = await stub.checkoutDir();
+    if (dir) return dir;
+    const note = sessionAdvisory(await stub.advisories());
+    throw new Error(
+      "claude-coordinator: there is no checkout in this workspace yet, so there is " +
+        "nothing to work on. Clone a repository with `repo_clone`, or open a " +
+        "scratchpad with `scratch_open`, before delegating." +
+        (note ? `\n\n${note}` : "")
+    );
+  };
+
+  /** A session in a workspace's own checkout: a scratchpad's. */
+  const placeIn = async (name: string): Promise<SessionPlace> => {
+    const dir = await checkoutIn(name);
+    await config.admit(name);
+    return { workspaceName: name, dir };
+  };
+
+  /**
+   * Put a claimed worktree on its branch, in the superproject and every
+   * submodule, and record where each repository started.
+   *
+   * **Every step runs again on a repeat and is idempotent**, because `ready` is
+   * only set once the last one finished: a first attempt that cloned and then
+   * failed at a submodule is completed, not mistaken for a finished one.
+   */
+  async function prepare(
+    worktree: Worktree,
+    checkout: ActiveCheckout,
+    name: string
+  ): Promise<Worktree> {
+    const stub = stubFor(name);
+    const run = (
+      command: string,
+      options: { cwd: string; env?: Record<string, string> }
+    ) => config.exec(command, options, name);
+    const host = new URL(checkout.url).hostname;
+    const recorded = new Map(worktree.repos.map((repo) => [repo.path, repo]));
+    let mode = worktree.mode ?? "new";
+
+    if (!(await stub.checkoutDir())) {
+      /**
+       * A clone that failed part-way leaves a repository nobody recorded — the
+       * clone initialises before it fetches — and a second clone into it is
+       * refused with "git repository already exists", on every retry. Nothing
+       * is worth keeping in a worktree with no recorded checkout, so what is
+       * there is cleared first.
+       */
+      if (!/^\/[^/]+\/./.test(checkout.dir)) {
+        throw new Error(
+          `claude-coordinator: refusing to clear a checkout path that is not under a workspace directory: ${checkout.dir}`
+        );
+      }
+      const cleared = await run('rm -rf "$CHECKOUT_DIR"', {
+        cwd: "/",
+        env: { CHECKOUT_DIR: checkout.dir }
+      });
+      if (!cleared.success) {
+        throw new Error(
+          `claude-coordinator: could not clear an unfinished clone in a worktree: ${cleared.stderr || cleared.stdout}`
+        );
+      }
+      const cloned = await stub.gitClone({
+        url: checkout.url,
+        dir: checkout.dir,
+        branch: checkout.branch,
+        // The host this checkout already came from, rather than the plugin's
+        // whole allowlist: it passed that allowlist once, and narrowing to the
+        // one host cannot refuse anything the parent was allowed.
+        allowedHosts: [host]
+      });
+      if (!cloned.ok) {
+        // The branch is named because the likeliest cause is one that exists
+        // only in the parent's checkout — a worktree clones from the remote.
+        throw new Error(
+          `claude-coordinator: could not clone ${checkout.url} at ${checkout.branch} into a worktree: ${cloned.message}`
+        );
+      }
+      // A worktree whose storage went — reclaimed after a week untouched — no
+      // longer holds the branch it is recorded with. What the remote has of it
+      // is all that is left.
+      if (mode === "continue") mode = "adopt";
+    }
+    // Straight after the clone, so a repeat that fails later finds a recorded
+    // checkout and does not clone over it — and before the install, for the
+    // reason `noteCheckout` gives in `@dynamicagents/plugins/workspace`.
+    await stub.noteCheckout({
+      dir: checkout.dir,
+      kind: "repo",
+      repo: worktree.repo
+    });
+
+    const fetch = async (url: string, dir: string, what: string) => {
+      const fetched = await stub.gitFetch({ url, dir, allowedHosts: [host] });
+      if (!fetched.ok) {
+        throw new Error(
+          `claude-coordinator: could not fetch ${what} in a worktree: ${fetched.message}`
+        );
+      }
+    };
+    const place = async (
+      rows: { path: string; base: string }[]
+    ): Promise<Placed[]> => {
+      if (rows.length === 0) return [];
+      const placed = await run(PUT_ON_BRANCH, {
+        cwd: checkout.dir,
+        env: {
+          WORKTREE_BRANCH: worktree.branch as string,
+          WORKTREE_MODE: mode,
+          WORKTREE_PREVIOUS: worktree.previous ?? "",
+          WORKTREE_REPOS: rows
+            .map((row) => `${row.path}\t${row.base}`)
+            .join("\n")
+        }
+      });
+      if (!placed.success) {
+        throw new Error(
+          `claude-coordinator: could not put a worktree on ${worktree.branch}: ${placed.stderr || placed.stdout}`
+        );
+      }
+      return parsePlaced(placed.stdout);
+    };
+    /**
+     * Where a repository's branch starts from. A branch being continued keeps
+     * the base it was first given — the remote's branch has moved on since, and
+     * measuring against where it is now would count other people's commits as
+     * this branch's work.
+     */
+    const startFrom = (path: string, ref: string) =>
+      mode === "continue" ? (recorded.get(path)?.base ?? ref) : ref;
+
+    // The superproject first: which submodules there are, and which commit each
+    // is pinned to, is what the branch it is now on says.
+    await fetch(checkout.url, checkout.dir, "the superproject");
+    const rootRef = `origin/${checkout.branch}`;
+    const [root] = await place([{ path: ".", base: startFrom(".", rootRef) }]);
+
+    /**
+     * Every submodule, each cloned into this worktree with objects of its own.
+     *
+     * The superproject's clone leaves an empty directory at each gitlink —
+     * isomorphic-git clones no submodules — so a session asked to change one
+     * would find nothing there. Each is cloned on its declared branch, which is
+     * what the superproject's own sync would check out, and fetched in full so
+     * the pinned commit of one that declares none is there too.
+     */
+    const submodules = await readSubmodules(run, checkout.dir);
+    const present = await populated(run, checkout.dir, submodules);
+    const refs = new Map<string, string>();
+    for (const sub of submodules) {
+      const url = submoduleCloneUrl(sub, checkout.url);
+      const dir = `${checkout.dir}/${sub.path}`;
+      // `.` means "the superproject's branch", in git's own reading of it.
+      const branch = sub.branch === "." ? checkout.branch : sub.branch;
+      refs.set(sub.path, branch ? `origin/${branch}` : "@pinned");
+      if (!present.has(sub.path)) {
+        const cloned = await stub.gitClone({
+          url,
+          dir,
+          allowedHosts: [host],
+          ...(branch ? { branch } : {})
+        });
+        if (!cloned.ok) {
+          throw new Error(
+            `claude-coordinator: could not clone the submodule at ${sub.path}${branch ? ` on ${branch}` : ""}: ${cloned.message}`
+          );
+        }
+      }
+      await fetch(url, dir, `the submodule at ${sub.path}`);
+    }
+    const placedSubs = await place(
+      submodules.map((sub) => ({
+        path: sub.path,
+        base: startFrom(sub.path, refs.get(sub.path) as string)
+      }))
+    );
+
+    /**
+     * An adopted branch has to be on the remote somewhere. A repository without
+     * it starts from its base, which is right for one the branch never
+     * changed — but a branch on the remote nowhere was never pushed, and
+     * starting it from the base would report the earlier work as there when it
+     * went with the worktree that held it.
+     */
+    if (
+      mode === "adopt" &&
+      ![root, ...placedSubs].some((placed) => placed?.pushed)
+    ) {
+      throw new Error(
+        `claude-coordinator: no worktree holds ${worktree.branch}, and it is on the remote ` +
+          "in no repository — it was never pushed, and the worktree that held it " +
+          "was released or deleted. Its commits are gone; delegate without " +
+          "`continue` to do the work again."
+      );
+    }
+
+    // Returns as soon as the command is spawned. Awaiting a dependency install
+    // here would put minutes in front of the session waiting for it.
+    await stub.startInstall({ dir: checkout.dir, repo: worktree.repo });
+
+    const urls = new Map<string, string>([[".", checkout.url]]);
+    for (const sub of submodules)
+      urls.set(sub.path, submoduleCloneUrl(sub, checkout.url));
+    const repos: PoolRepo[] = [root, ...placedSubs]
+      .filter((placed): placed is Placed => Boolean(placed))
+      .map((placed) => {
+        const ref = placed.path === "." ? rootRef : refs.get(placed.path);
+        const kept =
+          mode === "continue" ? recorded.get(placed.path) : undefined;
+        return {
+          path: placed.path,
+          url: urls.get(placed.path) as string,
+          // A pinned submodule's base is a commit, and a reviewer passes it as one.
+          baseRef:
+            kept?.baseRef ??
+            (ref === "@pinned" || ref === undefined ? placed.base : ref),
+          base: placed.base,
+          start: placed.start,
+          tip: placed.start,
+          ...(placed.pushed ? { pushed: placed.pushed } : {})
+        };
+      });
+
+    const { previous: _previous, ...rest } = worktree;
+    const ready: Worktree = {
+      ...rest,
+      mode,
+      dir: checkout.dir,
+      repos,
+      ready: true
+    };
+    config.pool.put(ready);
+    return ready;
+  }
+
+  const api: SubtaskWorkspaces = {
+    async resolve(ctx): Promise<SessionPlace> {
+      /**
+       * A scratchpad is the parent's, and shared.
+       *
+       * There is nothing to clone — a scratchpad has no remote — so the isolation
+       * this whole module provides has no mechanism here, and the honest answer is
+       * the workspace the parent already opened. The consequence is a real limit:
+       * writing sessions in a scratchpad share one tree, so fan-out there is the
+       * model's judgement rather than the platform's guarantee. With no branch of
+       * its own, a session there keeps what it leaves in the tree.
+       */
+      const selected = config.active.get();
+      const repo = selectedRepo(selected);
+      if (repo === undefined) {
+        return placeIn(workspaceName(config.callerKey(), selected));
+      }
+
+      // What the parent cloned, which is the only honest thing to clone: the url
+      // has already been through `/repo`'s host allowlist. The sentence names the
+      // refusal that leaves a checkout on disk unrecorded, because "nothing was
+      // cloned" is what an agent looking at that checkout will not believe.
+      const checkout = config.active.checkout();
+      if (!checkout) {
+        throw new Error(
+          "claude-coordinator: there is no recorded checkout for a writing session to " +
+            "clone. `repo_clone` records one only when it leaves a clean tree on " +
+            "a named branch — if its last answer was a refusal (uncommitted " +
+            "changes, another repository at that path), deal with that and run " +
+            "`repo_clone` again before delegating"
+        );
+      }
+      if (ctx.continue !== undefined && !isBranchName(ctx.continue)) {
+        throw new Error(
+          `claude-coordinator: \`continue\` names ${JSON.stringify(ctx.continue)}, which is ` +
+            "not a branch name. Pass the branch to add to — the one an earlier " +
+            "session's report named, or a pull request's head branch — or leave " +
+            "it out to start a new one."
+        );
+      }
+      if (ctx.branch !== undefined && ctx.continue !== undefined) {
+        throw new Error(
+          "claude-coordinator: pass `continue` to add to a branch, or `branch` to " +
+            "name a new one — not both."
+        );
+      }
+      if (ctx.branch !== undefined && !isBranchName(ctx.branch)) {
+        throw new Error(
+          `claude-coordinator: \`branch\` names ${JSON.stringify(ctx.branch)}, which ` +
+            "git would not take as a branch name. Pass another, or leave it out."
+        );
+      }
+
+      const { near, ...run } = ctx;
+      const reading = parseWorktreeRepo(selected ?? "");
+      const claimed = claim(
+        config.pool,
+        repo,
+        {
+          ...run,
+          ...(near?.repo === repo ? { near: near.slot } : {}),
+          ...(reading?.repo === repo ? { avoid: reading.slot } : {})
+        },
+        now()
+      );
+      const name = nameOf(claimed);
+      await config.admit(name);
+      const ready = claimed.ready
+        ? claimed
+        : await prepare(claimed, checkout, name);
+      // `note`, not `set`: this enrols the worktree in the sweep's candidate list
+      // without routing the parent's own tools to it. A workspace the sweep cannot
+      // see falls back to its own seven-day alarm with no backstop.
+      config.active.note(worktreeRepo(ready.repo, ready.slot));
+      return {
+        workspaceName: name,
+        dir: ready.dir ?? checkout.dir,
+        branch: ready.branch as string,
+        continues: ctx.continue !== undefined,
+        slot: { repo: ready.repo, slot: ready.slot }
+      };
+    },
+
+    async release(ctx, options = {}): Promise<void> {
+      const row = liveRow(ctx);
+      if (!row) return;
+      let repos = row.repos;
+      if (options.hold) {
+        // An unknown tip is never free: held until a push says otherwise.
+        repos = repos.map((repo) => ({ ...repo, tip: "" }));
+      } else if (row.ready && row.dir) {
+        try {
+          const read = await config.exec(
+            READ_TIPS,
+            {
+              cwd: row.dir,
+              env: {
+                WORKTREE_PATHS: repos.map((repo) => repo.path).join("\n"),
+                WORKTREE_BRANCH: row.branch ?? ""
+              }
+            },
+            nameOf(row)
+          );
+          const tips = new Map(
+            read.stdout
+              .split("\n")
+              .filter(Boolean)
+              .map((line) => {
+                const [path = "", tip = "", pushed = ""] = line.split("\t");
+                return [path, { tip, pushed }] as const;
+              })
+          );
+          repos = repos.map((repo) => {
+            const read = tips.get(repo.path);
+            return {
+              ...repo,
+              tip: read?.tip ?? "",
+              ...(read?.pushed ? { pushed: read.pushed } : {})
+            };
+          });
+        } catch (err) {
+          // Unknown tips keep the worktree held, which is the side to err on.
+          console.warn(
+            `[${config.label}] could not read a worktree's commits`,
+            {
+              slot: row.slot,
+              err: String(err)
+            }
+          );
+          repos = repos.map((repo) => ({ ...repo, tip: "" }));
+        }
+      }
+      // A worktree that never got onto its new branch holds nothing of it; one
+      // being continued still holds the branch it had. A branch is forgotten only
+      // with nothing on it: without one, `isFree` frees the worktree whatever
+      // its tips read, which would take the unknown-tip hold with it.
+      const forget =
+        options.forgetBranch === true &&
+        repos.every(
+          (repo) =>
+            repo.tip !== "" &&
+            (repo.tip === repo.base || repo.tip === repo.pushed)
+        );
+      const keeps = !forget && (row.ready || row.mode === "continue");
+      const { live: _live, mode: _mode, ready: _ready, ...rest } = row;
+      config.pool.put({
+        ...rest,
+        repos,
+        usedAt: now(),
+        ...(keeps
+          ? {}
+          : { branch: undefined, previous: row.branch ?? row.previous })
+      });
+      if (
+        options.follow &&
+        keeps &&
+        row.ready &&
+        selectedRepo(config.active.get()) === row.repo
+      ) {
+        config.active.set(worktreeRepo(row.repo, row.slot));
+      }
+      // Nobody works in a worktree between sessions, so its container stops
+      // now rather than at the idle deadline. Its files stay for the next run.
+      try {
+        await config.binding
+          .get(config.binding.idFromName(nameOf(row)))
+          .releaseContainer();
+      } catch (err) {
+        console.warn(
+          `[${config.label}] could not release a worktree's container`,
+          {
+            slot: row.slot,
+            err: String(err)
+          }
+        );
+      }
+    },
+
+    /**
+     * Keep what a run that did not complete did, where a `continue` will find
+     * it.
+     *
+     * Failed or canceled alike, and nothing is reset for either. A run that
+     * failed — its container went, its recovery gave up — says nothing about
+     * the session's work, and the ones lost that way were healthy. A cancel is
+     * no verdict on the work either: it may be a pause, to add to the task or
+     * pick it up later, and what the session did may have had effects that
+     * redoing it would repeat. What becomes of the branch is the parent's to
+     * decide, from `repo_worktrees`.
+     *
+     * What the session had not committed is committed for it — a `continue`
+     * places the worktree with `checkout -f` and `clean`, and a worktree whose
+     * tips never moved from their base is free, so an uncommitted edit would
+     * otherwise go with the next session to claim the slot.
+     *
+     * The row stays live: `release` runs next on the same path, reads the tips
+     * this left, and holds the worktree on them. Both steps here are
+     * best-effort, so a session that would not stop, or a commit that failed,
+     * answers `settled: false`, and `release` then holds the worktree whatever
+     * its tips read: freed, a session that never committed reads as its base,
+     * and the next claim's `checkout -f` and `clean` would take the only copy
+     * of its edits, or run under a session still writing.
+     */
+    async keep(ctx): Promise<KeptWork> {
+      const row = liveRow(ctx);
+      if (!row) return { settled: true };
+      const name = nameOf(row);
+      let stopped = true;
+      try {
+        await config.stopSession(name, ctx.runId);
+      } catch (err) {
+        stopped = false;
+        console.warn(
+          `[${config.label}] could not stop a session to keep its work`,
+          {
+            slot: row.slot,
+            err: String(err)
+          }
+        );
+      }
+      if (!row.ready || !row.dir || !row.branch) return { settled: stopped };
+      const paths = row.repos.map((repo) => repo.path);
+      let kept: { success: boolean; stdout: string; stderr: string };
+      try {
+        kept = await config.exec(
+          KEEP_INTERRUPTED,
+          {
+            cwd: "/",
+            env: {
+              WORKTREE_DIR: row.dir,
+              WORKTREE_KEEP_PATHS: paths.join("\n"),
+              WORKTREE_KEEP_SUBMODULES: paths
+                .filter((path) => path !== ".")
+                .join("\n"),
+              WIP_MESSAGE
+            }
+          },
+          name
+        );
+      } catch (err) {
+        console.warn(
+          `[${config.label}] could not reach a worktree to keep its work`,
+          { slot: row.slot, err: String(err) }
+        );
+        return { settled: false };
+      }
+      if (!kept.success) {
+        // Nothing was reset, so the worktree holds whatever the session left,
+        // and holding it is what keeps an uncommitted edit.
+        console.warn(
+          `[${config.label}] could not commit what an interrupted session left`,
+          { slot: row.slot, stderr: kept.stderr.trim().slice(0, 500) }
+        );
+      }
+      const settled = stopped && kept.success;
+      const heads = new Map(
+        kept.stdout
+          .split("\n")
+          .filter(Boolean)
+          .map((line) => {
+            const [path = "", head = "", wip = ""] = line.split("\t");
+            return [path, { head, wip: wip === "wip" }] as const;
+          })
+      );
+      const moved = row.repos.filter((repo) => {
+        const head = heads.get(repo.path)?.head;
+        return head !== undefined && head !== "" && head !== repo.start;
+      });
+      if (moved.length === 0) return { settled };
+      return {
+        note: keptWorkNote(
+          row.branch,
+          moved.some((repo) => heads.get(repo.path)?.wip)
+        ),
+        settled
+      };
+    },
+
+    async releaseTask(taskId): Promise<void> {
+      const stranded = config.pool
+        .every()
+        .filter((row) => row.live?.taskId === taskId);
+      for (const row of stranded) {
+        await api.release({ taskId, runId: (row.live as RunRef).runId });
+      }
+    }
+  };
+  return api;
+}

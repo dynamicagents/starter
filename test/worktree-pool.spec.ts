@@ -1,0 +1,553 @@
+import { describe, it, expect } from "vitest";
+import { env } from "cloudflare:workers";
+import { runInDurableObject } from "cloudflare:test";
+import { workspaceName } from "@dynamicagents/plugins/workspace";
+import { SCRATCH_REPO } from "@/workspace/scratch";
+import {
+  claim,
+  forgetWorktree,
+  reconcileWorktrees,
+  idleWorktrees,
+  isFree,
+  isBranchName,
+  parseWorktreeRepo,
+  sqlPoolStore,
+  runBranch,
+  worktreeRepo,
+  type PoolRepo,
+  type Worktree
+} from "@/workspace/worktree-pool";
+import { memoryPoolStore } from "./support/memory-pool";
+
+const REPO = "acme/api";
+
+/** One repository at a base, a start and a tip. */
+const repo = (over: Partial<PoolRepo> = {}): PoolRepo => ({
+  path: ".",
+  url: "https://github.com/acme/api",
+  baseRef: "origin/main",
+  base: "b0",
+  start: "b0",
+  tip: "b0",
+  ...over
+});
+
+describe("addressing a worktree", () => {
+  /**
+   * The sentinel shares a namespace with the `owner/repo` strings a model can
+   * cause to be cloned, so it has to be one no repository name can collide with,
+   * and never carry the separator `workspaceName` joins on.
+   */
+  it("cannot collide with a repository anyone could clone, or forge a caller", () => {
+    const sentinel = worktreeRepo(REPO, 0);
+    expect(sentinel).toBe("<worktree:acme/api:0>");
+    expect(sentinel).not.toContain("|");
+    expect(sentinel).not.toBe(SCRATCH_REPO);
+    expect(workspaceName("caller", sentinel)).not.toBe(
+      workspaceName("caller", REPO)
+    );
+  });
+
+  it("reads its own sentinels back, and nothing else", () => {
+    expect(parseWorktreeRepo(worktreeRepo(REPO, 12))).toEqual({
+      repo: REPO,
+      slot: 12
+    });
+    expect(parseWorktreeRepo(REPO)).toBeUndefined();
+    expect(parseWorktreeRepo(SCRATCH_REPO)).toBeUndefined();
+  });
+
+  /**
+   * `continue` names a branch a session made or one somebody pushed for a pull
+   * request, and `branch` the caller's name for new work, so any branch git
+   * takes is accepted here; the remote's own branches are refused once it is
+   * read — see `subtask-workspace.spec.ts`.
+   */
+  it("derives a short branch name, and lets a caller name any branch git accepts", () => {
+    const branch = runBranch({ taskId: "task-a", runId: "detached:3" });
+    expect(branch).toBe("claude-coordinator/vx78x");
+    expect(runBranch({ taskId: "task-a", runId: "detached:3" })).toBe(branch);
+    // A tool call id is unique only within its conversation, so the same one
+    // in another task is another branch.
+    expect(runBranch({ taskId: "task-b", runId: "detached:3" })).not.toBe(
+      branch
+    );
+    // Core's run id carries a `:`, and a tool call id anything a provider
+    // chose; none of it reaches the name.
+    for (const runId of [
+      "detached:call_ab:c/../d",
+      "detached:.x.",
+      "detached:",
+      "detached:call_b976fe13cad640a786e155df::cf-wai-tool-call::1TgarImMx5TqDqJF"
+    ]) {
+      expect(runBranch({ taskId: "task-a", runId })).toMatch(
+        /^claude-coordinator\/[0-9a-z]{5}$/
+      );
+    }
+    for (const name of [branch, "feature/artifacts", "tiago/fix-1", "a.b/c"]) {
+      expect(isBranchName(name)).toBe(true);
+    }
+    for (const other of [
+      "",
+      "HEAD",
+      "@",
+      "-f",
+      "/main",
+      "main/",
+      "a//b",
+      "main.",
+      "a..b",
+      "a@{1}",
+      "a.lock",
+      "a/.hidden",
+      "a b",
+      "a\nb",
+      "a:b",
+      "a^b",
+      "a~1",
+      "a?b",
+      "a*b",
+      "a[b",
+      "a\\b"
+    ]) {
+      expect(isBranchName(other), other).toBe(false);
+    }
+  });
+});
+
+describe("whether a worktree can go to the next session", () => {
+  const worktree = (over: Partial<Worktree> = {}): Worktree => ({
+    repo: REPO,
+    slot: 0,
+    branch: "claude-coordinator/t/1",
+    repos: [repo()],
+    usedAt: 0,
+    ...over
+  });
+
+  it("is free with no commits past its base, or with every one pushed", () => {
+    expect(isFree(worktree())).toBe(true);
+    expect(
+      isFree(worktree({ repos: [repo({ tip: "c1", pushed: "c1" })] }))
+    ).toBe(true);
+    expect(
+      isFree(worktree({ branch: undefined, repos: [repo({ tip: "c1" })] }))
+    ).toBe(true);
+  });
+
+  it("is held by unpushed commits, a live session, or a tip nobody saw", () => {
+    expect(isFree(worktree({ repos: [repo({ tip: "c1" })] }))).toBe(false);
+    expect(
+      isFree(worktree({ repos: [repo({ tip: "c2", pushed: "c1" })] }))
+    ).toBe(false);
+    expect(
+      isFree(worktree({ live: { taskId: "t", runId: "detached:2" } }))
+    ).toBe(false);
+    expect(isFree(worktree({ repos: [repo({ tip: "" })] }))).toBe(false);
+  });
+});
+
+describe("claiming a worktree", () => {
+  const ctx = { taskId: "task-a", runId: "detached:1" };
+
+  it("makes the first one, on the run's own branch", () => {
+    const pool = memoryPoolStore();
+    const claimed = claim(pool, REPO, ctx, 10);
+
+    expect(claimed).toMatchObject({
+      repo: REPO,
+      slot: 0,
+      branch: runBranch(ctx),
+      live: ctx,
+      mode: "new",
+      ready: false,
+      usedAt: 10
+    });
+    expect(pool.rows()).toEqual([claimed]);
+  });
+
+  /** A repeated `prepare` for one run; a second answer strands the work. */
+  it("answers the same worktree every time for one run", () => {
+    const pool = memoryPoolStore();
+    const first = claim(pool, REPO, ctx, 10);
+    expect(claim(pool, REPO, ctx, 20)).toEqual(first);
+  });
+
+  it("gives concurrent runs separate worktrees", () => {
+    const pool = memoryPoolStore();
+    claim(pool, REPO, ctx, 10);
+    expect(claim(pool, REPO, { ...ctx, runId: "detached:2" }, 11).slot).toBe(1);
+  });
+
+  it("reuses the free worktree used longest ago, and names what it held", () => {
+    const pool = memoryPoolStore();
+    pool.put({
+      repo: REPO,
+      slot: 0,
+      branch: "claude-coordinator/t/1",
+      repos: [repo()],
+      usedAt: 5
+    });
+    pool.put({
+      repo: REPO,
+      slot: 1,
+      branch: "claude-coordinator/t/2",
+      repos: [repo()],
+      usedAt: 3
+    });
+    pool.put({
+      repo: REPO,
+      slot: 2,
+      branch: "claude-coordinator/t/3",
+      repos: [repo({ tip: "c1" })],
+      usedAt: 1
+    });
+
+    const claimed = claim(pool, REPO, ctx, 10);
+
+    expect(claimed.slot).toBe(1);
+    expect(claimed.previous).toBe("claude-coordinator/t/2");
+    expect(claimed.mode).toBe("new");
+  });
+
+  /**
+   * `near` is the worktree holding a conversation the run carries on from, so
+   * it wins over the one used longest ago — but only while it is free.
+   */
+  describe("with `near`", () => {
+    function pooled() {
+      const pool = memoryPoolStore();
+      pool.put({
+        repo: REPO,
+        slot: 0,
+        branch: "claude-coordinator/t/1",
+        repos: [repo()],
+        usedAt: 1
+      });
+      pool.put({
+        repo: REPO,
+        slot: 1,
+        branch: "claude-coordinator/t/2",
+        repos: [repo()],
+        usedAt: 5
+      });
+      return pool;
+    }
+
+    it("takes that worktree when it is free", () => {
+      const claimed = claim(pooled(), REPO, { ...ctx, near: 1 }, 10);
+      expect(claimed.slot).toBe(1);
+      expect(claimed.previous).toBe("claude-coordinator/t/2");
+      expect(claimed.mode).toBe("new");
+    });
+
+    it.each([
+      ["a session is in it", { live: { taskId: "t", runId: "r" } }],
+      ["it holds unpushed commits", { repos: [repo({ tip: "c1" })] }]
+    ])("passes it over when %s", (_label, over) => {
+      const pool = pooled();
+      pool.put({ ...pool.all(REPO)[1]!, ...over });
+      expect(claim(pool, REPO, { ...ctx, near: 1 }, 10).slot).toBe(0);
+    });
+
+    it("gives way to `continue`, which names the worktree itself", () => {
+      const claimed = claim(
+        pooled(),
+        REPO,
+        { ...ctx, continue: "claude-coordinator/t/1", near: 1 },
+        10
+      );
+      expect(claimed.slot).toBe(0);
+      expect(claimed.mode).toBe("continue");
+    });
+
+    /** Its conversation is in that workspace, wherever the branch went since. */
+    it("adopts a branch no worktree holds into it", () => {
+      const claimed = claim(
+        pooled(),
+        REPO,
+        { ...ctx, continue: "feat/pushed-and-released", near: 1 },
+        10
+      );
+      expect(claimed.slot).toBe(1);
+      expect(claimed.mode).toBe("adopt");
+    });
+  });
+
+  /**
+   * `avoid` is the worktree the parent's reads are in: reset under them for
+   * another branch, they would read its files believing them their own.
+   */
+  describe("with `avoid`", () => {
+    const free = (slot: number, usedAt: number) => ({
+      repo: REPO,
+      slot,
+      branch: `claude-coordinator/t/${slot}`,
+      repos: [repo()],
+      usedAt
+    });
+
+    it("gives another branch the next free worktree instead", () => {
+      const pool = memoryPoolStore();
+      pool.put(free(0, 1));
+      pool.put(free(1, 5));
+      expect(claim(pool, REPO, { ...ctx, avoid: 0 }, 10).slot).toBe(1);
+    });
+
+    it("opens a new worktree rather than take the only free one", () => {
+      const pool = memoryPoolStore();
+      pool.put(free(0, 1));
+      expect(claim(pool, REPO, { ...ctx, avoid: 0 }, 10).slot).toBe(1);
+      expect(pool.all(REPO)[0]?.branch).toBe("claude-coordinator/t/0");
+    });
+
+    it("passes over `near` when it is that worktree", () => {
+      const pool = memoryPoolStore();
+      pool.put(free(0, 1));
+      pool.put(free(1, 5));
+      expect(claim(pool, REPO, { ...ctx, near: 0, avoid: 0 }, 10).slot).toBe(1);
+    });
+
+    it("still continues the branch it holds, in it", () => {
+      const pool = memoryPoolStore();
+      pool.put(free(0, 1));
+      const claimed = claim(
+        pool,
+        REPO,
+        { ...ctx, continue: "claude-coordinator/t/0", avoid: 0 },
+        10
+      );
+      expect(claimed.slot).toBe(0);
+      expect(claimed.mode).toBe("continue");
+    });
+  });
+
+  it("keeps pools apart by repository", () => {
+    const pool = memoryPoolStore();
+    claim(pool, REPO, ctx, 10);
+    expect(
+      claim(pool, "acme/cli", { ...ctx, runId: "detached:2" }, 11).slot
+    ).toBe(0);
+  });
+
+  it("continues a branch in the worktree that holds it", () => {
+    const pool = memoryPoolStore();
+    pool.put({
+      repo: REPO,
+      slot: 0,
+      branch: "claude-coordinator/t/1",
+      repos: [repo({ tip: "c1" })],
+      usedAt: 5
+    });
+
+    const claimed = claim(
+      pool,
+      REPO,
+      { ...ctx, continue: "claude-coordinator/t/1" },
+      10
+    );
+
+    expect(claimed).toMatchObject({
+      slot: 0,
+      branch: "claude-coordinator/t/1",
+      mode: "continue"
+    });
+    expect(claimed.previous).toBeUndefined();
+    expect(claimed.repos).toEqual([repo({ tip: "c1" })]);
+  });
+
+  it("refuses to continue a branch a session is still working on", () => {
+    const pool = memoryPoolStore();
+    pool.put({
+      repo: REPO,
+      slot: 0,
+      branch: "claude-coordinator/t/1",
+      live: { taskId: "t", runId: "detached:1" },
+      repos: [],
+      usedAt: 5
+    });
+
+    expect(() =>
+      claim(pool, REPO, { ...ctx, continue: "claude-coordinator/t/1" }, 10)
+    ).toThrow(/claude-coordinator\/t\/1 is being worked on by another session/);
+  });
+
+  it("adopts a branch no worktree holds into a free one", () => {
+    const pool = memoryPoolStore();
+    const claimed = claim(
+      pool,
+      REPO,
+      { ...ctx, continue: "claude-coordinator/t/1" },
+      10
+    );
+    expect(claimed).toMatchObject({
+      slot: 0,
+      branch: "claude-coordinator/t/1",
+      mode: "adopt"
+    });
+  });
+
+  it("starts new work on the branch the caller named", () => {
+    const pool = memoryPoolStore();
+    const claimed = claim(pool, REPO, { ...ctx, branch: "docs/readme" }, 10);
+    expect(claimed).toMatchObject({
+      slot: 0,
+      branch: "docs/readme",
+      mode: "new"
+    });
+  });
+
+  /** Starting it again at the base would put two lines of work under one name. */
+  it("refuses new work on a branch a worktree already holds", () => {
+    const pool = memoryPoolStore();
+    pool.put({
+      repo: REPO,
+      slot: 0,
+      branch: "docs/readme",
+      repos: [repo()],
+      usedAt: 5
+    });
+
+    expect(() =>
+      claim(pool, REPO, { ...ctx, branch: "docs/readme" }, 10)
+    ).toThrow(/a worktree already holds docs\/readme/);
+    expect(pool.rows()[0]?.live).toBeUndefined();
+  });
+});
+
+describe("a worktree whose workspace was reclaimed", () => {
+  /** Nothing it says is true any more — a stale live marker would hold the slot forever. */
+  it("empties its row, live or not, and keeps the slot", () => {
+    const pool = memoryPoolStore();
+    pool.put({
+      repo: REPO,
+      slot: 3,
+      branch: "claude-coordinator/t/1",
+      live: { taskId: "t", runId: "detached:1" },
+      repos: [repo({ tip: "c1" })],
+      usedAt: 7
+    });
+
+    forgetWorktree(pool, worktreeRepo(REPO, 3));
+    forgetWorktree(pool, REPO);
+
+    expect(pool.rows()).toEqual([
+      { repo: REPO, slot: 3, repos: [], usedAt: 7 }
+    ]);
+  });
+
+  it("lists the worktrees no session is in, whose containers can go", () => {
+    const pool = memoryPoolStore();
+    pool.put({ repo: REPO, slot: 0, repos: [], usedAt: 1 });
+    pool.put({
+      repo: REPO,
+      slot: 1,
+      live: { taskId: "t", runId: "detached:2" },
+      repos: [],
+      usedAt: 1
+    });
+    pool.put({ repo: "acme/cli", slot: 0, repos: [], usedAt: 1 });
+
+    expect(idleWorktrees(pool)).toEqual([
+      worktreeRepo(REPO, 0),
+      worktreeRepo("acme/cli", 0)
+    ]);
+  });
+});
+
+describe("the pool in the parent's SQLite", () => {
+  it("keeps rows per repository and slot, and finds them across repositories", async () => {
+    const stub = env.CLAUDE_COORDINATOR_WORKSPACE.get(
+      env.CLAUDE_COORDINATOR_WORKSPACE.idFromName("pool-spec")
+    );
+    await runInDurableObject(stub, (_instance, state) => {
+      const pool = sqlPoolStore(state.storage);
+      const row: Worktree = {
+        repo: REPO,
+        slot: 0,
+        branch: "claude-coordinator/t/1",
+        repos: [repo()],
+        usedAt: 1
+      };
+      pool.put(row);
+      pool.put({ ...row, slot: 1 });
+      pool.put({ ...row, repo: "acme/cli" });
+      pool.put({ ...row, usedAt: 2 });
+
+      expect(pool.all(REPO).map((r) => [r.slot, r.usedAt])).toEqual([
+        [0, 2],
+        [1, 1]
+      ]);
+      expect(pool.every()).toHaveLength(3);
+      pool.delete(REPO, 1);
+      expect(pool.all(REPO)).toEqual([{ ...row, usedAt: 2 }]);
+    });
+  });
+});
+
+/**
+ * A worktree's own idle alarm beats the weekly sweep to almost every reclaim, so
+ * the sweep's `onReclaimed` never fires for it and the row outlives the checkout
+ * it describes. A row holding unpushed commits is never free, so nothing else
+ * would ever reuse that slot.
+ */
+describe("reconciling the pool against the worktrees that are left", () => {
+  const held = (slot: number): Worktree => ({
+    repo: REPO,
+    slot,
+    branch: `claude-coordinator/task-1/${slot}`,
+    repos: [repo({ tip: "unpushed" })],
+    usedAt: 1
+  });
+
+  it("empties the row of a worktree whose checkout is gone", async () => {
+    const store = memoryPoolStore();
+    store.put(held(0));
+    expect(isFree(store.all(REPO)[0]!)).toBe(false);
+
+    await reconcileWorktrees(store, async () => false);
+
+    const [row] = store.all(REPO);
+    expect(row).toEqual({ repo: REPO, slot: 0, repos: [], usedAt: 1 });
+    // The slot is the point: it can be claimed and cloned into again.
+    expect(isFree(row!)).toBe(true);
+  });
+
+  it("keeps a row whose worktree still has its checkout", async () => {
+    const store = memoryPoolStore();
+    store.put(held(0));
+
+    await reconcileWorktrees(store, async () => true);
+
+    expect(store.all(REPO)[0]).toEqual(held(0));
+  });
+
+  /** A session cannot be in a workspace that is gone, and is not asked about. */
+  it("leaves a worktree a session is working in alone", async () => {
+    const store = memoryPoolStore();
+    store.put({ ...held(0), live: { taskId: "task-1", runId: "detached:1" } });
+    const asked: string[] = [];
+
+    await reconcileWorktrees(store, async (sentinel) => {
+      asked.push(sentinel);
+      return false;
+    });
+
+    expect(asked).toEqual([]);
+    expect(store.all(REPO)[0]?.repos).toHaveLength(1);
+  });
+
+  /** An empty row describes no checkout, so there is nothing to ask about. */
+  it("asks nothing about a row that is already empty", async () => {
+    const store = memoryPoolStore();
+    store.put({ repo: REPO, slot: 0, repos: [], usedAt: 1 });
+    const asked: string[] = [];
+
+    await reconcileWorktrees(store, async (sentinel) => {
+      asked.push(sentinel);
+      return false;
+    });
+
+    expect(asked).toEqual([]);
+  });
+});

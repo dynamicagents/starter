@@ -1,12 +1,12 @@
 import type { RepoGit, RepoGitResult } from "@dynamicagents/plugins/repo";
-import type { WorkspaceObjectBase } from "@dynamicagents/plugins/computer";
+import type { WorkspaceObjectBase } from "@dynamicagents/plugins/workspace";
 
 /**
  * `/repo`'s credentialed half, wired to the Durable Object that owns the files.
  *
- * The counterpart to `computerExec`, and the same shape of thing — a function
+ * The counterpart to `workspaceExec`, and the same shape of thing — a function
  * the plugin is handed rather than a module it imports — but on the other side
- * of the trust boundary. `computerExec` sends a command into the container,
+ * of the trust boundary. `workspaceExec` sends a command into the container,
  * where the model has a root shell and no credential exists; this sends clone,
  * fetch and push to the `WorkspaceObjectBase` subclass that holds `GITHUB_TOKEN`
  * and never passes it on.
@@ -14,17 +14,17 @@ import type { WorkspaceObjectBase } from "@dynamicagents/plugins/computer";
  * Git runs *there* rather than here because git needs the filesystem, and the
  * filesystem is that object's SQLite: anywhere else, every object read and ref
  * write is an RPC round trip. So this file is only an address — it resolves the
- * same workspace `computerExec` does, which it must, or a push would act on a
+ * same workspace `workspaceExec` does, which it must, or a push would act on a
  * checkout the container never saw.
  *
  * Shared by every agent with a workspace, and it has to be: the credential rule
  * below is the one thing about git in this repository that must not be
  * re-implemented per agent.
  *
- * **No `runtime` parameter**, deliberately. `computerExec` takes one so a
- * delegated subagent can reach its parent's container; `/repo` is installed on
- * the parent alone, precisely so a subagent sharing the checkout cannot rewrite
- * its history.
+ * **No `runtime` parameter**, deliberately. `workspaceExec` takes one so a
+ * sub-agent can reach its parent's container; `/repo` is installed on the parent
+ * alone, precisely so a sub-agent sharing the checkout cannot rewrite its
+ * history.
  */
 export function workspaceGit(config: {
   /**
@@ -32,7 +32,7 @@ export function workspaceGit(config: {
    *
    * Typed on the shared base rather than on one agent's class: the three RPCs
    * below are declared there, and naming a concrete subclass would make this
-   * function the coder's alone for no reason a caller could act on.
+   * function `coding`'s alone for no reason a caller could act on.
    */
   binding: DurableObjectNamespace<WorkspaceObjectBase>;
   workspaceName: () => string;
@@ -46,6 +46,8 @@ export function workspaceGit(config: {
   return {
     clone: (req): Promise<RepoGitResult> => stub().gitClone(req),
     fetch: (req): Promise<RepoGitResult> => stub().gitFetch(req),
-    push: (req): Promise<RepoGitResult> => stub().gitPush(req)
+    push: (req): Promise<RepoGitResult> => stub().gitPush(req),
+    // From the object's storage, so a GitHub tool starts no container.
+    origin: (dir): Promise<string | undefined> => stub().gitOrigin(dir)
   };
 }

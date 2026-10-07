@@ -1,12 +1,12 @@
 # The workspace container, for every agent in this Worker that has one.
 #
-# **One Dockerfile, two images.** `coder` and `claude-coder` both point a
+# **One Dockerfile, two images.** `coding` and `claude-coordinator` both point a
 # `containers[]` entry here; the second passes a `CLAUDE_CODE_VERSION` build arg
 # (see the block near the end) and gets the CLI, the first does not and stays
 # smaller. Cloudflare builds once per entry, so two entries naming this file are
 # two images.
 #
-# The agents without a workspace — reactive, proactive, arc-player — never touch
+# Generic, the agent without a workspace, never touches
 # one. Cloudflare builds this on `wrangler deploy` from the `containers` block in
 # wrangler.jsonc, always for linux/amd64: wrangler passes `--platform` itself and
 # rejects any other value, so never set one here.
@@ -30,12 +30,12 @@
 # `scripts/verify-container-env.mjs` holds it to the installed version.
 #
 # Add to this file deliberately. Every layer is image size, image size is
-# container cold start, and cold start is already the slow part of a round.
+# container cold start, and cold start is already the slow part of a task.
 
 # A single layer over `scratch` holding one file: the 126 MB SEA binary at
 # /usr/local/bin/computerd. Nothing else is in this image, so it is a staging
 # stage and never a base.
-FROM ghcr.io/cloudflare/computer-computerd-linux-x64:0.3.1 AS computerd
+FROM ghcr.io/cloudflare/computer-computerd-linux-x64:0.4.0 AS computerd
 
 # `debian:stable-slim`, matching the upstream reference recipe
 # (examples/container/Dockerfile) exactly — and the base is the load-bearing
@@ -62,7 +62,7 @@ FROM docker.io/debian:stable-slim
 #               these are the mount helper and its runtime, not the library
 #               itself. Straight from the upstream recipe; keep them together.
 # ripgrep    — reading an unfamiliar repo is the first thing the agent does, and
-#               `grep -r` across node_modules is how a round runs out of time.
+#               `grep -r` across node_modules is how a turn runs out of time.
 #               It matters more here than it did on a real disk: reads go
 #               through FUSE.
 # xxd        — the model reaches for it unprompted to inspect trailing bytes of a
@@ -77,7 +77,7 @@ FROM docker.io/debian:stable-slim
 # python3       but one transitive dependency that does turns an install into
 #               "gyp ERR! find Python", and that is not a failure the agent can
 #               route around: fixing it means an operator rebuilding and
-#               redeploying this image. ~150 MB to delete a class of dead round.
+#               redeploying this image. ~150 MB to delete a class of dead run.
 # git        — the whole delivery path is clone → commit → push.
 #
 # Node 24, not the reference's 22. Every Dynamic Agents repo pins 24 in `.nvmrc` and
@@ -132,11 +132,11 @@ RUN if command -v corepack > /dev/null; then \
       echo "corepack is not bundled with this Node build — skipping pnpm/yarn shims"; \
     fi
 
-# --- Claude Code, for the agent whose subtasks run it -----------------------
+# --- Claude Code, for the agent whose sub-agents run it ---------------------
 #
-# `image_vars` in wrangler.jsonc is a Docker build arg, so which image gets the
-# CLI is decided per `containers[]` entry rather than per file. The `coder`
-# entry passes nothing and this is a no-op; the `claude-coder` entry passes a
+# `build_vars` in wrangler.jsonc is a Docker build arg, so which image gets the
+# CLI is decided per `containers[]` entry rather than per file. The `coding`
+# entry passes nothing and this is a no-op; the `claude-coordinator` entry passes a
 # version.
 #
 # A build arg rather than a second Dockerfile, because everything above encodes
@@ -145,55 +145,44 @@ RUN if command -v corepack > /dev/null; then \
 # silently, in whichever direction the image nobody redeployed recently went.
 #
 # **The pin is load-bearing, not tidiness.** The egress gateway rewrites this
-# client's requests and `events.ts` parses its stream, and both are written
-# against a wire shape captured from **2.1.238**: an `authorization: Bearer`
-# with no `x-api-key`, a specific `anthropic-beta` list carrying
-# `claude-code-20250219` and `oauth-2025-04-20`, and an unauthenticated
-# `HEAD /api/hello` preflight. A version bump can move any of that, so it is a
-# deliberate act that needs the smoke test re-run — see `src/claude-code/README.md`
-# in `@dynamicagents/plugins`. Do not bump this to pick up a newer CLI without it.
+# client's requests and its stream parser reads what it prints, and both are
+# written against one version's traffic — `VERIFIED_CLAUDE_CODE_VERSION` in
+# `@dynamicagents/plugins/claude-code`. The version passed here is that one, and
+# `npm run check` fails when they differ. A newer CLI is verified in plugins
+# first, by its probe; the plugins repository's AGENTS.md ("Updating Claude
+# Code") is the procedure.
+#
+# **The `postinstall` is the install**, so `--allow-scripts` approves it. `claude`
+# is published as a placeholder that exits 1, which the script replaces with the
+# platform's native binary. npm warns on an unapproved install script or blocks
+# it, depending on the release the nodesource line ships, and a global install
+# never reads this repo's `allowScripts`. `claude --version` fails the build on
+# the placeholder.
 #
 # `--no-fund --no-audit` for the same reason as the ENV block below: a build log
 # nobody reads is still a build log somebody has to scroll.
 ARG CLAUDE_CODE_VERSION=""
 RUN if [ -n "$CLAUDE_CODE_VERSION" ]; then \
       npm i -g --no-fund --no-audit \
+        --allow-scripts=@anthropic-ai/claude-code \
         "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}" \
       && claude --version; \
     else \
       echo "no CLAUDE_CODE_VERSION build arg: this image has no Claude Code"; \
     fi
 
-# --- The GitHub CLI, for reading a public repository ------------------------
+# --- The GitHub CLI ------------------------------------------------------------
 #
-# Behind its own build arg for the reason Claude Code is: `image_vars` in
-# wrangler.jsonc decides per `containers[]` entry, so the `coder` image passes
+# Behind its own build arg for the reason Claude Code is: `build_vars` in
+# wrangler.jsonc decides per `containers[]` entry, so the `coding` image passes
 # nothing and stays smaller.
 #
-# **It is unauthenticated, and that is the whole design.** The container holds no
-# forge credential and must not — the `repo` module in `@dynamicagents/plugins`
-# carries the argument, and it has not changed: git executes whatever `.git/config`
-# and `.git/hooks` name, and the model has a root shell on that filesystem. What
-# changed is that *reading a public repository needs no credential*, and reading
-# is most of what a session reaches for `gh` to do.
-#
-# The catch: `gh` refuses to run at all without a token, even against a public
-# repository — it exits asking for `gh auth login` before it makes a request. So
-# the claude-coder sessions are launched with a placeholder GH_TOKEN, and the
-# egress gateway deletes the header on the way out: the same swap the Anthropic
-# credential rides on, inverted. The placeholder lives in the session env, not in
-# this image, because it is only harmless behind that gateway — the `claude-coder`
-# agent's `claude-code.ts` carries why.
-#
-# What that buys, and what it does not:
-#   - REST reads of public repositories: `gh api repos/<o>/<r>/pulls/<n>`, its
-#     `/comments`, `/files`, `/reviews`. 60 requests an hour for the whole egress
-#     IP, which is shared, so it can be exhausted by someone else.
-#   - **not** `gh pr view`, `gh issue view` or anything else built on GraphQL:
-#     GitHub gives anonymous callers a GraphQL quota of zero.
-#   - no write, and no private repository.
-#   - the forge work — branches, commits, pushes, pull requests, review replies —
-#     belongs to the parent's `repo_*` tools, which hold the credential Worker-side.
+# **Signed in, with no credential in the image or the container.** A
+# claude-coordinator session pushes its branch, opens its pull request and
+# answers its review with `gh` and git. Both present a placeholder token, and the
+# egress gateway swaps in the real one for GitHub's hosts only — `githubToken` in
+# `@dynamicagents/plugins/claude-code`. The placeholder lives in the session env,
+# not here: `coding`'s container egresses `direct`, where nothing would swap it.
 #
 # A pinned release tarball rather than the apt repository: `gh` is a static Go
 # binary that needs no dependency resolution, so this is one layer and no second
@@ -214,7 +203,7 @@ RUN if [ -n "$GH_VERSION" ]; then \
       echo "no GH_VERSION build arg: this image has no GitHub CLI"; \
     fi
 
-# Fail the BUILD, not round three, if the base image stops delivering the
+# Fail the BUILD, not a task, if the base image stops delivering the
 # toolchain. npm ignores `engines` unless a repo opts in, so nothing downstream
 # would tell you.
 RUN node -e "const m=Number(process.versions.node.split('.')[0]); if (m < 24) { console.error('this image needs Node >= 24, PATH resolves to ' + process.execPath + ' at ' + process.versions.node); process.exit(1); }" \
@@ -223,7 +212,7 @@ RUN node -e "const m=Number(process.versions.node.split('.')[0]); if (m < 24) { 
   && git --version \
   && rg --version | head -n1 \
 # The workspace object shells out to this to trust the interception CA, so a
-# base image that stopped shipping it must fail here rather than at round three.
+# base image that stopped shipping it must fail here rather than in a task.
   && command -v update-ca-certificates \
 # The workspace object bind-mounts container disk over node_modules with these;
 # `@dynamicagents/plugins/computer` carries why.
@@ -231,8 +220,8 @@ RUN node -e "const m=Number(process.versions.node.split('.')[0]); if (m < 24) { 
   && test -x /usr/local/bin/computerd
 
 # Everything below exists because tool output lands in a model's context window.
-# `sb_exec` truncates to a byte budget, so every byte spent on an ANSI colour
-# code or an npm progress bar is a byte not spent on the error message.
+# `bash` truncates to a character budget, so every one spent on an ANSI colour
+# code or an npm progress bar is one not spent on the error message.
 #
 # **The COMPUTER_VAR_ prefix is what makes any of it reach a command**, and its
 # absence fails silently. A command spawned by the workspace inherits PATH, HOME,
@@ -292,7 +281,7 @@ ENV COMPUTER_VAR_CI=1 \
 # This is what makes the workspace object's CA install reach the clients that
 # matter. Node ships its own root list and ignores the system one, so
 # `update-ca-certificates` alone leaves `npm ci`, `claude -p` and every
-# `sb_exec node …` failing on an intercepted connection exactly as if nothing
+# `bash` running `node …` failing on an intercepted connection exactly as if nothing
 # had been installed — measured, not assumed.
 #
 # The alternative is `NODE_EXTRA_CA_CERTS`, which cannot be set from here: the
@@ -311,11 +300,10 @@ ENV COMPUTER_VAR_CI=1 \
 # this set and no extra CA present.
 ENV COMPUTER_VAR_NODE_OPTIONS=--use-openssl-ca
 
-# computerd's own configuration. `CloudflareContainerBackend` passes PORT and
-# MOUNT_POINT in the container env when it starts the container, so these two
-# are defaults for a manual `docker run` rather than load-bearing — but they
-# must agree with the backend's, or a hand-run container answers on a port
-# nothing dials.
+# computerd's own configuration. `ContainerBackend` passes PORT and MOUNT_POINT
+# in the container env when it starts the container, so these two are defaults
+# for a manual `docker run` rather than load-bearing — but they must agree with
+# the backend's, or a hand-run container answers on a port nothing dials.
 #
 # FUSE_MOUNT=auto is the one that matters, and it is why a single image serves
 # both environments: Cloudflare Containers expose /dev/fuse to the workload, so

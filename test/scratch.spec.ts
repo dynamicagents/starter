@@ -1,13 +1,11 @@
 import { describe, expect, it } from "vitest";
 import { env } from "cloudflare:workers";
 import { makeDoHelpers } from "@dynamicagents/core/testing";
-import type { CoderWorkspaceDO } from "@/index";
-import { openWorkspace } from "@dynamicagents/plugins/computer";
-import { createAgentRuntime } from "@dynamicagents/core";
+import type { CodingWorkspace } from "@/index";
+import type { PluginContext } from "@dynamicagents/core";
+import { openWorkspace, workspaceName } from "@dynamicagents/plugins/workspace";
 import { SCRATCH_OPEN_TOOL } from "@dynamicagents/plugins/scratch";
-import { CODER_CONFIG } from "@/config";
-import type { ActiveRepo } from "@/workspace/active-repo";
-import { workspaceName } from "@dynamicagents/plugins/computer";
+import type { ActiveCheckout, ActiveRepo } from "@/workspace/active-repo";
 import { hostScratch, SCRATCH_DIR, SCRATCH_REPO } from "@/workspace/scratch";
 
 /**
@@ -25,20 +23,29 @@ import { hostScratch, SCRATCH_DIR, SCRATCH_REPO } from "@/workspace/scratch";
  * container — which is just as well, since the pool cannot start one.
  */
 
-const { freshStub: freshWorkspace } = makeDoHelpers<CoderWorkspaceDO>(
-  env.CODER_WORKSPACE
+const { freshStub: freshWorkspace } = makeDoHelpers<CodingWorkspace>(
+  env.CODING_WORKSPACE
 );
 
 /** `ActiveRepo` over two variables — the same contract, without the SQLite. */
 function fakeActive(): ActiveRepo {
   let current: string | undefined;
   const seen: string[] = [];
+  let checkout: ActiveCheckout | undefined;
+  const note = (repo: string) => {
+    if (!seen.includes(repo)) seen.push(repo);
+  };
   return {
     get: () => current,
     set: (repo) => {
       current = repo;
-      if (!seen.includes(repo)) seen.push(repo);
+      note(repo);
     },
+    checkout: () => checkout,
+    setCheckout: (next) => {
+      checkout = next;
+    },
+    note,
     seen: () => [...seen],
     forget: (repo) => {
       const at = seen.indexOf(repo);
@@ -59,26 +66,32 @@ function fakeExec() {
 
 const AUTHOR = { name: "da-coder", email: "coder@example.test" };
 
-/** Build the plugin and call its one tool, as the runtime would. */
+/** What an agent hands its plugins, enough of it for this one. */
+const CONTEXT = {
+  env,
+  storage: undefined as unknown as DurableObjectStorage,
+  agentName: "caller",
+  callerKey: () => "caller",
+  workspace: () => {
+    throw new Error("the scratch plugin reads no Think workspace");
+  },
+  runtime: () => undefined
+} as unknown as PluginContext<Env>;
+
+/** Build the plugin and call its one tool, as a turn would. */
 async function open(
   config: Parameters<typeof hostScratch>[0]
 ): Promise<string> {
-  const runtime = createAgentRuntime({
-    config: CODER_CONFIG,
-    plugins: [hostScratch(config)]
-  });
-  const tools = await runtime.mainAgentTools({
-    session: { getCompactions: async () => [] } as never
-  });
+  const tools = hostScratch(config).tools!(CONTEXT);
   const execute = tools[SCRATCH_OPEN_TOOL]!.execute as (
     input: unknown,
     options: unknown
   ) => Promise<string>;
-  return String(await execute({}, {}));
+  return String(await execute({}, { toolCallId: "call-1", messages: [] }));
 }
 
 /** A workspace with a scratchpad on disk, as `git init` would leave it. */
-async function seedScratch(stub: DurableObjectStub<CoderWorkspaceDO>) {
+async function seedScratch(stub: DurableObjectStub<CodingWorkspace>) {
   using ws = await openWorkspace(stub);
   await ws.fs.mkdir(`${SCRATCH_DIR}/.git`, { recursive: true });
   await ws.fs.writeFile(`${SCRATCH_DIR}/.git/HEAD`, "ref: refs/heads/main\n");

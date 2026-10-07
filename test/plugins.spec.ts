@@ -1,91 +1,147 @@
 import { describe, it, expect } from "vitest";
 import { env } from "cloudflare:workers";
 import {
-  createAgentRuntime,
+  PluginSetupError,
+  assemblePlugins,
   definePlugin,
-  resolveConfig,
-  validateRecipe
+  type SubAgentSpec
 } from "@dynamicagents/core";
-import { BROWSER_FAMILY } from "@dynamicagents/plugins/browser";
-import { WORKSPACE_FAMILY } from "@dynamicagents/plugins/workspace";
-import { general } from "@/agents/reactive/general";
-import { REACTIVE_CONFIG } from "@/config";
+import { GenericChild } from "@/agents/generic/children";
+import { CodingChild } from "@/agents/coding/children";
+import {
+  ClaudeCoordinatorPlannerChild,
+  ClaudeCoordinatorWriterChild
+} from "@/agents/claude-coordinator/children";
+import { resolveInstallCommand } from "@dynamicagents/plugins/workspace";
+import { CODING, CLAUDE_COORDINATOR, GENERIC } from "@/config";
+import { INSTALL_PLAN } from "@/workspace/install-plan";
 
 /**
  * The seam between this repo and the packages it composes: what happens when
- * they disagree, and whether a plugin written *here* is indistinguishable from a
- * published one.
+ * they disagree, and whether a sub-agent written *here* is indistinguishable
+ * from one a plugin publishes.
  */
 
-describe("a plugin this repo writes", () => {
-  it("registers its subtask type like any published one", () => {
-    const runtime = createAgentRuntime({
-      config: REACTIVE_CONFIG,
-      plugins: [general()]
-    });
+const SPECS: [string, SubAgentSpec<unknown, unknown>][] = [
+  ["GenericChild", GenericChild.spec],
+  ["CodingChild", CodingChild.spec],
+  ["ClaudeCoordinatorWriterChild", ClaudeCoordinatorWriterChild.spec],
+  ["ClaudeCoordinatorPlannerChild", ClaudeCoordinatorPlannerChild.spec]
+] as [string, SubAgentSpec<unknown, unknown>][];
 
-    expect(runtime.types.keys).toEqual(["general"]);
-    expect(runtime.types.spec("general")?.params).toBeNull();
+describe("a sub-agent this repo binds", () => {
+  it.each(SPECS)("%s declares a soul and a description", (_, spec) => {
+    // Core refuses to lend a soul, so that no run executes under an identity
+    // nobody chose — which is why the ones below live in the starter.
+    expect(spec.soul.length).toBeGreaterThan(0);
+    expect(spec.description.length).toBeGreaterThan(0);
   });
 
-  it("declares a soul, which core refuses to supply a default for", () => {
-    // `validateRecipe` rejects a recipe with no soul rather than lending it one,
-    // so that no run ever executes under an identity nobody chose. That refusal
-    // is exactly why this plugin lives in the starter and not in a library.
-    const runtime = createAgentRuntime({
-      config: REACTIVE_CONFIG,
-      plugins: [general()]
+  it("runs in the background exactly where a run can outlast a turn", () => {
+    // Research and drafting finish in minutes; an implementation run and a
+    // Claude Code session can each outlast the fifteen minutes a turn may last.
+    expect(
+      Object.fromEntries(SPECS.map(([name, spec]) => [name, !!spec.detached]))
+    ).toEqual({
+      GenericChild: false,
+      CodingChild: true,
+      ClaudeCoordinatorWriterChild: true,
+      ClaudeCoordinatorPlannerChild: true
     });
-    const recipe = runtime.types.resolveRecipe("general");
-
-    expect(recipe.soul.length).toBeGreaterThan(0);
-    expect(() =>
-      validateRecipe({ ...recipe, soul: "" }, runtime.policy)
-    ).toThrow();
   });
 
-  it("degrades rather than breaks when a named tool family is not installed", () => {
-    // The recipe names `browser` and `workspace`, but a family no installed
-    // plugin registered is dropped by `validateRecipe` — so uninstalling
-    // `/browser` leaves a working subagent with fewer tools, not a broken one.
-    const runtime = createAgentRuntime({
-      config: REACTIVE_CONFIG,
-      plugins: [general()] // neither family installed
-    });
-    const validated = validateRecipe(
-      runtime.types.resolveRecipe("general"),
-      runtime.policy
-    );
-
-    expect(validated.toolFamilies).not.toContain(BROWSER_FAMILY);
-    expect(validated.toolFamilies).not.toContain(WORKSPACE_FAMILY);
+  it("hands each coder run its workspace from the parent, never from its input", () => {
+    for (const [, spec] of SPECS.slice(1)) {
+      expect(spec.prepare).toBeTypeOf("function");
+    }
+    // The model writes the input, and a workspace name there would let it name
+    // another caller's container.
+    for (const [, spec] of SPECS) {
+      const shape = (spec.inputSchema as { shape?: Record<string, unknown> })
+        .shape;
+      expect(Object.keys(shape ?? {})).not.toContain("workspaceName");
+    }
   });
 });
 
-describe("contract skew between the three repos", () => {
+describe("contract skew between the repos", () => {
   it("fails at startup on a missing declared binding, not at the first tool call", () => {
     // A plugin cannot add its own wrangler binding, which is the whole reason it
     // declares `requires`. Failing here beats failing inside a request someone is
     // waiting on.
     const needsSecret = definePlugin({
-      key: "needs-secret",
+      name: "needs-secret",
       requires: { secrets: ["NOT_A_REAL_SECRET"] }
     });
 
-    expect(() =>
-      createAgentRuntime({
-        config: REACTIVE_CONFIG,
-        plugins: [needsSecret],
-        env
-      })
-    ).toThrow(/missing bindings or secrets/);
+    expect(() => assemblePlugins([needsSecret], env)).toThrow(PluginSetupError);
+    expect(() => assemblePlugins([needsSecret], env)).toThrow(
+      /missing bindings or secrets/
+    );
   });
 });
 
-describe("config resolution", () => {
-  it("keeps each agent's declared overrides", () => {
-    const resolved = resolveConfig(REACTIVE_CONFIG);
-    expect(resolved.model.chatModelId).toBe(REACTIVE_CONFIG.model!.chatModelId);
-    expect(resolved.maxSubtasks).toBe(REACTIVE_CONFIG.maxSubtasks);
+describe("tuning", () => {
+  it("runs every agent's turns on the flash model", () => {
+    expect(GENERIC.modelId).toBe("@cf/zai-org/glm-5.3-flash");
+    expect(CODING.modelId).toBe(GENERIC.modelId);
+    // claude-coordinator is `coding`'s tuning whole, so a change to one reaches
+    // the other.
+    expect(CLAUDE_COORDINATOR).toEqual(CODING);
+  });
+
+  it("compacts generic on the flash model", () => {
+    expect(GENERIC.compactionModelId).toBe("@cf/zai-org/glm-5.3-flash");
+  });
+
+  it.each([CODING, CLAUDE_COORDINATOR])(
+    "compacts a coding agent on the full-size model",
+    (tuning) => {
+      expect(tuning.compactionModelId).toBe("@cf/zai-org/glm-5.3");
+    }
+  );
+
+  it.each([GENERIC, CODING, CLAUDE_COORDINATOR])(
+    "keeps a recent tail inside the compaction threshold",
+    (tuning) => {
+      expect(tuning.keepRecentTokens).toBeLessThan(tuning.compactAfterTokens);
+    }
+  );
+});
+
+describe("install plan", () => {
+  /** A checkout with npm's lockfile at its root, as dev-agents has. */
+  const checkout = {
+    exists: async (path: string) =>
+      path.endsWith("/package.json") || path.endsWith("/package-lock.json"),
+    readFile: async () => "{}"
+  };
+
+  it("bootstraps dev-agents, whose code is in its submodules", async () => {
+    const resolved = await resolveInstallCommand(
+      checkout,
+      "/workspace/dev-agents",
+      INSTALL_PLAN,
+      "dynamicagents/dev-agents"
+    );
+
+    expect(resolved).toMatchObject({
+      kind: "run",
+      command: "npm ci --no-audit --no-fund && npm run bootstrap"
+    });
+  });
+
+  it("installs any other repository by its lockfile", async () => {
+    const resolved = await resolveInstallCommand(
+      checkout,
+      "/workspace/core",
+      INSTALL_PLAN,
+      "dynamicagents/core"
+    );
+
+    expect(resolved).toMatchObject({
+      kind: "run",
+      command: "npm ci --no-audit --no-fund"
+    });
   });
 });

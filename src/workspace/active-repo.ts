@@ -1,5 +1,3 @@
-import type { PluginHost } from "@dynamicagents/core/host";
-
 /**
  * Which repository this caller is working on, and therefore which workspace
  * their commands reach.
@@ -21,7 +19,7 @@ import type { PluginHost } from "@dynamicagents/core/host";
  * falls back to a caller-level workspace and `repo_diff` reports an empty tree
  * for a checkout sitting right there. So it is persisted — but `workspaceName()`
  * is a **synchronous** thunk called on the path of every tool, inside
- * `computerExec`, where there is nowhere to await. `storage.get` is async;
+ * `workspaceExec`, where there is nowhere to await. `storage.get` is async;
  * `storage.sql` is not. Hence a one-row table, with an in-memory cache in front
  * so the common case touches no storage at all.
  *
@@ -31,16 +29,16 @@ import type { PluginHost } from "@dynamicagents/core/host";
  * is per caller, not per task. Two tasks from one caller cloning different
  * repositories overwrite each other: the later `set()` wins, and from then on the
  * earlier task's own tools (`repo_diff`, the reads, the commit and push that end
- * it) resolve to the *other* task's workspace, cancellation cleanup included.
+ * it) resolve to the *other* task's workspace.
  *
- * Delegated work is not exposed — a facet gets its workspace name on
- * `ctx.runtime`, resolved on the parent and pinned for the life of the subtask.
- * The exposure is the parent's own tool calls.
+ * A sub-agent is not exposed — it gets its workspace name from its spec's
+ * `prepare`, resolved on the parent and pinned for the life of the run. The
+ * exposure is the parent's own tool calls, and a background run widens it: the
+ * parent's turn ends when the run starts, so a second task can move the
+ * selection before the follow-up turn that reviews and pushes the work.
  *
- * **Not fixable in this file**, which is why it is documented rather than
- * patched: the fix is to key the selection by task, and core's `PluginHost`
- * exposes no task or context identity to key on. Closing it means adding that
- * upstream and threading it through `workspaceName()`, which must stay
+ * The fix is to key the selection by task, which every turn now carries
+ * (`StepAgent.turnTaskId()`), threaded through `workspaceName()`, which must stay
  * synchronous. Until then, one task at a time per caller is a load-bearing
  * assumption.
  *
@@ -52,13 +50,43 @@ import type { PluginHost } from "@dynamicagents/core/host";
 
 const TABLE = "coder_active_repo";
 const SEEN_TABLE = "coder_seen_repos";
+const CHECKOUT_TABLE = "coder_active_checkout";
 
 /** Reads and writes for one caller's current repository. */
 export interface ActiveRepo {
-  /** `owner/repo`, or undefined before the first clone of this session. */
+  /**
+   * `owner/repo`, a sentinel — a scratchpad, a worktree the parent switched into —
+   * or undefined before the first clone of this session.
+   */
   get(): string | undefined;
-  /** Record the repository a clone is about to target. */
+  /** Route the parent's tools: a repository a clone is about to target, or a sentinel. */
   set(repo: string): void;
+  /**
+   * What the parent cloned, in the terms a second clone of the same thing needs.
+   *
+   * A writing session that works in a container of its own starts with an empty
+   * filesystem, so something has to clone into it — and the honest url to use is
+   * **the one the parent actually cloned from**, already allowlist-checked by
+   * `/repo`. Reconstructing one from `owner/repo` would mean this file deciding a
+   * GitHub host, which is a decision `/repo` owns and permits more than one answer
+   * to.
+   *
+   * `undefined` before the first clone, and a caller must treat that as "there is
+   * nothing to clone" rather than guessing.
+   */
+  checkout(): ActiveCheckout | undefined;
+  /** Record it, from `/repo`'s `afterCheckout`, which is told all three. */
+  setCheckout(checkout: ActiveCheckout): void;
+  /**
+   * Add a name to the sweep's candidate list **without** routing anything to it.
+   *
+   * {@link set} does both, which is right for a clone: the parent is about to work
+   * in what it selected. A worktree a session is prepared in is the other case —
+   * it must be swept, and it must not become what the parent's own tools address
+   * until the parent switches into it, because this table holds one row and the
+   * later write would win.
+   */
+  note(repo: string): void;
   /**
    * Every repository this caller has ever worked on.
    *
@@ -96,8 +124,40 @@ export interface ActiveRepo {
   forget(repo: string): void;
 }
 
-export function activeRepo(host: PluginHost<Env>): ActiveRepo {
-  const storage = host.storage;
+/** Enough to clone the parent's repository again somewhere else. */
+export interface ActiveCheckout {
+  /** The clone url `/repo` used, already allowlist-checked. */
+  url: string;
+  /**
+   * Where it put the tree.
+   *
+   * Reused verbatim for a worktree's own clone rather than derived again: each
+   * container has its own filesystem, so the same path collides with nothing, and
+   * it is what lets the parent's tools move into a worktree at the paths they
+   * already use — see `@/workspace/worktrees`.
+   */
+  dir: string;
+  /** The branch the parent is on, so a session starts from the same commit. */
+  branch: string;
+}
+
+/**
+ * One selection per storage, whoever asks for it: the parent's tools, its
+ * sub-agents' settle hooks and its task hooks each reach it from somewhere
+ * else, and each instance caches the row — so a second instance goes on
+ * answering what the first has already moved away from.
+ */
+const instances = new WeakMap<DurableObjectStorage, ActiveRepo>();
+
+export function activeRepo(storage: DurableObjectStorage): ActiveRepo {
+  const known = instances.get(storage);
+  if (known) return known;
+  const made = createActiveRepo(storage);
+  instances.set(storage, made);
+  return made;
+}
+
+function createActiveRepo(storage: DurableObjectStorage): ActiveRepo {
   let cached: string | undefined;
   let ready = false;
 
@@ -111,6 +171,12 @@ export function activeRepo(host: PluginHost<Env>): ActiveRepo {
     );
     storage.sql.exec(
       `CREATE TABLE IF NOT EXISTS ${SEEN_TABLE} (repo TEXT PRIMARY KEY, at INTEGER NOT NULL)`
+    );
+    // Its own table rather than columns on `${TABLE}`: `IF NOT EXISTS` does not
+    // add a column to a table that already exists, so widening that one would
+    // read as a migration this file has deliberately not got.
+    storage.sql.exec(
+      `CREATE TABLE IF NOT EXISTS ${CHECKOUT_TABLE} (id INTEGER PRIMARY KEY CHECK (id = 1), url TEXT NOT NULL, dir TEXT NOT NULL, branch TEXT NOT NULL)`
     );
     ready = true;
   };
@@ -126,11 +192,11 @@ export function activeRepo(host: PluginHost<Env>): ActiveRepo {
         cached = row?.repo;
         return cached;
       } catch {
-        // A subagent facet reaches this through the same plugin list but has no
-        // table of its own — and needs none, because its workspace name arrives
-        // on `ctx.runtime` from the parent and this is only ever the fallback.
-        // Returning undefined lets that fallback be a caller-level name rather
-        // than an exception thrown from inside a tool.
+        // A sub-agent reaches this through the same container config but has no
+        // selection of its own — and needs none, because its workspace name
+        // arrives on `runtime()` from the parent and this is only ever the
+        // fallback. Returning undefined lets that fallback be a caller-level
+        // name rather than an exception thrown from inside a tool.
         return undefined;
       }
     },
@@ -150,6 +216,41 @@ export function activeRepo(host: PluginHost<Env>): ActiveRepo {
         Date.now()
       );
       cached = repo;
+    },
+
+    checkout(): ActiveCheckout | undefined {
+      try {
+        ensure();
+        return storage.sql
+          .exec<{ url: string; dir: string; branch: string }>(
+            `SELECT url, dir, branch FROM ${CHECKOUT_TABLE} WHERE id = 1`
+          )
+          .toArray()[0];
+      } catch {
+        // A sub-agent has no selection of its own — the same reason `get()` swallows.
+        return undefined;
+      }
+    },
+
+    setCheckout(checkout: ActiveCheckout): void {
+      ensure();
+      storage.sql.exec(
+        `INSERT INTO ${CHECKOUT_TABLE} (id, url, dir, branch) VALUES (1, ?, ?, ?)
+           ON CONFLICT(id) DO UPDATE SET url = excluded.url, dir = excluded.dir, branch = excluded.branch`,
+        checkout.url,
+        checkout.dir,
+        checkout.branch
+      );
+    },
+
+    note(repo: string): void {
+      ensure();
+      storage.sql.exec(
+        `INSERT INTO ${SEEN_TABLE} (repo, at) VALUES (?, ?)
+           ON CONFLICT(repo) DO UPDATE SET at = excluded.at`,
+        repo,
+        Date.now()
+      );
     },
 
     seen(): string[] {

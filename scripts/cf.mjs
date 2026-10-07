@@ -6,12 +6,13 @@
 // Subcommands (preferred — they build the request + a readable digest for you):
 //   verify                     GET /accounts/{id}/tokens/verify
 //   logs   [flags]             historical Worker logs (Observability telemetry)
-//   wf     [name [instance]]   Workflows: list defs / list instances / one instance
+//   spans  [flags]             the Worker's traces: instance starts, RPCs, turns, tools
 //   ai     [flags | <logId>]   AI Gateway calls: digest, or one call's prompt + reply
-//                              --task/--agent/--phase/--channel/--event select by
+//                              --task/--agent/--phase/--subagent/--event select by
 //                              what core tags each call with; --all totals every match
 //   fields [--worker <name>]   discover available log fields for a dataset
 //   containers [name]          container apps: image, version, rollout progress
+//   wf     [name [instance]]   Workflows: list defs / list instances / one instance
 //
 // logs flags:
 //   --since <30m|2h|1d>   time window back from now (default 1h)
@@ -23,8 +24,18 @@
 //   --app                 only this Worker's own log lines, dropping the
 //                         container egress that is ~95% of events while a
 //                         session runs
+//   --container <app>     a container application's own stdout and stderr
+//                         instead (its name or id, as `containers` lists it)
 //   --limit <N>           max matching events (default 100, max 2000)
 //   --json | --raw        full pretty JSON / verbatim body instead of the digest
+//
+// spans flags (and --since, --worker, --limit, --json, --raw as for logs):
+//   --object <id>         one Durable Object, by its id or a part of it
+//   --entrypoint <class>  spans of the classes whose name contains <class>
+//   --name <span>         span names containing <span>; `agent_start` lists
+//                         every Agent instance start
+//   --trace <traceId>     one trace, by its id or a part of it
+//   --app                 drop the container egress spans
 //
 // Raw passthrough (anything the subcommands don't cover):
 //   [METHOD] <path> [-d <json|@file>] [-q <k=v>]... [--raw]
@@ -34,20 +45,23 @@
 // Examples:
 //   npm run cf -- verify
 //   npm run cf -- logs --since 2h --level error
-//   npm run cf -- logs --worker da-starter --grep HandleTaskWorkflow
+//   npm run cf -- logs --worker da-starter --grep "[agent]"
 //   npm run cf -- logs --worker da-starter --app --since 30m
-//   npm run cf -- wf handle-task
-//   npm run cf -- wf handle-task 27to4pc4w7eo0psa59o
+//   npm run cf -- logs --container da-starter-claudecoordinatorworkspace --since 2h
+//   npm run cf -- spans --name agent_start --since 6h
+//   npm run cf -- spans --object 8e4d430c --app --since 1h
 //   npm run cf -- ai --since 2h
 //   npm run cf -- ai --task <taskId> --all
-//   npm run cf -- ai --agent proactive --phase triage --since 1d
+//   npm run cf -- ai --agent generic --phase turn --since 1d
 //   npm run cf -- ai 01KY4PSY6T1HBA7A2V22NKCFZC
 //   npm run cf -- containers
-//   npm run cf -- GET workflows -q per_page=50
+//   npm run cf -- wf claude-coordinator-workflow
+//   npm run cf -- wf claude-coordinator-workflow <taskId>
+//   npm run cf -- GET workers/scripts
 //
 // `npm run cf -- wf` with no name lists the workflows this Worker actually has
 // deployed. That query is the authority; a list written here would be a second
-// copy of `wrangler.jsonc` that nothing checks.
+// copy of `wrangler.jsonc` that nothing checks. An instance's id is its task's.
 import fs from "node:fs";
 
 const ENV_FILE = ".cf.env";
@@ -71,18 +85,23 @@ const USAGE = `cf.mjs — Cloudflare API proxy (credentials from ${ENV_FILE})
   logs [--since 1h] [--worker <name>]    historical Worker logs, as a digest
        [--level error] [--grep <text>]
        [--app] [--limit 100] [--json|--raw]
-  wf                                     list workflow definitions
-  wf <name>                              list recent instances of a workflow
-  wf <name> <instanceId> [--json]        one instance, per-step pass/fail
+  logs --container <app> [--since 1h]    a container app's own output, its long
+       [--grep <text>] [--limit 100]     lines reassembled
+  spans [--since 1h] [--worker <name>]   traces, oldest first
+        [--object <id>] [--entrypoint <class>] [--name <span>] [--trace <id>]
+        [--app] [--limit 100] [--json|--raw]
   ai [--since 2h] [--model <m>]          AI Gateway calls, as a digest
      [--task <id>] [--agent <name>]      …selected by what core tags a call with
-     [--phase <p>] [--channel <id>]
-     [--event <taskId:r1|taskId:s1>]
+     [--phase <turn|subagent|compaction>]
+     [--subagent <class>] [--event <taskId>]
      [--limit 20] [--all] [--json|--raw] --all totals every match, not a page
   ai <logId> [--full] [--max N]          one call: prompt + reply (bodies)
   fields [--worker <name>]               list available log fields
   containers [name] [--json|--raw]       container apps: which image is actually
                                          serving, and any rollout still moving
+  wf                                     list workflow definitions
+  wf <name>                              list recent instances of a workflow
+  wf <name> <taskId> [--json]            one task's instance, per-step pass/fail
   [METHOD] <path> [-d <json|@file>]      raw passthrough (path is account-relative
        [-q <k=v>]... [--raw]             unless it starts with "/")`;
 
@@ -189,13 +208,13 @@ function ensureOk(res, text) {
   }
 }
 
-async function telemetryQuery({ from, to, filters, limit }) {
+async function telemetryQuery({ from, to, filters, limit, dataset = DATASET }) {
   const body = {
     queryId: "cf-cli",
     timeframe: { from, to },
     view: "events",
     limit,
-    parameters: { datasets: [DATASET], ...(filters.length ? { filters } : {}) }
+    parameters: { datasets: [dataset], ...(filters.length ? { filters } : {}) }
   };
   return request("POST", acct("workers/observability/telemetry/query"), {
     body
@@ -205,7 +224,15 @@ async function telemetryQuery({ from, to, filters, limit }) {
 async function cmdLogs(args) {
   const { flags } = parseFlags(args, {
     bool: ["--json", "--raw", "--app"],
-    value: ["--since", "--worker", "--service", "--level", "--grep", "--limit"]
+    value: [
+      "--since",
+      "--worker",
+      "--service",
+      "--level",
+      "--grep",
+      "--limit",
+      "--container"
+    ]
   });
   const sinceLabel = flags.since ?? "1h";
   const to = Date.now();
@@ -214,6 +241,8 @@ async function cmdLogs(args) {
   // The API rejects anything above this with a validation body nobody can read.
   if (limit > MAX_LIMIT)
     die(`--limit ${limit} is above the API maximum of ${MAX_LIMIT}`);
+  if (flags.container)
+    return cmdContainerLogs(flags, { from, to, limit, sinceLabel });
   const worker = flags.worker ?? flags.service;
 
   const filters = [];
@@ -330,70 +359,267 @@ async function cmdLogs(args) {
     );
 }
 
-async function cmdWf(args) {
-  const { flags, pos } = parseFlags(args, { bool: ["--json", "--raw"] });
-  const [name, instance] = pos;
+/**
+ * Every container application, and the body they came in. No `per_page`: with
+ * one the endpoint pages by `next_page_token`, and without one it returns them
+ * all (verified).
+ */
+async function listContainerApps() {
+  const { res, text } = await request("GET", acct("containers/applications"));
+  ensureOk(res, text);
+  return { apps: parseJson(text)?.result ?? [], text };
+}
 
-  if (!name) {
-    const { res, text } = await request("GET", acct("workflows"));
-    ensureOk(res, text);
-    if (flags.json || flags.raw)
-      return void printBody(text, { raw: flags.raw });
-    const defs = parseJson(text)?.result ?? [];
-    for (const w of defs)
-      out(`- ${w.name}  | class: ${w.class_name}  | script: ${w.script_name}`);
-    return;
-  }
-
-  if (!instance) {
-    const { res, text } = await request(
-      "GET",
-      acct(`workflows/${name}/instances`)
-    );
-    ensureOk(res, text);
-    if (flags.json || flags.raw)
-      return void printBody(text, { raw: flags.raw });
-    const arr = parseJson(text)?.result ?? [];
-    if (!Array.isArray(arr) || arr.length === 0)
-      return void out("no instances");
-    for (const i of arr)
-      out(
-        `${i.id}  ${(i.status ?? "?").padEnd(10)}  ${i.created_on ?? i.created ?? ""}`
-      );
-    return;
-  }
-
-  const { res, text } = await request(
-    "GET",
-    acct(`workflows/${name}/instances/${instance}`)
+/**
+ * One container application, by its name — exact, or unambiguous — or its id.
+ * An id nothing lists is taken as given: a deleted application's output
+ * outlives it.
+ */
+async function containerApp(nameOrId) {
+  const { apps } = await listContainerApps();
+  const exact = apps.find((a) => a.id === nameOrId || a.name === nameOrId);
+  if (exact) return exact;
+  if (/^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(nameOrId))
+    return { id: nameOrId, name: nameOrId };
+  const partial = apps.filter((a) => String(a.name ?? "").includes(nameOrId));
+  if (partial.length === 1) return partial[0];
+  return die(
+    partial.length === 0
+      ? `no container application matching "${nameOrId}"`
+      : `"${nameOrId}" matches ${partial.map((a) => a.name).join(", ")} — name one`
   );
+}
+
+/**
+ * `logs --container` — a container application's own stdout and stderr.
+ *
+ * Its own dataset, keyed by the application's id rather than a script name, so
+ * no Worker filter reaches it. It is where a container that dies says why:
+ * computerd's `uncaughtException` is here, while the Worker's logs record only
+ * that the container exited.
+ *
+ * `--grep` matches records, not lines, so a long line shows only the record
+ * that matched.
+ */
+async function cmdContainerLogs(flags, { from, to, limit, sinceLabel }) {
+  for (const flag of ["worker", "service", "level", "app"])
+    if (flags[flag])
+      die(`--${flag} filters Worker logs, which --container does not read`);
+  const app = await containerApp(flags.container);
+  const filters = [
+    {
+      key: "$metadata.service",
+      operation: "eq",
+      value: app.id,
+      type: "string"
+    }
+  ];
+  if (flags.grep)
+    filters.push({
+      key: "$metadata.message",
+      operation: "includes",
+      value: String(flags.grep),
+      type: "string"
+    });
+
+  const { res, text } = await telemetryQuery({
+    from,
+    to,
+    filters,
+    limit,
+    dataset: "containers"
+  });
   ensureOk(res, text);
   if (flags.json || flags.raw) return void printBody(text, { raw: flags.raw });
-  const r = parseJson(text)?.result;
-  if (!r) return void printBody(text);
-  out(
-    `status: ${r.status}  success: ${r.success}  error: ${r.error ?? "null"}`
-  );
-  // A task that failed still finishes its instance cleanly — every step `ok`,
-  // `success: true` — because a typed turn failure is a value the loop delivers
-  // rather than a throw. So `status`, `success` and `error` agree on "fine" for a
-  // run the user saw fail, and the verdict the workflow returns is the only place
-  // that distinction is recorded. It arrives here as the instance's `output`.
-  if (r.output !== undefined && r.output !== null)
-    out(
-      `verdict: ${typeof r.output === "object" ? JSON.stringify(r.output) : r.output}`
+
+  const records = parseJson(text)?.result?.events?.events ?? [];
+  if (records.length === 0)
+    return void out(
+      `no output from ${app.name} in last ${sinceLabel}${flags.grep ? ` matching "${flags.grep}"` : ""}`
     );
+  const lines = containerLines(records);
+  const containers = new Set(lines.map((l) => l.container)).size;
+  const count = (n, noun) => `${n} ${noun}${n === 1 ? "" : "s"}`;
   out(
-    `queued ${r.queued ?? "?"} · start ${r.start ?? "?"} · end ${r.end ?? "?"}`
+    `${app.name} · last ${sinceLabel} · ${count(lines.length, "line")} from ${count(records.length, "record")} · ${count(containers, "container")}`
   );
-  out(`steps (${r.step_count ?? r.steps?.length ?? 0}):`);
-  for (const s of r.steps ?? []) {
-    const errs = (s.attempts ?? []).filter((a) => a.error).map((a) => a.error);
+  out(`${hhmmss(lines[0].at)} → ${hhmmss(lines.at(-1).at)}`);
+  out("");
+  for (const l of lines)
     out(
-      `  - ${(s.name ?? s.type ?? "?").padEnd(16)} ${s.success ? "ok" : "ERROR"}` +
-        (errs.length ? ` ${JSON.stringify(errs)}` : "")
+      `${hhmmss(l.at)}  ${l.container.slice(0, 8)}  ${elideDataUrls(l.text).replace(/\s+/g, " ").slice(0, 200)}`
+    );
+  if (records.length >= limit)
+    out(
+      `\n⚠ hit limit ${limit} records — older output is cut off; narrow --since or raise --limit (max ${MAX_LIMIT})`
+    );
+}
+
+/**
+ * Records back into lines, oldest first so a stack reads top to bottom. The
+ * container is the workspace object's id, as the Worker's logs name it.
+ *
+ * A long line arrives across consecutive `processId`s, cut wherever the pipe
+ * was read — mid-line, and at no fixed size, so nothing in a record says it ends
+ * one. The long line that matters is computerd's uncaught-exception stack, whose
+ * frames embed its whole bundle as a `data:` URL: a record opening on a long
+ * base64 run, after a line whose `data:` URL is still open, is that URL going
+ * on. Every other record is a line of its own.
+ */
+function containerLines(records) {
+  const sorted = [...records].sort(
+    (a, b) =>
+      a.timestamp - b.timestamp ||
+      Number(a.$containers?.processId) - Number(b.$containers?.processId)
+  );
+  const open = new Map();
+  const lines = [];
+  for (const r of sorted) {
+    const container =
+      r.$containers?.container?.id ?? r.$containers?.applicationId ?? "?";
+    const seq = Number(r.$containers?.processId);
+    const message = r.source?.message ?? "";
+    const last = open.get(container);
+    if (
+      last?.seq + 1 === seq &&
+      /;base64,[A-Za-z0-9+/=]*$/.test(last.text) &&
+      /^[A-Za-z0-9+/=]{64}/.test(message)
+    ) {
+      last.text += message;
+      last.seq = seq;
+      continue;
+    }
+    const line = { at: r.timestamp, container, text: message, seq };
+    lines.push(line);
+    open.set(container, line);
+  }
+  return lines;
+}
+
+/** A `data:` URL, as its type and size — a stack frame can carry a bundle. */
+const elideDataUrls = (s) =>
+  s.replace(
+    /data:([\w/+.-]+);base64,[A-Za-z0-9+/=]+/g,
+    (url, type) => `data:${type};base64,<${Math.round(url.length / 1024)} KB>`
+  );
+
+/**
+ * `spans` — the Worker's traces, from the telemetry API's `otel` dataset, which
+ * `logs` does not read.
+ *
+ * It is where a Durable Object's lifecycle shows. An Agent object's
+ * `agent_start` span marks a new instance, not a call — and most starts are
+ * ordinary, after an idle eviction or a deploy. A start while the same object's
+ * earlier `alarm` or `chat_turn` span is still open is the platform replacing a
+ * live instance: the old one runs on until its next storage call fails with
+ * "this Durable Object instance is no longer active", and no log line says why.
+ * A turn's GenAI spans are here too — `chat_turn`, `chat <model>`,
+ * `execute_tool <name>` — with their durations.
+ *
+ * A span's attributes filter without the `source.` prefix the events carry them
+ * under, as `cloudflare.durable_object.id` (verified). Storage calls are a
+ * zero-length span each and the bulk of any window, so they are left out
+ * unless `--name` asks for one.
+ */
+async function cmdSpans(args) {
+  const { flags } = parseFlags(args, {
+    bool: ["--json", "--raw", "--app"],
+    value: [
+      "--since",
+      "--worker",
+      "--service",
+      "--object",
+      "--entrypoint",
+      "--name",
+      "--trace",
+      "--limit"
+    ]
+  });
+  const sinceLabel = flags.since ?? "1h";
+  const to = Date.now();
+  const from = to - parseSince(sinceLabel);
+  const limit = parseLimit(flags.limit, 100);
+  if (limit > MAX_LIMIT)
+    die(`--limit ${limit} is above the API maximum of ${MAX_LIMIT}`);
+  const worker = flags.worker ?? flags.service;
+
+  const filter = (key, operation, value) => ({
+    key,
+    operation,
+    ...(value === undefined ? {} : { value: String(value) }),
+    type: "string"
+  });
+  const filters = [];
+  if (worker) filters.push(filter("$metadata.service", "eq", worker));
+  if (flags.object)
+    filters.push(
+      filter("cloudflare.durable_object.id", "includes", flags.object)
+    );
+  if (flags.entrypoint)
+    filters.push(filter("cloudflare.entrypoint", "includes", flags.entrypoint));
+  if (flags.name)
+    filters.push(filter("$metadata.spanName", "includes", flags.name));
+  if (flags.trace)
+    filters.push(filter("$metadata.traceId", "includes", flags.trace));
+  if (!String(flags.name ?? "").includes("storage"))
+    filters.push(
+      filter("$metadata.spanName", "not_includes", "durable_object_storage")
+    );
+  /**
+   * `--app` — without the container's egress, as `logs --app`. Every request a
+   * container makes is traced as an HTTP span on the workspace object, and again
+   * on `WorkspaceProxy`: 98% of one window's spans while an install ran. So any
+   * span carrying an HTTP method goes, whatever the method, and every span on the
+   * proxy. The Worker's own HTTP requests go too, the A2A POST among them, so it
+   * is a flag.
+   */
+  if (flags.app)
+    filters.push(
+      filter("http.request.method", "is_null"),
+      filter("cloudflare.entrypoint", "neq", "WorkspaceProxy")
+    );
+
+  const { res, text } = await telemetryQuery({
+    from,
+    to,
+    filters,
+    limit,
+    dataset: "otel"
+  });
+  ensureOk(res, text);
+  if (flags.json || flags.raw) return void printBody(text, { raw: flags.raw });
+
+  const started = (e) => e.source?.startTime ?? e.timestamp;
+  const spans = [...(parseJson(text)?.result?.events?.events ?? [])].sort(
+    (a, b) => started(a) - started(b)
+  );
+  if (spans.length === 0) return void out(`no spans in last ${sinceLabel}`);
+  const at = (ms) => new Date(ms).toISOString().slice(11, 23);
+  const took = (ms) =>
+    ms === undefined
+      ? "?"
+      : ms < 1000
+        ? `${ms}ms`
+        : `${(ms / 1000).toFixed(1)}s`;
+  out(`last ${sinceLabel} · ${spans.length} spans, oldest first`);
+  out(`${at(started(spans[0]))} → ${at(started(spans.at(-1)))}`);
+  out("");
+  for (const e of spans) {
+    const s = e.source ?? {};
+    const cf = s.cloudflare ?? {};
+    const detail = String(s.jsrpc?.method ?? s.url?.full ?? "").slice(0, 100);
+    const error = e.$metadata?.error;
+    out(
+      `${at(started(e))}  ${took(s.durationMS).padStart(8)}  ${(cf.entrypoint ?? "-").padEnd(28)} ${(cf.durable_object?.id ?? "").slice(0, 8).padEnd(8)}  ${String(s.traceId ?? "").slice(0, 8)}  ${s.name ?? "?"}` +
+        (detail ? `  ${detail}` : "") +
+        (cf.outcome && cf.outcome !== "ok" ? `  [${cf.outcome}]` : "") +
+        (error ? `  ⚠ ${String(error).replace(/\s+/g, " ").slice(0, 160)}` : "")
     );
   }
+  if (spans.length >= limit)
+    out(
+      `\n⚠ hit limit ${limit} — older spans are cut off; narrow --since, --object or --name, or raise --limit (max ${MAX_LIMIT})`
+    );
 }
 
 async function cmdFields(args) {
@@ -452,9 +678,90 @@ function messageText(msg) {
   return JSON.stringify(msg.content ?? msg);
 }
 
+async function cmdWf(args) {
+  const { flags, pos } = parseFlags(args, { bool: ["--json", "--raw"] });
+  const [name, instance] = pos;
+
+  if (!name) {
+    const { res, text } = await request("GET", acct("workflows"));
+    ensureOk(res, text);
+    if (flags.json || flags.raw)
+      return void printBody(text, { raw: flags.raw });
+    const defs = parseJson(text)?.result ?? [];
+    for (const w of defs)
+      out(`- ${w.name}  | class: ${w.class_name}  | script: ${w.script_name}`);
+    return;
+  }
+
+  if (!instance) {
+    const { res, text } = await request(
+      "GET",
+      acct(`workflows/${name}/instances`)
+    );
+    ensureOk(res, text);
+    if (flags.json || flags.raw)
+      return void printBody(text, { raw: flags.raw });
+    const arr = parseJson(text)?.result ?? [];
+    if (!Array.isArray(arr) || arr.length === 0)
+      return void out("no instances");
+    for (const i of arr)
+      out(
+        `${i.id}  ${(i.status ?? "?").padEnd(10)}  ${i.created_on ?? i.created ?? ""}`
+      );
+    return;
+  }
+
+  const { res, text } = await request(
+    "GET",
+    acct(`workflows/${name}/instances/${instance}`)
+  );
+  ensureOk(res, text);
+  if (flags.json || flags.raw) return void printBody(text, { raw: flags.raw });
+  const r = parseJson(text)?.result;
+  if (!r) return void printBody(text);
+  // The API's errors are `{ name, message }`, on the instance and on a step.
+  const describe = (e) =>
+    e && typeof e === "object"
+      ? `${e.name ?? "Error"}: ${e.message ?? JSON.stringify(e)}`
+      : String(e);
+  out(
+    `status: ${r.status}  success: ${r.success}  error: ${r.error ? describe(r.error) : "null"}`
+  );
+  // A task that ended as an answer other than success still finishes its
+  // instance `complete`, so the verdict the pipeline returns is where the
+  // outcome and the steps that ran are recorded. It arrives in the instance's
+  // `output`, beside the reply.
+  const verdict = r.output?.verdict;
+  if (verdict) out(`verdict: ${JSON.stringify(verdict)}`);
+  out(
+    `queued ${r.queued ?? "?"} · start ${r.start ?? "?"} · end ${r.end ?? "?"}`
+  );
+  out(`steps (${r.step_count ?? r.steps?.length ?? 0}):`);
+  // A `step` records `success`, null while it runs or retries. A `sleep` or a
+  // `waitForEvent` — a parked task's question — records `finished` and an
+  // `error` instead, and a `termination` records what stopped the instance.
+  const state = (s) =>
+    s.type === "termination"
+      ? `terminated by ${s.trigger?.source ?? "?"}`
+      : s.success === false || s.error
+        ? "ERROR"
+        : s.success === true || s.finished === true
+          ? "ok"
+          : "pending";
+  for (const s of r.steps ?? []) {
+    const errs = [...(s.attempts ?? []).map((a) => a.error), s.error]
+      .filter(Boolean)
+      .map(describe);
+    out(
+      `  - ${(s.name ?? s.type ?? "?").padEnd(16)} ${state(s)}` +
+        (errs.length ? ` ${errs.join("; ")}` : "")
+    );
+  }
+}
+
 // `cf ai` flags that match one of the AI Gateway metadata keys core stamps on
-// every model call — see `gatewayLogFields` in `@dynamicagents/core/agent`.
-const AI_METADATA_FLAGS = ["task", "agent", "phase", "channel"];
+// every model call — see `gatewayLogFields` in `@dynamicagents/core/model`.
+const AI_METADATA_FLAGS = ["task", "agent", "phase", "subagent"];
 
 // Past this many matches `--all` refuses rather than paging for minutes.
 const AI_ALL_MAX = 2000;
@@ -468,7 +775,7 @@ const AI_ALL_MAX = 2000;
  *
  * `metadata.value` matches a value under *any* key, which is why the metadata
  * flags need no key filter beside them: an agent name, a phase, a task id and a
- * channel id do not collide. Metadata values compare as strings — `"0"` matches
+ * sub-agent class do not collide. Metadata values compare as strings — `"0"` matches
  * a stored `0` and the number `0` matches nothing.
  */
 function aiFilters(flags) {
@@ -616,7 +923,15 @@ async function cmdAi(args) {
     const io = `${l.tokens_in ?? 0}→${l.tokens_out ?? 0}`.padEnd(11);
     const c = `$${(l.cost ?? 0).toFixed(5)}`.padEnd(9);
     const st = l.success ? (l.cached ? "cached" : "ok") : "FAIL";
-    const where = [l.metadata?.agent, l.metadata?.phase, namedEventId(l)]
+    // The task is in the metadata as well as the event id, and there it reads
+    // as itself: a task id is a UUID, which `namedEventId` takes for one AI
+    // Gateway made up.
+    const where = [
+      l.metadata?.agent,
+      l.metadata?.phase,
+      l.metadata?.subAgent,
+      l.metadata?.taskId ?? namedEventId(l)
+    ]
       .filter(Boolean)
       .join(" ");
     out(
@@ -746,14 +1061,8 @@ async function cmdContainers(args) {
   const { flags, pos } = parseFlags(args, { bool: ["--json", "--raw"] });
   const [name] = pos;
 
-  const { res, text } = await request("GET", acct("containers/applications"), {
-    query: [["per_page", "50"]]
-  });
-  ensureOk(res, text);
-
-  const apps = (parseJson(text)?.result ?? []).filter(
-    (a) => !name || String(a.name ?? "").includes(name)
-  );
+  const { apps: all, text } = await listContainerApps();
+  const apps = all.filter((a) => !name || String(a.name ?? "").includes(name));
   // Fetched per app rather than in one call because the API has no bulk
   // rollout endpoint. There are a handful of apps; this is a debugging tool.
   const fetched = [];
@@ -912,12 +1221,14 @@ if (!cmd || cmd === "help" || cmd === "--help" || cmd === "-h") {
   if (!res.ok) process.exit(1);
 } else if (cmd === "logs") {
   await cmdLogs(argv.slice(1));
-} else if (cmd === "wf") {
-  await cmdWf(argv.slice(1));
+} else if (cmd === "spans") {
+  await cmdSpans(argv.slice(1));
 } else if (cmd === "ai") {
   await cmdAi(argv.slice(1));
 } else if (cmd === "fields") {
   await cmdFields(argv.slice(1));
+} else if (cmd === "wf") {
+  await cmdWf(argv.slice(1));
 } else if (cmd === "containers") {
   await cmdContainers(argv.slice(1));
 } else {

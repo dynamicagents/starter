@@ -7,34 +7,42 @@ foundation) and
 capabilities) into a deployable Worker.
 
 The single most useful thing to know: **almost nothing here is framework.** The
-round loop, the durable Subtask rows, the concurrent fan-out, the subagent execution,
-the Durable Object body and the task lifecycle are all in core. What lives here is
-what core deliberately refuses to ship — the words, the config values, and which
-plugins each agent installs.
+turn is `@cloudflare/think`'s; the A2A task, the workflow that runs its steps,
+the step job, delegation to sub-agents — awaited or in the background — and the
+Durable Object bodies are core's. What lives here is what core deliberately
+refuses to ship — the words, the config values, which steps each tenant's task
+runs, which plugins each agent installs, and where each sub-agent works.
+
+Each tenant is three classes in `src/agents/<tenant>/`: a task host
+(`host.ts`, core's `TaskHost`), which owns the A2A task; a pipeline (`workflow.ts`,
+core's `TaskWorkflow`), which runs it as steps; and a step agent (`agent.ts`,
+core's `StepAgent`), which runs a step's job. The mechanism is in core's README.
 
 If you find yourself writing durable-execution logic in this repo, that is the
 signal it belongs in core instead. If you find yourself writing the Durable
 Object a capability lives in — a container, its alarm, its install — that is the
 signal it belongs in plugins. `src/workspace/` holds only config, addresses and
 adapters for the workspace this Worker deploys; the object itself is
-`@dynamicagents/plugins/computer`.
+`@dynamicagents/plugins/workspace`.
 
 ---
 
 ## Where a thing goes
 
-| You are changing…                         | It goes in                              |
-| ----------------------------------------- | --------------------------------------- |
-| what the model is told about a domain     | the plugin that owns that domain        |
-| what the agent _is_                       | `src/agents/<tenant>/soul.ts`           |
-| how a round ends, or a user-facing string | `src/round-policy.ts`                   |
-| which capabilities an agent has           | `src/agents/<tenant>/plugins.ts`        |
-| model ids, budgets, limits                | `src/config.ts`                         |
-| the object a capability runs in           | **`@dynamicagents/plugins`** — not here |
-| cancellation, retries, idempotency, DAGs  | **`@dynamicagents/core`** — not here    |
+| You are changing…                                     | It goes in                              |
+| ----------------------------------------------------- | --------------------------------------- |
+| what the model is told about a domain                 | the plugin that owns that domain        |
+| what the agent _is_                                   | `src/agents/<tenant>/soul.ts`           |
+| a step in a tenant's pipeline                         | `src/agents/<tenant>/workflow.ts`       |
+| a user-facing string, or guidance every soul shares   | `src/copy.ts`                           |
+| which capabilities an agent has                       | `src/agents/<tenant>/plugins.ts`        |
+| a sub-agent: its spec, where it works, what it leaves | `src/agents/<tenant>/children.ts`       |
+| model ids and compaction                              | `src/config.ts`                         |
+| the object a capability runs in                       | **`@dynamicagents/plugins`** — not here |
+| cancellation, recovery, idempotency, delegation       | **`@dynamicagents/core`** — not here    |
 
-`src/round-policy.ts` and `src/config.ts` sit at the top level because two agents
-share them. An agent importing a _sibling's_ module is what `npm run
+`src/copy.ts`, `src/config.ts` and `src/model.ts` sit at the top level because every
+agent shares them. An agent importing a _sibling's_ module is what `npm run
 verify:isolation` fails on, because the sibling's plugin list comes with it — even
 a type-only import, because the next person makes it a value import.
 
@@ -42,20 +50,28 @@ a type-only import, because the next person makes it a value import.
 
 ## Adding and removing agents
 
-```bash
-npm run agent:new <tenant> [--kind round|single]
-npm run agent:remove <tenant>
-```
+Scaffolding an agent belongs to `npm create dynamicagents`, not to a script here.
+Deleting one never edits a deployed migration tag: its Durable Object class goes into
+`deleted_classes` in a new one — the `migrations` comments in `wrangler.jsonc` say why.
 
-Never do it by hand. An agent exists in four places — its directory, `src/index.ts`,
-three blocks in `wrangler.jsonc`, and `scripts/verify-isolation.mjs` — and each
-missed one fails at a different time: a forgotten DO binding at deploy, a forgotten
-`new_sqlite_classes` entry at the first request, a forgotten isolation entry
-_never_, because it just stops checking that agent.
+**An agent is named for what it does:** `coding`, `claude-coordinator`. One with no
+specialty is named for its purpose instead: `generic`. Every tenant's classes then take
+one shape, each in the file named for it:
 
-Add-then-remove must return all four files byte-for-byte to where they started.
-That round trip is the test that keeps the script honest; run it if you change the
-script.
+| class               | file           |
+| ------------------- | -------------- |
+| `<Tenant>Host`      | `host.ts`      |
+| `<Tenant>Workflow`  | `workflow.ts`  |
+| `<Tenant>Agent`     | `agent.ts`     |
+| `<Tenant>Child`     | `children.ts`  |
+| `<Tenant>Workspace` | `workspace.ts` |
+
+An agent with more than one child names each by what it does: `ClaudeCoordinatorWriterChild`,
+`ClaudeCoordinatorPlannerChild`.
+
+**A new class takes a name no deployment has used.** A Durable Object namespace is keyed
+by class name, so a class under a live name inherits every object stored under it. An
+unused name lets one migration tag delete the old class and create the new one.
 
 **A tenant id is a public identifier.** A gatekeeper registers against it and it rides
 in a JWT claim, so renaming one is a re-registration, not a refactor.
@@ -64,21 +80,23 @@ in a JWT claim, so renaming one is a re-registration, not a refactor.
 
 ## The two invariants that have already broken once
 
-**1. Cancellation is checked by the guarded write, never by a probe.**
-`saveTask` returns whether the write applied, and `markWorking` returns
-`"ok" | "canceled"`. Read those. Calling `getTask` first and acting second reopens
-a window in which a cancel lands and the gatekeeper still gets a `completed`
-callback — and that is exactly how this repo's proactive agent drifted from its
-sibling. `test/proactive/workflow.spec.ts` pins both.
+**1. Cancellation is decided by the guarded write, never by a probe.**
+Core's task ledger flips a task to `canceled` in one guarded write, and every later
+write — `markWorking`, the settle that would report it done — is refused against
+it and says so. Read those answers. Calling `getTask` first and acting second
+reopens a window in which a cancel lands and the gatekeeper still gets a
+`completed` callback. Core's task host and step agent read them, and core's
+specs pin both. A hook written here — `onTaskSettled`, a spec's `settle` — runs
+after the flip and acts on it; it never decides it.
 
 **2. `verify:isolation` is the check that survives a refactor.**
 This Worker deploys as one bundle containing every agent, so grepping `dist/`
 proves nothing. Each agent's entry is bundled alone and esbuild's **metafile** —
 the module list, not a string search — is checked for plugins that agent does not
-install, plus `@dynamicagents/core/dist/round/` for the agent that does not delegate.
+install, and each pipeline for an agent class it imports: a pipeline names its
+step agent's binding, never its class.
 
-It has caught two real leaks: a shared base class living in one agent's directory,
-and (after the core split) it is what holds proactive at ~1.5 MiB instead of ~2.5.
+It has caught a real leak: a shared base class living in one agent's directory.
 
 ---
 
@@ -115,7 +133,8 @@ several frames away.
 This repo is not versioned and publishes nothing, but it still has a released line:
 **`main` is what a fork builds.** It pins published versions of core and plugins, and
 nothing on it may depend on a commit that is not released. Development lands on
-`next`, by squash-merged PR.
+`next`, by squash-merged PR, and each green push to `next` deploys agents.loopingai.org —
+see "Continuous deployment" in the README.
 
 **`next` pins published versions too, by default.** A change that needs core or
 plugins work not yet published may point `next` at their `main` by git ref for as long

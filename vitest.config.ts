@@ -14,12 +14,14 @@ import { createVcr, recordFromEnv } from "@dynamicagents/core/testing/node";
 
 /**
  * The whole suite runs in the Workers runtime (workerd via miniflare) through a
- * single `cloudflareTest()` pool — including the loop specs, which drive the
- * round and turn operations against an injected mock model and a `FakeSession`.
+ * single `cloudflareTest()` pool.
  *
- * The pool reads `wrangler.jsonc` directly (main, compat settings, the AI
- * binding, and the three agent DOs with their SQLite migration) so this config
- * cannot drift from it; secrets are supplied via `process.env` below.
+ * The pool reads `wrangler.jsonc` directly (compat settings, the AI binding, and
+ * the agent DOs with their SQLite migration) so this config cannot drift from
+ * it; secrets are supplied via `process.env` below. Its `main` is
+ * `test/worker.ts`, which is this deployment's Worker plus each agent on a
+ * scripted model — Workers AI has no local mode, so a real model cannot finish
+ * a turn here.
  */
 
 // Test defaults for the required secrets. Real env vars — from CI or the shell —
@@ -30,8 +32,7 @@ import { createVcr, recordFromEnv } from "@dynamicagents/core/testing/node";
 // per-origin, so the key the gatekeeper pins is too.
 process.env.A2A_SIGNING_KEY ??= JSON.stringify(TEST_AGENT_PRIVATE_JWK);
 process.env.GATEKEEPER_ORIGINS ??= JSON.stringify([GATEKEEPER_ORIGIN]);
-process.env.ARC_API_KEY ??= "test-key";
-// The coder's. Never real: nothing in the suite reaches GitHub — the repo tools
+// Both coders'. Never real: nothing in the suite reaches GitHub — the repo tools
 // are tested against an injected `exec`. It exists only so `secrets.required` is
 // satisfied and the pool stops warning.
 //
@@ -47,7 +48,7 @@ process.env.GITHUB_TOKEN ??= "test-token";
 // real deploy takes when an operator leaves them unset.
 process.env.GITHUB_NAME ??= "";
 process.env.GITHUB_EMAIL ??= "";
-// claude-coder's credential pool. Never real, and nothing in the suite reaches
+// `claude-coordinator`'s credential pool. Never real, and nothing in the suite reaches
 // Anthropic — the egress gateway is tested against a stubbed `fetch` in
 // `@dynamicagents/plugins`, and no spec here starts a session. One line per
 // entry in `wrangler.jsonc`'s `secrets.required`, since that list is what the
@@ -83,6 +84,7 @@ export default defineConfig({
   plugins: [
     cloudflareTest({
       wrangler: { configPath: "./wrangler.jsonc" },
+      main: "./test/worker.ts",
       // Required, not just the default. Workers AI has no local execution mode
       // (Miniflare always proxies `AI` through a remote-connection worker), and
       // leaving this unset — even though `false` is its documented default —
@@ -94,30 +96,78 @@ export default defineConfig({
       remoteBindings: false,
       miniflare: {
         outboundService: vcr.outboundService,
-        // Test-only Durable Object bindings for the subagent facet classes.
+        // Test-only Durable Object bindings: the scripted agents in
+        // `test/worker.ts`, the hosts pointed at them, and every sub-agent
+        // class.
         //
-        // In production they need NO binding and NO `new_sqlite_classes` entry —
-        // facet storage is created beneath the bound parent agent — but the
-        // Vitest pool only marks *bound* classes as DO classes, so without this
-        // `ctx.exports.ReactiveSubagent` is not facet-compatible and
-        // `subAgent()` throws. See "Notes for testing" in
+        // In production a sub-agent needs NO binding and NO `new_sqlite_classes`
+        // entry — facet storage is created beneath the bound parent agent — but
+        // the pool only marks *bound* classes as DO classes, so without these
+        // `runAgentTool` cannot create a child. See "Notes for testing" in
         // node_modules/agents/docs/sub-agents.md.
         durableObjects: {
-          REACTIVE_SUBAGENT: {
-            className: "ReactiveSubagent",
+          TEST_GENERIC_AGENT: {
+            className: "TestGenericAgent",
             useSQLite: true
           },
-          ARC_PLAYER_SUBAGENT: {
-            className: "ArcPlayerSubagent",
+          TEST_CODING_AGENT: { className: "TestCodingAgent", useSQLite: true },
+          TEST_CLAUDE_COORDINATOR_AGENT: {
+            className: "TestClaudeCoordinatorAgent",
             useSQLite: true
           },
-          CODER_SUBAGENT: {
-            className: "CoderSubagent",
+          TEST_GENERIC_HOST: {
+            className: "TestGenericHost",
             useSQLite: true
           },
-          CLAUDE_CODER_SUBAGENT: {
-            className: "ClaudeCoderSubagent",
+          TEST_CODING_HOST: {
+            className: "TestCodingHost",
             useSQLite: true
+          },
+          TEST_CLAUDE_COORDINATOR_HOST: {
+            className: "TestClaudeCoordinatorHost",
+            useSQLite: true
+          },
+          GENERIC_GENERAL: { className: "GenericChild", useSQLite: true },
+          CODING_CHILD: { className: "CodingChild", useSQLite: true },
+          CLAUDE_COORDINATOR_WRITER_CHILD: {
+            className: "ClaudeCoordinatorWriterChild",
+            useSQLite: true
+          },
+          CLAUDE_COORDINATOR_REVISER_CHILD: {
+            className: "ClaudeCoordinatorReviserChild",
+            useSQLite: true
+          },
+          CLAUDE_COORDINATOR_PLANNER_CHILD: {
+            className: "ClaudeCoordinatorPlannerChild",
+            useSQLite: true
+          },
+          TEST_GENERIC_CHILD: {
+            className: "TestGenericChild",
+            useSQLite: true
+          },
+          TEST_CODING_CHILD: { className: "TestCodingChild", useSQLite: true },
+          TEST_CLAUDE_COORDINATOR_WRITER_CHILD: {
+            className: "TestClaudeCoordinatorWriterChild",
+            useSQLite: true
+          },
+          TEST_CLAUDE_COORDINATOR_PLANNER_CHILD: {
+            className: "TestClaudeCoordinatorPlannerChild",
+            useSQLite: true
+          }
+        },
+        // The scripted pipelines, beside the real ones `wrangler.jsonc` binds.
+        workflows: {
+          TEST_GENERIC_WORKFLOW: {
+            name: "test-generic-workflow",
+            className: "TestGenericWorkflow"
+          },
+          TEST_CODING_WORKFLOW: {
+            name: "test-coding-workflow",
+            className: "TestCodingWorkflow"
+          },
+          TEST_CLAUDE_COORDINATOR_WORKFLOW: {
+            name: "test-claude-coordinator-workflow",
+            className: "TestClaudeCoordinatorWorkflow"
           }
         }
       }
@@ -125,6 +175,10 @@ export default defineConfig({
   ],
   test: {
     include: ["test/**/*.spec.ts"],
+    // A lifecycle spec waits on real alarms: a background run reports in a
+    // later turn.
+    testTimeout: 60_000,
+    hookTimeout: 60_000,
     // Node realm. Last chance to flush a cassette; each is already written when
     // its test releases it, so this is only a safety net.
     globalSetup: ["@dynamicagents/core/testing/vcr-global-setup"]

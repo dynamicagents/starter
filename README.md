@@ -444,16 +444,16 @@ them.
 
 ## Continuous deployment
 
-This repository's own deployment, `agents.loopingai.org`, follows `next`. On every push to
-`next`, [`deploy.yml`](.github/workflows/deploy.yml) waits for Test to pass on that commit,
+This repository's own deployment, `agents.loopingai.org`, follows `main`. On every push to
+`main`, [`deploy.yml`](.github/workflows/deploy.yml) waits for Test to pass on that commit,
 then runs `npx wrangler deploy` for it — building and pushing the container images with the
 Worker — and polls `/.well-known/agent-card.json` until it answers 200.
 That shows the domain still serves; it cannot tell the new version from the old. A commit
-that is no longer `next`'s tip by the time its run gets there stands aside rather than roll
+that is no longer `main`'s tip by the time its run gets there stands aside rather than roll
 production back.
 
-What `next` installs is what runs, a git ref onto core's or plugins' `main` included. `main`
-does not deploy; it is what a fork builds.
+What `main` installs is what runs, a git ref onto core's or plugins' `main` included —
+running those here is how unreleased work upstream is exercised.
 
 It needs a GitHub environment named `deployment` holding these secrets:
 
@@ -467,9 +467,9 @@ The Worker's runtime secrets are not in GitHub. Set them once with `wrangler sec
 they persist across deploys, and a deploy fails naming any in `secrets.required` that was
 never set.
 
-A repository made from this template skips the deploy, since it has neither the environment
-nor the domain. To deploy yours the same way, create the environment, then name your
-repository in `deploy.yml`'s `if:` and your origin in its URLs.
+A copy of this repository skips the deploy, since it has neither the environment nor the
+domain. To deploy yours the same way, create the environment, then name your repository in
+`deploy.yml`'s `if:` and your origin in its URLs.
 
 ---
 

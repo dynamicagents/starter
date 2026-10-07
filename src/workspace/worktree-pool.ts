@@ -22,7 +22,7 @@ export interface PoolRepo {
   path: string;
   /** The origin it was cloned from, which is the only one the parent pushes to. */
   url: string;
-  /** What the branch started from, as a reviewer names it — `origin/next`, a sha. */
+  /** What the branch started from, as a reviewer names it — `origin/main`, a sha. */
   baseRef: string;
   /** The same, as a commit. Anything past it is the branch's work. */
   base: string;

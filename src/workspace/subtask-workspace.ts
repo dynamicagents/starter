@@ -582,7 +582,14 @@ export function subtaskWorkspaces(config: {
     const recorded = new Map(worktree.repos.map((repo) => [repo.path, repo]));
     let mode = worktree.mode ?? "new";
 
-    if (!(await stub.checkoutDir())) {
+    // A worktree used before keeps its checkout, and its container went when its
+    // last session settled. The fetch below starts the next one, and a start is
+    // where a snapshot restores — offered later, it would meet a container
+    // already up, perhaps reinstalling from its last install.
+    const reused = (await stub.checkoutDir()) !== undefined;
+    if (reused) await seeded(parent, name);
+
+    if (!reused) {
       /**
        * A clone that failed part-way leaves a repository nobody recorded — the
        * clone initialises before it fetches — and a second clone into it is
@@ -740,8 +747,17 @@ export function subtaskWorkspaces(config: {
 
     // A snapshot is restored only into a cold start, and the steps above started
     // this worktree's container — so it stops, and the install below starts the
-    // next one from the snapshot: seconds, where installing takes minutes.
-    if (await seeded(parent, name)) await stub.releaseContainer();
+    // next one from the snapshot: seconds, where installing takes minutes. A
+    // release refused — an install already running, a pull still moving — keeps
+    // the container, and the install below joins or runs in it.
+    if (await seeded(parent, name)) {
+      const { released } = await stub.releaseContainer();
+      if (!released)
+        console.info(
+          `[${config.label}] a worktree installs instead of restoring the parent's dependencies`,
+          { worktree: name }
+        );
+    }
 
     // Returns as soon as the command is spawned. Awaiting a dependency install
     // here would put minutes in front of the session waiting for it.

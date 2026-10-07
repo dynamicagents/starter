@@ -1147,10 +1147,10 @@ describe("the branch a writing session is told about", () => {
     expect(brief).toMatch(/Commit inside each one you\nchange/);
     // Whether a submodule is installed is the repository's install's to say. A
     // session that assumes not wipes a tree it was given; one that assumes so
-    // runs a suite against no dependencies.
-    expect(brief).toMatch(
-      /Run `npm ci` in a submodule whose `node_modules` is\nempty/
-    );
+    // runs a suite against no dependencies, or a broken or outdated tree.
+    expect(brief).toMatch(/when its `node_modules` is empty/);
+    expect(brief).toMatch(/when this workspace's install failed/);
+    expect(brief).toMatch(/after you\nchange its lockfile/);
   });
 
   /** Only commits leave a session, and it has to hear that before it starts. */

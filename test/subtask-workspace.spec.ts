@@ -93,8 +93,13 @@ function harness(opts: {
   keepThrows?: boolean;
   /** Throw from stopping the session. */
   stopThrows?: boolean;
-  /** The parent has a dependency snapshot, and whether a worktree takes it. */
-  snapshot?: { seeded: boolean };
+  /**
+   * The parent has a dependency snapshot, and whether a worktree takes it — per
+   * offer, in order, the last answer repeating.
+   */
+  snapshot?: { seeded: boolean[] };
+  /** Refuse to release a container, as one with an install running does. */
+  releaseRefused?: boolean;
 }) {
   const calls: string[] = [];
   let cloneFails = opts.cloneFails;
@@ -113,13 +118,14 @@ function harness(opts: {
     releaseContainer: async () => {
       released.push(current);
       events.push(`release ${current}`);
-      return { released: true };
+      return { released: !opts.releaseRefused };
     },
     depsSnapshot: async () =>
       opts.snapshot ? { id: "snap-1", from: current } : undefined,
     seedDepsSnapshot: async (record: { from: string }) => {
       events.push(`seed ${current} from ${record.from}`);
-      return { seeded: opts.snapshot?.seeded ?? false };
+      const answers = opts.snapshot?.seeded ?? [];
+      return { seeded: answers.shift() ?? false };
     },
     checkoutDir: async () => dirs[current],
     advisories: async () => [],
@@ -133,6 +139,7 @@ function harness(opts: {
     },
     gitFetch: async (req: { dir: string }) => {
       calls.push(`fetch ${req.dir}`);
+      events.push(`fetch ${current}`);
       return { ok: true as const, detail: "fetched" };
     },
     noteCheckout: async () => {
@@ -268,14 +275,52 @@ describe("preparing a worktree for a writing session", () => {
     const { subtasks, events } = harness({
       selected: "acme/api",
       checkout: CHECKOUT,
-      snapshot: { seeded: true }
+      snapshot: { seeded: [true] }
     });
 
     await subtasks.resolve(ctx);
 
-    // Released before the install, whose start is the cold one a snapshot
-    // restores into.
+    // Offered once the checkout is there to check it against, and released
+    // before the install, whose start is the cold one a snapshot restores into.
     expect(events).toEqual([
+      `fetch ${SLOT0}`,
+      `seed ${SLOT0} from caller|acme/api`,
+      `release ${SLOT0}`,
+      `install ${SLOT0}`
+    ]);
+  });
+
+  it("offers a reused worktree the snapshot before its fetch starts the container", async () => {
+    const { subtasks, events } = harness({
+      selected: "acme/api",
+      checkout: CHECKOUT,
+      dirs: { [SLOT0]: CHECKOUT.dir },
+      // Taken before the fetch; the later offer finds its own snapshot fits.
+      snapshot: { seeded: [true, false] }
+    });
+
+    await subtasks.resolve(ctx);
+
+    expect(events).toEqual([
+      `seed ${SLOT0} from caller|acme/api`,
+      `fetch ${SLOT0}`,
+      `seed ${SLOT0} from caller|acme/api`,
+      `install ${SLOT0}`
+    ]);
+  });
+
+  it("installs in the container it has when the release is refused", async () => {
+    const { subtasks, events } = harness({
+      selected: "acme/api",
+      checkout: CHECKOUT,
+      snapshot: { seeded: [true] },
+      releaseRefused: true
+    });
+
+    await subtasks.resolve(ctx);
+
+    expect(events).toEqual([
+      `fetch ${SLOT0}`,
       `seed ${SLOT0} from caller|acme/api`,
       `release ${SLOT0}`,
       `install ${SLOT0}`
@@ -286,12 +331,13 @@ describe("preparing a worktree for a writing session", () => {
     const { subtasks, events } = harness({
       selected: "acme/api",
       checkout: CHECKOUT,
-      snapshot: { seeded: false }
+      snapshot: { seeded: [false] }
     });
 
     await subtasks.resolve(ctx);
 
     expect(events).toEqual([
+      `fetch ${SLOT0}`,
       `seed ${SLOT0} from caller|acme/api`,
       `install ${SLOT0}`
     ]);

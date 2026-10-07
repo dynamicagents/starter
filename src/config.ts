@@ -115,16 +115,20 @@ export const WORKSPACE_INSTANCE: WorkspaceObjectConfig["instance"] = {
 };
 
 /**
- * `claude-coordinator`'s size: {@link WORKSPACE_INSTANCE} with four cores.
+ * `claude-coordinator`'s size, which is {@link WORKSPACE_INSTANCE}'s. It keeps a
+ * constant of its own because its workload differs, so this is where it diverges
+ * if it has to.
  *
- * About half of a writing session's wall-clock is the target's checks and
- * tests, one process each, which no number of containers speeds up. The same
- * suite took ~200 s here at 2 vCPU and 80 s on a 4-vCPU CI runner. Four is the
- * custom-size ceiling, and its 3 GiB-per-vCPU floor sets the memory, which
- * bills for the whole run.
+ * Cores are the only dimension that would buy it anything, and they are what it
+ * cannot have cheaply. About half of a writing session's wall-clock is the
+ * target's checks and tests, one process each, which no number of containers
+ * speeds up: the same suite took ~200 s at 2 vCPU and 80 s on a 4-vCPU CI
+ * runner. Against that, every added core bills memory for the whole run at the
+ * 3 GiB-per-vCPU floor above, and the fan-out multiplies it — the containers
+ * block in `wrangler.jsonc` carries that arithmetic.
  */
 export const CLAUDE_COORDINATOR_WORKSPACE_INSTANCE: WorkspaceObjectConfig["instance"] =
-  { ...WORKSPACE_INSTANCE, vcpu: 4, memoryMib: 12288 };
+  { ...WORKSPACE_INSTANCE };
 
 /**
  * What bounds one Claude Code session, and **this is the whole list**.

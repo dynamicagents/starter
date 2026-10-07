@@ -105,8 +105,9 @@
   // worktree of its own while the parent keeps one, so N sessions at once want N+1
   // instances of `ClaudeCoordinatorWorkspace` — `CLAUDE_COORDINATOR` in
   // `src/config.ts` carries why. A full fan-out plus its parent, three times over,
-  // is around 4% of the concurrent vCPU Cloudflare documents per account, and 3%
-  // of the memory. What the width costs is the bill, because memory and disk are billed
+  // is around 2% of the concurrent vCPU Cloudflare documents per account, and 1.5%
+  // of the memory — both scale with `CLAUDE_COORDINATOR_WORKSPACE_INSTANCE`, so
+  // resizing it moves them. What the width costs is the bill, because memory and disk are billed
   // on provisioned resources for as long as an instance runs — the same reason a
   // settled task stops its container rather than waiting out the idle deadline.
   // `npm run cf -- containers` is where to watch it.

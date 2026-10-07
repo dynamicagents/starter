@@ -165,13 +165,41 @@ function sleep(ms: number, signal?: AbortSignal): Promise<void> {
   });
 }
 
+/**
+ * One call of the wait tool below, as a spec watches it: a cancel spec has to
+ * know the turn reached the wait, and that the wait is over before it can say a
+ * late callback never came.
+ */
+export interface WaitCall {
+  /** Which tool: a parent's `test_wait`, or a sub-agent's `child_sleep`. */
+  tool: string;
+  seconds: number;
+  /** Set when the wait is over: aborted with the turn, or slept in full. */
+  ended?: "aborted" | "slept";
+}
+
+/**
+ * Every wait so far, in call order. The Durable Objects share this module with
+ * the spec, which is also how `interceptGatekeeper`'s `fetch` stub catches their
+ * callbacks.
+ */
+export const waits: WaitCall[] = [];
+
 /** A tool that waits in the turn, for a spec that cancels one mid-flight. */
 const sleepTool = (name: string) =>
   tool({
     description: `Wait (${name}).`,
     inputSchema: z.object({ seconds: z.number().min(0) }),
     execute: async ({ seconds }, { abortSignal }) => {
-      await sleep(seconds * 1000, abortSignal);
+      const call: WaitCall = { tool: name, seconds };
+      waits.push(call);
+      try {
+        await sleep(seconds * 1000, abortSignal);
+      } catch (err) {
+        call.ended = "aborted";
+        throw err;
+      }
+      call.ended = "slept";
       return { slept: seconds };
     }
   });

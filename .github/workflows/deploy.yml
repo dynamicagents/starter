@@ -1,26 +1,25 @@
 name: Deploy
 
-# Every green push to `next` deploys agents.loopingai.org. Triggered by the push
-# rather than by Test finishing: `workflow_run` fires only for the copy of a
-# workflow on the default branch, `main`, so it would run main's deploy against
-# next's code. The `tested` job waits for Test instead.
+# Every green push to `main` deploys agents.loopingai.org. The push alone does
+# not show a green suite, so the `tested` job waits for Test's own run on the
+# commit before anything ships.
 on:
   push:
-    branches: [next]
+    branches: [main]
 
 # Nothing by default; each job takes only what it needs.
 permissions: {}
 
 jobs:
   # A deploy never ships a commit whose suite was red, and the push alone does
-  # not show a green one: next's ruleset requires `test` on the PR but not an
+  # not show a green one: main's ruleset requires `test` on the PR but not an
   # up-to-date branch, so a squash can land on a base the PR never ran against.
   # So this waits for Test's own run on this commit.
   #
-  # agents.loopingai.org is this repository's deployment. A repository made
-  # from the template inherits this file but not the credentials or the domain,
-  # so the deploy skips there rather than failing every push; a copy opts in by
-  # naming itself here and changing the URLs below.
+  # agents.loopingai.org is this repository's deployment. A copy of this
+  # repository inherits this file but not the credentials or the domain, so the
+  # deploy skips there rather than failing every push; a copy opts in by naming
+  # itself here and changing the URLs below.
   tested:
     if: github.repository == 'dynamicagents/starter'
     # Test's own timeout, plus room to queue.
@@ -55,7 +54,7 @@ jobs:
     needs: tested
     # A second green push waits for an in-flight deploy rather than killing it
     # mid-rollout. A newer arrival does replace one still *pending*: every
-    # deploy ships all of next, so the one it replaces has nothing left to ship.
+    # deploy ships all of main, so the one it replaces has nothing left to ship.
     concurrency:
       group: deploy
       cancel-in-progress: false
@@ -85,11 +84,11 @@ jobs:
       # Test runs finish in their own order, not the order commits landed, so a
       # slow run for an older commit can reach here after a fast one for a newer
       # commit, and deploying it would roll production back. Only the commit
-      # still at next's tip deploys. An older one stands aside: the newer
+      # still at main's tip deploys. An older one stands aside: the newer
       # commit's run ships it, or, if that suite is red, nothing ships.
       #
       # Asked here, inside the concurrency slot and just before the first step
-      # that changes anything, because a run can wait in the queue while next
+      # that changes anything, because a run can wait in the queue while main
       # moves, and a re-run of a failed deploy must ask again rather than trust
       # an answer from before.
       - id: tip
@@ -99,11 +98,11 @@ jobs:
           SHA: ${{ github.sha }}
         run: |
           set -euo pipefail
-          tip="$(gh api "repos/$GH_REPO/commits/next" --jq .sha)"
+          tip="$(gh api "repos/$GH_REPO/commits/main" --jq .sha)"
           if [ "$tip" = "$SHA" ]; then
             echo "current=true" >>"$GITHUB_OUTPUT"
           else
-            echo "next has moved on to $tip; not deploying $SHA over it."
+            echo "main has moved on to $tip; not deploying $SHA over it."
             echo "current=false" >>"$GITHUB_OUTPUT"
           fi
 

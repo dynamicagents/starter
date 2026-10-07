@@ -11,8 +11,9 @@ import {
  * guess); the commands are here, because they vary per repository in a way a
  * hard-coded `npm ci` would get wrong for most of them.
  *
- * Runs on every checkout, and again for every new container: the tree lives on
- * the container's disk, so it goes with the container. It runs *outside* a turn
+ * Runs on every checkout, and again for every new container that cannot start
+ * from a snapshot of one that ran it: the tree lives on the container's disk, so
+ * it goes with the container. It runs *outside* a turn
  * because `npm ci` measured 225 s on slack-gatekeeper, and a turn is cut after
  * at most fifteen minutes, losing the tool call in flight.
  *

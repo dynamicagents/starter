@@ -532,6 +532,26 @@ export function subtaskWorkspaces(config: {
     );
   };
 
+  /**
+   * Offer a worktree the dependency snapshot of the parent's checkout, which it
+   * was cut from at the same path, and say whether it took it — see
+   * `seedDepsSnapshot` in `@dynamicagents/plugins/workspace`. Both are this
+   * caller's. Never refuses a session: a worktree without it installs.
+   */
+  const seeded = async (parent: string, worktree: string): Promise<boolean> => {
+    try {
+      const record = await stubFor(parent).depsSnapshot();
+      if (!record) return false;
+      return (await stubFor(worktree).seedDepsSnapshot(record)).seeded;
+    } catch (err) {
+      console.warn(
+        `[${config.label}] could not offer a worktree the parent's dependencies`,
+        { worktree, err: String(err) }
+      );
+      return false;
+    }
+  };
+
   /** A session in a workspace's own checkout: a scratchpad's. */
   const placeIn = async (name: string): Promise<SessionPlace> => {
     const dir = await checkoutIn(name);
@@ -550,7 +570,8 @@ export function subtaskWorkspaces(config: {
   async function prepare(
     worktree: Worktree,
     checkout: ActiveCheckout,
-    name: string
+    name: string,
+    parent: string
   ): Promise<Worktree> {
     const stub = stubFor(name);
     const run = (
@@ -717,6 +738,11 @@ export function subtaskWorkspaces(config: {
       );
     }
 
+    // A snapshot is restored only into a cold start, and the steps above started
+    // this worktree's container — so it stops, and the install below starts the
+    // next one from the snapshot: seconds, where installing takes minutes.
+    if (await seeded(parent, name)) await stub.releaseContainer();
+
     // Returns as soon as the command is spawned. Awaiting a dependency install
     // here would put minutes in front of the session waiting for it.
     await stub.startInstall({ dir: checkout.dir, repo: worktree.repo });
@@ -825,7 +851,12 @@ export function subtaskWorkspaces(config: {
       await config.admit(name);
       const ready = claimed.ready
         ? claimed
-        : await prepare(claimed, checkout, name);
+        : await prepare(
+            claimed,
+            checkout,
+            name,
+            workspaceName(config.callerKey(), repo)
+          );
       // `note`, not `set`: this enrols the worktree in the sweep's candidate list
       // without routing the parent's own tools to it. A workspace the sweep cannot
       // see falls back to its own seven-day alarm with no backstop.

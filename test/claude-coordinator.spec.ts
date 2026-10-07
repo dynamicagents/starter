@@ -1145,9 +1145,12 @@ describe("the branch a writing session is told about", () => {
     expect(brief).toContain("You are on `claude-coordinator/task-1/1`");
     expect(brief).toContain("- `core`\n- `starter`");
     expect(brief).toMatch(/Commit inside each one you\nchange/);
-    // The install is the root's alone, and a session that does not know that
-    // runs a submodule's suite against no dependencies.
-    expect(brief).toMatch(/Run `npm ci` in a\nsubmodule/);
+    // Whether a submodule is installed is the repository's install's to say. A
+    // session that assumes not wipes a tree it was given; one that assumes so
+    // runs a suite against no dependencies.
+    expect(brief).toMatch(
+      /Run `npm ci` in a submodule whose `node_modules` is\nempty/
+    );
   });
 
   /** Only commits leave a session, and it has to hear that before it starts. */

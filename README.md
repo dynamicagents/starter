@@ -1,26 +1,32 @@
 # da-starter
 
-**A working, deployable Dynamic Agent on Cloudflare Workers.**
+**The reference deployment of the Dynamic Agents train.**
 
 Zero-trust A2A, a durable task lifecycle, delegation to sub-agents, and one
-continuous, searchable conversation per caller. Clone it, generate keys, deploy.
+continuous, searchable conversation per caller — composed into one Worker on
+Cloudflare and running at `agents.loopingai.org`, which follows this repo's `main`.
 
-It ships **several example agents in one Worker** — grow the one you want and
-delete the rest. Adding or removing a capability is a single line.
+To start a project of your own, run **`npm create dynamicagents`**, which scaffolds
+gates, leaders and agents on the same framework. Read this repo to see what those
+pieces look like once they are wired together and deployed.
 
-Everything here is an _example_. The turn is `@cloudflare/think`'s, and the A2A task
-around it and delegation to sub-agents live in `@dynamicagents/core`, so this repo is
-only what is actually yours: each agent's plugins, soul, manifest and sub-agents, and
-the config and copy they share.
+It mounts **several agents in one Worker**, and adding or removing a capability is a
+single line. Almost none of it is framework: the turn is `@cloudflare/think`'s, and
+the A2A task around it and delegation to sub-agents live in `@dynamicagents/core`, so
+what is here is only the part that is yours to write — each agent's plugins, soul,
+manifest and sub-agents, and the config and copy they share.
 
-> Part of a three-package split:
+> The rest of the train:
 > [`@dynamicagents/core`](https://github.com/dynamicagents/core) (the mandatory foundation) ·
 > [`@dynamicagents/plugins`](https://github.com/dynamicagents/plugins) (optional capabilities) ·
-> **`da-starter`** (this — a working agent that composes them).
+> [`create-dynamicagents`](https://github.com/dynamicagents/create-dynamicagents) (the scaffolding CLI) ·
+> **`da-starter`** (this — the deployment that composes them).
 
 ---
 
 ## Quick start
+
+These steps run _this_ repository — locally, or as a deployment of your own.
 
 ```bash
 npm install
@@ -444,16 +450,16 @@ them.
 
 ## Continuous deployment
 
-This repository's own deployment, `agents.loopingai.org`, follows `next`. On every push to
-`next`, [`deploy.yml`](.github/workflows/deploy.yml) waits for Test to pass on that commit,
+This repository's own deployment, `agents.loopingai.org`, follows `main`. On every push to
+`main`, [`deploy.yml`](.github/workflows/deploy.yml) waits for Test to pass on that commit,
 then runs `npx wrangler deploy` for it — building and pushing the container images with the
 Worker — and polls `/.well-known/agent-card.json` until it answers 200.
 That shows the domain still serves; it cannot tell the new version from the old. A commit
-that is no longer `next`'s tip by the time its run gets there stands aside rather than roll
+that is no longer `main`'s tip by the time its run gets there stands aside rather than roll
 production back.
 
-What `next` installs is what runs, a git ref onto core's or plugins' `main` included. `main`
-does not deploy; it is what a fork builds.
+What `main` installs is what runs, a git ref onto core's or plugins' `main` included —
+running those here is how unreleased work upstream is exercised.
 
 It needs a GitHub environment named `deployment` holding these secrets:
 
@@ -467,9 +473,9 @@ The Worker's runtime secrets are not in GitHub. Set them once with `wrangler sec
 they persist across deploys, and a deploy fails naming any in `secrets.required` that was
 never set.
 
-A repository made from this template skips the deploy, since it has neither the environment
-nor the domain. To deploy yours the same way, create the environment, then name your
-repository in `deploy.yml`'s `if:` and your origin in its URLs.
+A copy of this repository skips the deploy, since it has neither the environment nor the
+domain. To deploy yours the same way, create the environment, then name your repository in
+`deploy.yml`'s `if:` and your origin in its URLs.
 
 ---
 

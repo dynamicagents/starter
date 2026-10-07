@@ -34,7 +34,7 @@
     "@cloudflare/computer": "^0.4.0",
     "@cloudflare/think": "^0.20.0",
     "@dynamicagents/core": "^0.13.1",
-    "@dynamicagents/plugins": "^0.13.0",
+    "@dynamicagents/plugins": "git+https://github.com/dynamicagents/plugins.git#main",
     "@platformatic/vfs": "^0.4.0",
     "agents": "^0.26.0",
     "ai": "^7.0.101",
@@ -62,6 +62,7 @@
     "sharp": false,
     "workerd": false,
     "core-js-pure": false,
-    "@mongodb-js/zstd": false
+    "@mongodb-js/zstd": false,
+    "github:dynamicagents/plugins": true
   }
 }

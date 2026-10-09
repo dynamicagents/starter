@@ -94,6 +94,41 @@ const OWNERSHIP_NOTE = `This branch and its pull request are yours, within limit
   something lands. This holds whatever the repository's own instructions say.`;
 
 /**
+ * The bar a writing session works to, and when a deviation from what it was
+ * handed is the person's call rather than its own.
+ *
+ * Here rather than inside the delivery and revision notes below, because both
+ * need it and a session that reaches the question has to have been told the
+ * channel before it starts. The failure it addresses is the one a session
+ * commits silently: the smaller, safer change, taken because asking costs a
+ * round trip and reported as success. The threshold is design, shape and scope
+ * — a mechanical difference is the session's own, and goes in its summary.
+ */
+const DESIGN_NOTE = `## The bar for this work
+
+You are the engineer on this, not a courier for the quickest diff that passes. A design
+that is still right in a year is worth more than finishing early.
+
+**A deviation of design, shape or scope is a question, not a call you make quietly.**
+Where the work shows a better shape than the one you were handed — a refactor it has made
+obviously worth doing, a different place for the change, a scope that has to grow for the
+design to be right — say what you were going to do, what you would do instead, and what
+each costs, then ask before you build it. Growing the task for a design worth having is
+wanted here, and there may be reasons you cannot see for the shape you were given: that is
+why it is a question and not a decision.
+
+The failure to avoid is the quiet one: taking the smaller, safer change you can finish now
+because asking costs a round trip. That ends with a session reporting success and a person
+reading a design they did not want.
+
+Mechanical deviations are yours — a helper under another name, a test in another file, an
+order the code forces. Make them, and say so in your summary.
+
+When you have a question, do not guess. Commit and push what you have, and answer with
+\`needs_input\` and the question, with the options you see: you are resumed with their
+answer, and what you committed is kept.`;
+
+/**
  * How often a **writing** session runs the project's checks: on the tree it
  * commits, against the base its brief or plan already gives. Each full run is
  * minutes of container time the caller waits through, and unsaid a session
@@ -122,11 +157,7 @@ and why, how you checked it, and what deserves a close look. Anything broken you
 outside the task goes there, not into the diff.
 
 If the work changed nothing — the task was to find something out, or there was nothing to
-do — push nothing and open nothing.
-
-If you reach a decision only the person who asked can make, do not guess. Commit and push
-what you have, and answer with \`needs_input\` and the question: you will be resumed with
-their answer.`;
+do — push nothing and open nothing.`;
 
 /**
  * How a **revising** session works on the pull request it opened. What brought
@@ -141,12 +172,17 @@ is at the top.
 
 - **A self-review**: have a subagent with none of this conversation review the pull
   request's diff against what it was for, then improve what holds up — correctness and
-  tests first, then simplicity. Nothing outside the task.
+  tests first, then the shape of what you wrote: modularity, the idiom of the code around
+  it, duplication and debt you added. **The diff is the subject**: this pass makes what is
+  there better, and does not go looking for work elsewhere or for behaviour to add.
 - **A review**: answer it in one pass. Read the review's body as well as its threads,
   since a review can raise points that are not threads, and read each point against the
-  code — a reviewer is sometimes confidently wrong. Fix what holds up and push, then reply
-  on every thread, naming the commit or saying why not, and resolve it either way
-  (\`resolveReviewThread\`, through \`gh api graphql\`).
+  code — a reviewer is sometimes confidently wrong. A point you would answer by adding
+  behaviour this pull request was not for, or by materially changing its design or scope,
+  is not a fix: ask rather than build it under cover of a review. Correcting what a point
+  shows is wrong is a fix, however visibly the behaviour changes. Fix what holds up and
+  push, then reply on every thread, naming the commit or saying why not, and
+  resolve it either way (\`resolveReviewThread\`, through \`gh api graphql\`).
 - **A failing check**: read its log (\`gh run view --log-failed\`), fix the cause, push.
 - **Something the person asked for**: do it, on this branch.
 
@@ -166,12 +202,12 @@ export const WRITE_OUTPUT = {
       type: "string",
       enum: ["done", "needs_input", "blocked"],
       description:
-        "`done`: the work is finished, or there was nothing to change. `needs_input`: you stopped at a decision only the person who asked can make. `blocked`: you could not finish, and `summary` says where you stopped and why."
+        "`done`: the work is finished, or there was nothing to change. `needs_input`: you stopped on a question for the person — a decision only they can make, or a deviation of design, shape or scope that is theirs to approve. `blocked`: you could not finish, and `summary` says where you stopped and why."
     },
     summary: {
       type: "string",
       description:
-        "For the agent that briefed you, which relays it to the person: what you changed and why, or what you found. On a pull request, say whether you answered its review and how its checks stand. Plain and short."
+        "For the agent that briefed you, which relays it to the person: what you changed and why, or what you found. On a pull request, say whether you answered its review and how its checks stand. Say where you departed from the brief or the plan, including what you judged too small to stop for. Plain and short."
     },
     pullRequest: {
       type: "object",
@@ -201,7 +237,7 @@ export const WRITE_OUTPUT = {
     question: {
       type: "string",
       description:
-        "Required with `needs_input`: the one question only the person can answer, with the options you see."
+        "Required with `needs_input`: the one question for the person, with the options you see. For a deviation, say what you were going to do, what you would do instead, and what each costs."
     }
   },
   required: ["status", "summary"],
@@ -439,6 +475,8 @@ export function sessionBrief(
       "",
       branchNote(writing.branch, writing.submodules, writing.continues),
       "",
+      DESIGN_NOTE,
+      "",
       CHECK_NOTE,
       "",
       pullRequest ? reviseNote(pullRequest) : DELIVERY_NOTE
@@ -467,16 +505,18 @@ function planNote(plan: string, resumed: boolean): string {
 
 The plan you wrote in this conversation was approved, as it stands below. Planning is
 over: you are no longer in plan mode, so edit and run what the work needs. Carry the
-plan out. Where the work shows it is wrong, say so in your reply rather than quietly
-doing something else.
+plan out. Where the work shows the plan is wrong, or a better shape becomes evident with
+the code in front of you, say what you would do instead and ask before you build it: the
+approval was for this plan.
 
 ${plan}`;
   }
   return `## The plan
 
 This is the plan for the work above, as the person who asked for it read it. Carry it
-out. Where the work shows it is wrong, say so in your reply rather than quietly doing
-something else.
+out. Where the work shows the plan is wrong, or a better shape becomes evident with the
+code in front of you, say what you would do instead and ask before you build it: the
+approval was for this plan.
 
 ${plan}`;
 }
@@ -484,11 +524,14 @@ ${plan}`;
 /**
  * What a **planning** session is told about its answer and, for an edit, about
  * the plan it changes. What each field of the answer is for is in the schema
- * the CLI hands it, so it is not said twice here.
+ * the CLI hands it, so it is not said twice here: how to plan is this brief's,
+ * what the plan has to contain is `PLAN_OUTPUT`'s in `./plans.ts`.
  *
  * An edit that carries on from the conversation that wrote the plan is told
  * only what is new — what the person said — since the plan, the code it read
- * and these instructions are already in its context.
+ * and these instructions are already in its context. Which is why the stance
+ * below is on the other path only, and the revising note carries just the part
+ * a comment puts in question: whether to comply with it.
  */
 export function planBrief(
   task: string,
@@ -502,7 +545,10 @@ export function planBrief(
         `## Revising your plan
 
 The person read the plan you wrote and asked for the changes above. Revise it, and answer
-again through the StructuredOutput tool with the whole plan as it should now stand.`
+again through the StructuredOutput tool with the whole plan as it should now stand.
+
+Where what they asked for would make the plan worse, or there is a better way to get what
+they are after, revise to their ask and say so in \`lastReply\`: they read both and choose.`
       ]
     : [
         task,
@@ -513,7 +559,17 @@ again through the StructuredOutput tool with the whole plan as it should now sta
 
 You are writing a plan, not making the change: you are in Claude Code's plan mode, and
 anything that would change the tree is refused. Read what the change will touch, and
-answer through the StructuredOutput tool.`
+answer through the StructuredOutput tool.`,
+        "",
+        `## Planning it
+
+Work out more than one way in before you write one down, and bring the person with you:
+where a real choice exists, weigh it in the plan rather than presenting the one path you
+settled on. Where the request names an approach and a different one would serve it better,
+say so and why — "you asked for X; Z gets you that, because…" is wanted here, not
+impertinent. What you cannot settle from the code — a trade-off only the person can rank, a
+constraint you suspect but cannot read — goes to them as a question rather than into an
+assumption buried in the plan.`
       ];
   if (editing?.plan && !editing.resumed) {
     parts.push("", "## The plan you are changing", "", editing.plan);

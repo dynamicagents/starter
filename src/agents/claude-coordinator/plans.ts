@@ -72,12 +72,14 @@ export const WRITER_DESCRIPTION = [
   "names the pull request.",
   "",
   "Give it **one coherent change**, described as you would to an engineer: what",
-  "should be true when it is done, and how to tell. It is expensive to start and",
-  "cheap to let run, so 'add the endpoint, its tests and wire it up' is one",
-  "session, not three.",
+  "should be true when it is done, how to tell, and what matters about the design",
+  "where you know it. It is expensive to start and cheap to let run, so 'add the",
+  "endpoint, its tests and wire it up' is one session, not three.",
   "",
   "It cannot ask you anything mid-run. It stops instead, with a question for you to",
-  "put to the person.",
+  "put to the person — a decision only they can make, or a deviation of design, shape",
+  "or scope it will not take on its own. A stop like that is the session doing its",
+  "job: it is answered, not re-briefed into the simpler path.",
   "",
   "To build an approved plan, pass its id as `plan`. To add to a branch that has",
   "no pull request yet — a session that stopped for a decision, or work a cancel",
@@ -118,6 +120,13 @@ export const REVISER_DESCRIPTION = [
   "landed, not what to do about it. Before it finishes it looks once at the",
   "review and the checks, and answers whatever landed while it worked.",
   "",
+  "A self-review pass improves the pull request it already has: the shape of that",
+  "diff, its modularity, the debt in it — not new behaviour and not work elsewhere.",
+  "It stops and asks where answering a review point would add behaviour this pull",
+  "request was not for, or materially change its design or scope, rather than build",
+  "that under cover of a review. Correcting what a point shows is wrong is a fix,",
+  "however visibly the behaviour changes, and it makes those in the one pass.",
+  "",
   "One session at a time on a pull request: while one is running, wait for its",
   "report rather than start another."
 ].join("\n");
@@ -130,6 +139,12 @@ export const PLANNER_DESCRIPTION = [
   "back is the plan's id, its title and the session's account of it — not the",
   "plan itself: the person you ask to approve it reads it whole, from the link",
   "that goes with your question.",
+  "",
+  "The plan weighs the ways in rather than describing the one it settled on: where a",
+  "real choice exists it is in the plan with what each side costs, and where a better",
+  "approach than the one asked for exists the plan says so. So its account back to you",
+  "may carry a question or a recommendation only the person can settle — put that to",
+  "them with the plan rather than resolving it yourself.",
   "",
   "To change a plan, call this again with `plan` set to its id, and say what",
   "to change: the session that wrote it revises it where it can, and the new",
@@ -158,12 +173,12 @@ export const PLAN_OUTPUT = {
     plan: {
       type: "string",
       description:
-        "The plan, in Markdown, for the person who approves it: what will change and where, what stays as it is, and how the result will be checked. Complete on its own — the session that carries it out usually continues this conversation, but may start without it and have only this. What you established about the base goes in it as fact, so that session compares against it instead of finding it out again. Name no branch: that session is given one, and it is the pull request's head."
+        "The plan, in Markdown, for the person who approves it: what will change and where, what stays as it is, and how the result will be checked. Complete on its own — the session that carries it out usually continues this conversation, but may start without it and have only this. What you established about the base goes in it as fact, so that session compares against it instead of finding it out again. Where a real choice existed — another shape, another place for the change, a smaller change that solves most of it — the plan says what you weighed and what decided it, with the cost on each side. Where the request named an approach and another is better, say so and why, and say what following the request would mean. Where there was only one sensible way, write nothing about alternatives: a section that lists none is noise in what the person reads. Name no branch: that session is given one, and it is the pull request's head."
     },
     lastReply: {
       type: "string",
       description:
-        "What you tell the agent that asked for the plan, which does not read the plan itself: what it does in two or three sentences, and anything the agent should know — assumptions you made, questions only the person can answer, what you could not check."
+        "What you tell the agent that asked for the plan, which does not read the plan itself: what it does in two or three sentences, and anything the agent should know — assumptions you made, questions only the person can answer, a shape you would recommend over the one the request named, what you could not check. You cannot stop to ask mid-run, so this is where a question reaches the person: the agent puts it to them with the plan."
     }
   },
   required: ["title", "plan", "lastReply"],

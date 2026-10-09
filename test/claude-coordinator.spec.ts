@@ -35,8 +35,10 @@ import {
 import {
   createPlan,
   ownsPlan,
-  PLAN_LABEL
+  PLAN_LABEL,
+  PLAN_OUTPUT
 } from "@/agents/claude-coordinator/plans";
+import { SOUL } from "@/agents/claude-coordinator/soul";
 import {
   notResumable,
   planBrief,
@@ -624,6 +626,23 @@ describe("a plan", () => {
     expect(planBrief(TASK)).toContain("plan mode");
   });
 
+  /**
+   * The plan is what the person decides from, so a session that worked out one
+   * way in and wrote it down has left them nothing to decide. Pinned because
+   * the stance is prose a later edit would read as filler.
+   */
+  it("asks the planning session to weigh the ways in, and to say when a better one exists", () => {
+    const brief = planBrief(TASK);
+    expect(brief).toContain("## Planning it");
+    expect(brief).toMatch(
+      /weigh it in the plan rather than presenting the one/
+    );
+    expect(brief).toMatch(
+      /Where the request names an approach and a different one would serve it better/
+    );
+    expect(brief).toMatch(/goes to them as a question/);
+  });
+
   it("is edited with its latest version and what was said about it in the brief", () => {
     const brief = planBrief(TASK, undefined, {
       plan: "# v1\n\nthe first plan",
@@ -644,6 +663,42 @@ describe("a plan", () => {
     expect(brief).toContain("- Comment: smaller, please");
     expect(brief).not.toContain("## The plan you are changing");
     expect(brief).not.toContain("## `gh` in this container");
+    // The stance it was told on the way in is still in its context; what a
+    // comment puts in question is whether to comply with it.
+    expect(brief).not.toContain("## Planning it");
+  });
+
+  /**
+   * A comment is the person's, and it can still be worse than the plan it
+   * changes. Complying silently loses the one reader who could choose.
+   */
+  it("is revised to the person's comment, and says so where the comment makes it worse", () => {
+    const brief = planBrief(TASK, undefined, {
+      said: ["Comment: drop the second table"],
+      resumed: true
+    });
+    expect(brief).toMatch(
+      /Where what they asked for would make the plan worse/
+    );
+    expect(brief).toMatch(/they read both and choose/);
+  });
+
+  /**
+   * Both halves are pinned, because they pull against each other: a plan that
+   * weighs nothing leaves the person nothing to decide, and one that always
+   * carries an alternatives section pads what they read with "none".
+   */
+  it("asks for the alternatives that existed, and for nothing where none did", () => {
+    const { plan, lastReply } = PLAN_OUTPUT.properties;
+    expect(plan.description).toMatch(/what you weighed and what decided it/);
+    expect(plan.description).toMatch(
+      /only one sensible way, write nothing about alternatives/
+    );
+    // The planner has no `needs_input`: `lastReply` is the whole channel.
+    expect(lastReply.description).toMatch(
+      /a shape you would recommend over the one the request named/
+    );
+    expect(lastReply.description).toMatch(/cannot stop to ask mid-run/);
   });
 });
 
@@ -1203,6 +1258,65 @@ describe("the branch a writing session is told about", () => {
     expect(brief).toContain("resolve it either way");
     expect(brief).toContain("Before you finish, look once");
     expect(brief).not.toContain("## Delivering it");
+    // A revision needs the stop channel as much as a build does, and this
+    // brief carries no delivery note: `DESIGN_NOTE` is where it comes from.
+    expect(brief).toContain("## The bar for this work");
+    expect(brief).toContain("`needs_input`");
+  });
+
+  /**
+   * The failure this note exists for is silent: a session that finds a better
+   * shape mid-work, takes the smaller change it can finish now, and reports
+   * success. Pinned with the threshold, which is what makes it actionable —
+   * design, shape and scope are asked about, a mechanical difference is not.
+   */
+  it("tells a writing session the bar, and to ask rather than settle for a smaller shape", () => {
+    const brief = sessionBrief(TASK, undefined, {
+      branch: "claude-coordinator/task-1/1",
+      submodules: [],
+      continues: false
+    });
+
+    expect(brief).toContain("## The bar for this work");
+    expect(brief).toContain(
+      "**A deviation of design, shape or scope is a question, not a call you make quietly.**"
+    );
+    expect(brief).toMatch(
+      /taking the smaller, safer change you can finish now/
+    );
+    expect(brief).toMatch(/Growing the task for a design worth having is/);
+    expect(brief).toMatch(/Mechanical deviations are yours/);
+    expect(brief).toContain("`needs_input`");
+    // A session told to find something out and change nothing has no branch,
+    // no pull request and nothing to deviate from.
+    expect(sessionBrief(TASK)).not.toContain("## The bar for this work");
+  });
+
+  /**
+   * The two halves of a revision that pull in opposite directions: a
+   * self-review makes what is there better without going looking for work,
+   * while a point answered by adding behaviour or redesigning is asked about.
+   * The narrowing is pinned too — a correctness fix changes behaviour by
+   * definition, and reading it as a deviation would stop the one pass.
+   */
+  it("aims a self-review at the diff, and asks about a review point that is not a fix", () => {
+    const brief = sessionBrief(
+      "A self-review, please.",
+      undefined,
+      { branch: "feat/x", submodules: [], continues: true },
+      undefined,
+      { number: 12 }
+    );
+
+    expect(brief).toContain("**The diff is the subject**");
+    expect(brief).toMatch(
+      /does not go looking for work elsewhere or for behaviour to add/
+    );
+    expect(brief).toMatch(/A point you would answer by adding/);
+    expect(brief).toMatch(/is not a fix: ask rather than/);
+    expect(brief).toMatch(
+      /Correcting what a point\n  shows is wrong is a fix, however visibly the behaviour changes/
+    );
   });
 
   /** Each full run is minutes of the person's wait, and a baseline it was given is one. */
@@ -1765,6 +1879,25 @@ describe("a writing session's answer", () => {
     ]);
   });
 
+  /**
+   * The fields are what the schema puts in front of the session, so the
+   * threshold has to be in them too: a `needs_input` described as a product
+   * decision alone is a session that builds a shape it was going to ask about.
+   */
+  it("describes a stop as a deviation too, and asks the summary for the rest", () => {
+    const { status, summary, question } = WRITE_OUTPUT.properties;
+    expect(status.description).toMatch(
+      /a deviation of design, shape or scope that is theirs to approve/
+    );
+    expect(question.description).toMatch(
+      /what you would do instead, and what each costs/
+    );
+    // What was too small to stop for still has to reach the person.
+    expect(summary.description).toMatch(
+      /where you departed from the brief or the plan/
+    );
+  });
+
   it("is reported with its pull request and the checks it ran", () => {
     const report = sessionReport(
       ended({
@@ -1806,5 +1939,35 @@ describe("a writing session's answer", () => {
     );
 
     expect(report).toContain("**It named no question.**");
+  });
+});
+
+/**
+ * The relay, which is the half a session cannot enforce: it stops with a
+ * question, and what reaches the person is whatever the parent does next.
+ * Matched on short fragments, because this soul is prose that gets rewritten:
+ * what is pinned is the rule, not the sentence carrying it.
+ */
+describe("what the coordinator does with a session's question", () => {
+  it("relays it rather than settling it, and does not re-brief the simpler path", () => {
+    expect(SOUL).toContain("nothing softened and nothing dropped");
+    expect(SOUL).toContain("re-briefing the session to take the simpler path");
+  });
+
+  /**
+   * Against the line above it, which tells it to hold the scope it was asked
+   * for: a session saying the scope has to grow is not scope creep to refuse.
+   */
+  it("treats a scope that has to grow as the person's call", () => {
+    expect(SOUL).toContain("the person's to decide and not yours to refuse");
+  });
+
+  /**
+   * A planner cannot stop to ask, so its account is the only place its
+   * question exists — and the approval opt-out is the one path that would
+   * otherwise drop it on the way past.
+   */
+  it("still asks a caller who does not approve plans what only they can decide", () => {
+    expect(SOUL).toContain("what they opted out of is reading a plan");
   });
 });

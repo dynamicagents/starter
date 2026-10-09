@@ -122,8 +122,10 @@ export const REVISER_DESCRIPTION = [
   "",
   "A self-review pass improves the pull request it already has: the shape of that",
   "diff, its modularity, the debt in it — not new behaviour and not work elsewhere.",
-  "It stops and asks where answering a review point would change behaviour or grow",
-  "the work materially, rather than build that under cover of a review.",
+  "It stops and asks where answering a review point would add behaviour this pull",
+  "request was not for, or materially change its design or scope, rather than build",
+  "that under cover of a review. Correcting what a point shows is wrong is a fix,",
+  "however visibly the behaviour changes, and it makes those in the one pass.",
   "",
   "One session at a time on a pull request: while one is running, wait for its",
   "report rather than start another."

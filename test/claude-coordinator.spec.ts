@@ -1258,8 +1258,8 @@ describe("the branch a writing session is told about", () => {
     expect(brief).toContain("resolve it either way");
     expect(brief).toContain("Before you finish, look once");
     expect(brief).not.toContain("## Delivering it");
-    // A revision needs the stop channel as much as a build does, and the
-    // delivery note that used to carry it is not in this brief.
+    // A revision needs the stop channel as much as a build does, and this
+    // brief carries no delivery note: `DESIGN_NOTE` is where it comes from.
     expect(brief).toContain("## The bar for this work");
     expect(brief).toContain("`needs_input`");
   });
@@ -1295,7 +1295,9 @@ describe("the branch a writing session is told about", () => {
   /**
    * The two halves of a revision that pull in opposite directions: a
    * self-review makes what is there better without going looking for work,
-   * while a review point that would change behaviour is not a fix to apply.
+   * while a point answered by adding behaviour or redesigning is asked about.
+   * The narrowing is pinned too — a correctness fix changes behaviour by
+   * definition, and reading it as a deviation would stop the one pass.
    */
   it("aims a self-review at the diff, and asks about a review point that is not a fix", () => {
     const brief = sessionBrief(
@@ -1310,8 +1312,11 @@ describe("the branch a writing session is told about", () => {
     expect(brief).toMatch(
       /does not go looking for work elsewhere or for behaviour to add/
     );
-    expect(brief).toMatch(/A point you would answer by changing/);
+    expect(brief).toMatch(/A point you would answer by adding/);
     expect(brief).toMatch(/is not a fix: ask rather than/);
+    expect(brief).toMatch(
+      /Correcting what a point\n  shows is wrong is a fix, however visibly the behaviour changes/
+    );
   });
 
   /** Each full run is minutes of the person's wait, and a baseline it was given is one. */
@@ -1939,8 +1944,8 @@ describe("a writing session's answer", () => {
 
 /**
  * The relay, which is the half a session cannot enforce: it stops with a
- * question, and what reaches the person is whatever the parent does next. Two
- * fragments, both short, because this soul is prose that gets rewritten —
+ * question, and what reaches the person is whatever the parent does next.
+ * Matched on short fragments, because this soul is prose that gets rewritten:
  * what is pinned is the rule, not the sentence carrying it.
  */
 describe("what the coordinator does with a session's question", () => {
@@ -1955,5 +1960,14 @@ describe("what the coordinator does with a session's question", () => {
    */
   it("treats a scope that has to grow as the person's call", () => {
     expect(SOUL).toContain("the person's to decide and not yours to refuse");
+  });
+
+  /**
+   * A planner cannot stop to ask, so its account is the only place its
+   * question exists — and the approval opt-out is the one path that would
+   * otherwise drop it on the way past.
+   */
+  it("still asks a caller who does not approve plans what only they can decide", () => {
+    expect(SOUL).toContain("what they opted out of is reading a plan");
   });
 });

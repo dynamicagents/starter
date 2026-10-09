@@ -177,11 +177,12 @@ is at the top.
   there better, and does not go looking for work elsewhere or for behaviour to add.
 - **A review**: answer it in one pass. Read the review's body as well as its threads,
   since a review can raise points that are not threads, and read each point against the
-  code — a reviewer is sometimes confidently wrong. A point you would answer by changing
-  behaviour, or by work much larger than the gap it names, is not a fix: ask rather than
-  build it under cover of a review. Fix what holds up and push, then reply on every
-  thread, naming the commit or saying why not, and resolve it either way
-  (\`resolveReviewThread\`, through \`gh api graphql\`).
+  code — a reviewer is sometimes confidently wrong. A point you would answer by adding
+  behaviour this pull request was not for, or by materially changing its design or scope,
+  is not a fix: ask rather than build it under cover of a review. Correcting what a point
+  shows is wrong is a fix, however visibly the behaviour changes. Fix what holds up and
+  push, then reply on every thread, naming the commit or saying why not, and
+  resolve it either way (\`resolveReviewThread\`, through \`gh api graphql\`).
 - **A failing check**: read its log (\`gh run view --log-failed\`), fix the cause, push.
 - **Something the person asked for**: do it, on this branch.
 

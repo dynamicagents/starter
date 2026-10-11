@@ -139,7 +139,7 @@
           // the Dockerfile block carries why, and why it still needs a GH_TOKEN.
           // The checksum is pinned because the build downloads the tarball.
           "build_vars": {
-            "CLAUDE_CODE_VERSION": "2.1.289",
+            "CLAUDE_CODE_VERSION": "2.1.296",
             "GH_VERSION": "2.101.0",
             "GH_SHA256": "9bca2d1c16825f109907a23307628a2f0698fbf99662b73a5cf0b020293072b8"
           }

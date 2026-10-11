@@ -129,6 +129,14 @@ repo is always briefly behind. `PLUGIN_CONTRACT_VERSION` is asserted at DO start
 a skew fails with a sentence naming the plugin rather than a structural-type error
 several frames away.
 
+**`@cloudflare/think` is pinned to an exact version here, and a caret on it is a
+bug.** Think's `0.x` minors each carry their own `agents` floor, so a range resolves
+to whichever Think is newest and that one may demand an `agents` newer than the one
+installed — an `ERESOLVE` on a clean install, out of a manifest nobody edited. Core
+and plugins bound it by range because a library has to leave a consumer room; this
+is the deployment, and it has no one to leave room for. Move it as a deliberate edit
+beside the `agents` bump it needs, never by widening it.
+
 ### `main`, and what it installs
 
 **`main` is the only branch.** A PR into it squash-merges, and each green push deploys

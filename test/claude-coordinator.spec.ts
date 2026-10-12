@@ -17,6 +17,7 @@ import {
   ClaudeCoordinatorPlannerChild,
   ClaudeCoordinatorReviserChild,
   ClaudeCoordinatorWriterChild,
+  carriedTranscript,
   claimSession,
   forgetKept,
   keepNote,
@@ -832,6 +833,69 @@ describe("carrying a plan on from the session that wrote it", () => {
     ).not.toHaveProperty("fork");
   });
 
+  /**
+   * One session, one page: an edit carries on the planner's conversation, so it
+   * files on the planner's transcript, and the thread gets no second link. A
+   * build forks the conversation into a session of its own, with its own page.
+   */
+  it("files an edit on the plan's page, and a build on a page of its own", async () => {
+    const place = worktree(3);
+    const {
+      edit,
+      build: built,
+      plan
+    } = await onParent(async (agent) => {
+      const plan = await planned(agent, place);
+      await filedBy(place, plan.runId, "s-plan", plan);
+      const edit = await preparePlanner(
+        {
+          ...planning(plan.id),
+          input: { task: "smaller, please", plan: plan.id },
+          parent: agent.pluginContext()
+        },
+        placingPool(place).pool
+      );
+      return {
+        edit,
+        build: (await build(agent, plan.id, place)).runtime,
+        plan
+      };
+    });
+
+    expect(carriedTranscript({ runtime: edit })).toBe(plan.runId);
+    expect(carriedTranscript({ runtime: built })).toBeUndefined();
+  });
+
+  /** An edit of an edit is still the planner's session, so still its page. */
+  it("keeps an edited plan on its first page, however many edits on", async () => {
+    const place = worktree(3);
+    const { runtime, plan } = await onParent(async (agent) => {
+      const plan = await planned(agent, place);
+      await filedBy(place, plan.runId, "s-plan", plan);
+      // The first edit carried the planner's page, and recorded it with its
+      // own session.
+      const edit = planning(plan.id);
+      await preparePlanner(
+        { ...edit, parent: agent.pluginContext() },
+        placingPool(place).pool
+      );
+      const version = await file(plan.id, "# The plan\n\nDo less.");
+      await workspaceAt(place.workspaceName).noteSession(edit.runId, {
+        sessionId: "s-plan",
+        transcript: plan.runId,
+        plan: plan.id,
+        version
+      });
+      const runtime = await preparePlanner(
+        { ...planning(plan.id), parent: agent.pluginContext() },
+        placingPool(place).pool
+      );
+      return { runtime, plan };
+    });
+
+    expect(carriedTranscript({ runtime })).toBe(plan.runId);
+  });
+
   /** A later edit wins over the version it revised, wherever it ran. */
   it("builds from the session that filed the latest version", async () => {
     const first = worktree(3);
@@ -884,9 +948,10 @@ describe("carrying a plan on from the session that wrote it", () => {
       plan: "p1",
       version: 2
     });
-    await stub.noteSession("run-1", { sessionId: "s1" });
+    await stub.noteSession("run-1", { sessionId: "s1", transcript: "run-0" });
     expect(await stub.sessionOf("run-1")).toEqual({
       sessionId: "s1",
+      transcript: "run-0",
       plan: "p1",
       version: 2
     });
@@ -1652,6 +1717,17 @@ describe("going back to a branch", () => {
     expect(
       (runtime as { resume: Record<string, unknown> }).resume
     ).not.toHaveProperty("fork");
+  });
+
+  /** Going back to a branch is the session that wrote it, so its page too. */
+  it("files on the transcript of the session it carries on", async () => {
+    const place = { ...worktree(3), branch: BRANCH };
+    const { runtime, runId } = await onParent(async (agent) => {
+      const runId = await worked(agent, place, "s-build");
+      return { ...(await continuing(agent, place)), runId };
+    });
+
+    expect(carriedTranscript({ runtime })).toBe(runId);
   });
 
   it("starts fresh on the branch when it lands in another worktree", async () => {

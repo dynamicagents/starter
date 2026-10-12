@@ -302,6 +302,8 @@ export function recordPlanRun(
 export interface PlannedSession {
   runId: string;
   sessionId: string;
+  /** The transcript its notes went on — see `SessionNote.transcript`. */
+  transcript: string;
   workspaceName: string;
   /** Its worktree, to be placed in again; none for a scratchpad. */
   near?: { repo: string; slot: number };
@@ -353,6 +355,7 @@ export async function plannedSession(
     return {
       runId: run.run_id,
       sessionId: note.sessionId,
+      transcript: note.transcript ?? run.run_id,
       workspaceName: run.workspace,
       ...(run.repo !== null && run.slot !== null
         ? { near: { repo: run.repo, slot: run.slot } }

@@ -448,6 +448,12 @@ interface CarryOn {
   fork?: true;
   /** The run that wrote it, whose record goes if the conversation is gone. */
   fromRun: string;
+  /**
+   * The transcript the conversation's notes are on, when this run carries
+   * the conversation on rather than forking it: the same session, so the
+   * same page. A fork is a session of its own, with a page of its own.
+   */
+  transcript?: string;
 }
 
 /**
@@ -466,8 +472,24 @@ function carryOn(
   return {
     sessionId: planned.sessionId,
     fromRun: planned.runId,
-    ...(options.fork ? { fork: true as const } : {})
+    ...(options.fork
+      ? { fork: true as const }
+      : { transcript: planned.transcript })
   };
+}
+
+/**
+ * The transcript a run files on, when it is not its own: the conversation's it
+ * carries on. A sub-agent spec's `transcriptKey`, so a plan edited or a pull
+ * request revised goes on the page the session already has, and the thread is
+ * not given a second link to it.
+ */
+export function carriedTranscript({
+  runtime
+}: {
+  runtime: Record<string, unknown> | undefined;
+}): string | undefined {
+  return carryOnOf(runtime)?.transcript;
 }
 
 function carryOnOf(
@@ -670,6 +692,8 @@ abstract class ClaudeCodeRun extends SubAgent<Env> {
       );
     }
     const resume = carryOnOf(runtime);
+    // Recorded with the session, so a run carrying it on finds the page.
+    const transcript = resume?.transcript ?? this.name;
     return claudeCodeModel({
       config: claudeCodeConfig(this.env),
       // A new stub per open: a re-attach after a cut stream opens it again, and
@@ -700,7 +724,7 @@ abstract class ClaudeCodeRun extends SubAgent<Env> {
       // Every run's, so a later one can carry on from it: see `noteSession`
       // on the workspace.
       onSession: (record) =>
-        this.#noteSession(place, { sessionId: record.sessionId }),
+        this.#noteSession(place, { sessionId: record.sessionId, transcript }),
       brief: (task) =>
         plan
           ? this.#planBrief(task, place, plan, resume !== undefined)
@@ -727,7 +751,12 @@ abstract class ClaudeCodeRun extends SubAgent<Env> {
               this.name,
               outcome,
               (sessionId, version) =>
-                this.#noteSession(place, { sessionId, plan: plan.id, version })
+                this.#noteSession(place, {
+                  sessionId,
+                  transcript,
+                  plan: plan.id,
+                  version
+                })
             )
           : this.#report(outcome, place, writes);
       }
@@ -1101,7 +1130,8 @@ export class ClaudeCoordinatorWriterChild extends ClaudeCodeRun {
     description: WRITER_DESCRIPTION,
     inputSchema: WRITE_INPUT,
     prepare: prepareWriter,
-    settle: settleWriter
+    settle: settleWriter,
+    transcriptKey: carriedTranscript
   } as SubAgentSpec<never, never>;
   protected readonly kind = "write";
 }
@@ -1118,7 +1148,8 @@ export class ClaudeCoordinatorReviserChild extends ClaudeCodeRun {
     inputSchema: REVISE_INPUT,
     prepare: (ctx: SubAgentPrepareContext<ReviseInput, Env>) =>
       prepareReviser(ctx),
-    settle: settleWriter
+    settle: settleWriter,
+    transcriptKey: carriedTranscript
   } as SubAgentSpec<never, never>;
   protected readonly kind = "write";
 }
@@ -1136,7 +1167,8 @@ export class ClaudeCoordinatorPlannerChild extends ClaudeCodeRun {
     description: PLANNER_DESCRIPTION,
     inputSchema: PLAN_INPUT,
     prepare: preparePlanner,
-    settle: settlePlanner
+    settle: settlePlanner,
+    transcriptKey: carriedTranscript
   } as SubAgentSpec<never, never>;
   protected readonly kind = "plan";
 }

@@ -52,9 +52,10 @@ export const GENERIC: AgentTuning = {
  *
  * Not much wider, because compaction is also when Think re-renders the system
  * prompt: until then the model reads the soul and memory the conversation
- * started with, whatever has been deployed or written since. At 240k a coordinator ran four days and 141k tokens on a soul
- * two deploys old and an empty memory block, while every call carried the
- * whole conversation.
+ * started with, whatever has been deployed or written since. So this number is
+ * how stale a long conversation's prompt can get, as well as how much each call
+ * carries; a conversation that takes days to reach it runs for days on a soul
+ * and memory nobody can update.
  *
  * Do not point the model at a Claude model: reaching one on a subscription
  * credential is what `claude-coordinator` exists for, and it needs a whole container

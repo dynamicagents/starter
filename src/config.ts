@@ -50,6 +50,12 @@ export const GENERIC: AgentTuning = {
  * `coding`. Wider than generic's, for one reason: what the model can no
  * longer see it pays a container round trip to rediscover.
  *
+ * Not much wider, because compaction is also when Think re-renders the system
+ * prompt: until then the model reads the soul and memory the conversation
+ * started with, whatever has been deployed or written since. At 240k a coordinator ran four days and 141k tokens on a soul
+ * two deploys old and an empty memory block, while every call carried the
+ * whole conversation.
+ *
  * Do not point the model at a Claude model: reaching one on a subscription
  * credential is what `claude-coordinator` exists for, and it needs a whole container
  * to do safely; see `src/agents/claude-coordinator/agent.ts`.
@@ -57,7 +63,7 @@ export const GENERIC: AgentTuning = {
 export const CODING: AgentTuning = {
   modelId: "@cf/zai-org/glm-5.3-flash",
   compactionModelId: "@cf/zai-org/glm-5.3",
-  compactAfterTokens: 240_000,
+  compactAfterTokens: 100_000,
   keepRecentTokens: 12_000
 };
 

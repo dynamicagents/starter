@@ -177,6 +177,7 @@ export class ClaudeCoordinatorWorkspace extends WorkspaceObjectBase {
       : await this.ctx.storage.get<SessionNote>(key);
     await this.ctx.storage.put(key, {
       sessionId: note.sessionId,
+      ...(note.transcript ? { transcript: note.transcript } : {}),
       ...(filed?.plan ? { plan: filed.plan } : {}),
       ...(filed?.version !== undefined ? { version: filed.version } : {})
     });
@@ -199,6 +200,11 @@ const SESSION_KEY = "claude-session:";
 /** A run's Claude Code session, as this workspace records it. */
 export interface SessionNote {
   sessionId: string;
+  /**
+   * The transcript its notes went on: the run's own, or the one it carried on
+   * — what a run continuing this conversation files on too.
+   */
+  transcript?: string;
   /** A plan this session filed a version of: a planning run's. */
   plan?: string;
   /** Which version: the sequence of the entry it filed on the plan's page. */

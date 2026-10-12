@@ -144,11 +144,14 @@ describe("a sub-agent's notes reach the thread as one link", () => {
     expect(matched?.route).toBe("page");
     const token = matched!.token;
 
-    // The same token the transcript was opened under — so the link a reader is
-    // given and the artifact core filed against this task are one artifact.
+    // A transcript, and the run's own: core files each sub-agent run on a page
+    // of its own, so nothing is opened under the task.
+    expect((await artifacts().artifactState(token))?.kind).toBe(
+      SESSION_TRANSCRIPT_KIND
+    );
     expect(
       await artifacts().tokenFor(SESSION_TRANSCRIPT_KIND, accepted.id)
-    ).toBe(token);
+    ).toBeNull();
 
     const res = await get(`/a/${token}/events`);
     expect(res.status).toBe(200);

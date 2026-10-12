@@ -33,7 +33,7 @@
     "@a2a-js/sdk": "^1.2.0",
     "@cloudflare/computer": "^0.5.0",
     "@cloudflare/think": "0.20.2",
-    "@dynamicagents/core": "^0.14.0",
+    "@dynamicagents/core": "git+https://github.com/dynamicagents/core.git#main",
     "@dynamicagents/plugins": "^0.14.0",
     "@platformatic/vfs": "^0.5.0",
     "agents": "^0.28.0",
@@ -62,6 +62,7 @@
     "sharp": false,
     "workerd": false,
     "core-js-pure": false,
-    "@mongodb-js/zstd": false
+    "@mongodb-js/zstd": false,
+    "github:dynamicagents/core": true
   }
 }

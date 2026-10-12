@@ -106,6 +106,7 @@ export async function branchSession(
     return {
       runId: run.run_id,
       sessionId: note.sessionId,
+      transcript: note.transcript ?? run.run_id,
       workspaceName: run.workspace,
       ...(run.repo !== null && run.slot !== null
         ? { near: { repo: run.repo, slot: run.slot } }

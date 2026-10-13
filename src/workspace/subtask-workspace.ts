@@ -1,3 +1,4 @@
+import { parseRepo } from "@dynamicagents/plugins/repo";
 import {
   sessionAdvisory,
   workspaceName,
@@ -42,6 +43,39 @@ export function selectedRepo(selected: string | undefined): string | undefined {
   const worktree = parseWorktreeRepo(selected);
   if (worktree) return worktree.repo;
   return selected.startsWith("<") ? undefined : selected;
+}
+
+/**
+ * The repository a session is placed in, and whose worktrees the parent's
+ * reads are shown: the root of the one selected — see `ActiveRepo.rootOf`.
+ */
+export function placementRepo(active: ActiveRepo): string | undefined {
+  const selected = selectedRepo(active.get());
+  return selected === undefined ? undefined : active.rootOf(selected);
+}
+
+/**
+ * The repositories a `.gitmodules` file names, as `owner/repo` — read as text,
+ * since it is read from GitHub rather than from a checkout. A url
+ * {@link submoduleCloneUrl} would not clone from, or one naming no repository,
+ * is left out.
+ */
+export function submoduleRepos(
+  gitmodules: string,
+  parentUrl: string
+): string[] {
+  const repos: string[] = [];
+  for (const [, url = ""] of gitmodules.matchAll(/^\s*url\s*=\s*(.+?)\s*$/gm)) {
+    try {
+      const parsed = parseRepo(
+        submoduleCloneUrl({ path: ".", url }, parentUrl)
+      );
+      if (parsed) repos.push(`${parsed.owner}/${parsed.repo}`);
+    } catch {
+      // Not one a worktree would clone, so not one a session works in either.
+    }
+  }
+  return repos;
 }
 
 /** One submodule a writing session's clone carries, as `.gitmodules` declares it. */
@@ -430,8 +464,15 @@ export interface SubtaskWorkspaces {
        * `./worktree-pool.ts`.
        */
       near?: { repo: string; slot: number };
+      /**
+       * The branches a revising session works on, which it checks out itself:
+       * held by its claim, so no other session takes them while it runs.
+       */
+      revising?: readonly string[];
     }
   ): Promise<SessionPlace>;
+  /** Whether a live session holds `branch`, or is revising it. */
+  working(branch: string): boolean;
   /**
    * The run is over: record where it left each repository and free it. `hold`
    * keeps it from the next session whatever its tips read — a run whose work
@@ -811,16 +852,21 @@ export function subtaskWorkspaces(config: {
        * its own, a session there keeps what it leaves in the tree.
        */
       const selected = config.active.get();
-      const repo = selectedRepo(selected);
-      if (repo === undefined) {
+      const picked = selectedRepo(selected);
+      if (picked === undefined) {
         return placeIn(workspaceName(config.callerKey(), selected));
       }
+      const repo = config.active.rootOf(picked);
 
       // What the parent cloned, which is the only honest thing to clone: the url
       // has already been through `/repo`'s host allowlist. The sentence names the
       // refusal that leaves a checkout on disk unrecorded, because "nothing was
-      // cloned" is what an agent looking at that checkout will not believe.
-      const checkout = config.active.checkout();
+      // cloned" is what an agent looking at that checkout will not believe. A
+      // checkout recorded before repositories were recorded one by one is only
+      // the selection's.
+      const checkout =
+        config.active.checkoutOf(repo) ??
+        (repo === picked ? config.active.checkout() : undefined);
       if (!checkout) {
         throw new Error(
           "claude-coordinator: there is no recorded checkout for a writing session to " +
@@ -886,6 +932,16 @@ export function subtaskWorkspaces(config: {
       };
     },
 
+    working(branch: string): boolean {
+      return config.pool
+        .every()
+        .some(
+          (row) =>
+            row.live !== undefined &&
+            (row.branch === branch || (row.revising ?? []).includes(branch))
+        );
+    },
+
     async release(ctx, options = {}): Promise<void> {
       const row = liveRow(ctx);
       if (!row) return;
@@ -947,7 +1003,13 @@ export function subtaskWorkspaces(config: {
             (repo.tip === repo.base || repo.tip === repo.pushed)
         );
       const keeps = !forget && (row.ready || row.mode === "continue");
-      const { live: _live, mode: _mode, ready: _ready, ...rest } = row;
+      const {
+        live: _live,
+        mode: _mode,
+        ready: _ready,
+        revising: _revising,
+        ...rest
+      } = row;
       config.pool.put({
         ...rest,
         repos,
@@ -960,7 +1022,7 @@ export function subtaskWorkspaces(config: {
         options.follow &&
         keeps &&
         row.ready &&
-        selectedRepo(config.active.get()) === row.repo
+        placementRepo(config.active) === row.repo
       ) {
         config.active.set(worktreeRepo(row.repo, row.slot));
       }

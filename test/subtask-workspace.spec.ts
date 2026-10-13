@@ -3,6 +3,7 @@ import {
   parseGitmodules,
   readSubmodules,
   submoduleCloneUrl,
+  submoduleRepos,
   subtaskWorkspaces,
   type SessionPlace
 } from "@/workspace/subtask-workspace";
@@ -16,10 +17,17 @@ import {
 import type { ActiveCheckout, ActiveRepo } from "@/workspace/active-repo";
 import { memoryPoolStore } from "./support/memory-pool";
 
-/** `ActiveRepo` over three variables — the same contract, without the SQLite. */
+/**
+ * `ActiveRepo` over a few variables — the same contract, without the SQLite.
+ * `recorded` is each repository's own checkout, and what it carries.
+ */
 function fakeActive(
   selected?: string,
-  checkout?: ActiveCheckout
+  checkout?: ActiveCheckout,
+  recorded: Record<
+    string,
+    { checkout: ActiveCheckout; submodules: string[] }
+  > = {}
 ): ActiveRepo & { noted: string[]; forgotten: string[] } {
   const noted: string[] = [];
   const forgotten: string[] = [];
@@ -34,6 +42,12 @@ function fakeActive(
     setCheckout: (next) => {
       checkout = next;
     },
+    checkoutOf: (repo) => recorded[repo]?.checkout,
+    submodulesOf: (repo) => recorded[repo]?.submodules ?? [],
+    rootOf: (repo) =>
+      Object.keys(recorded).find((root) =>
+        recorded[root]?.submodules.includes(repo)
+      ) ?? repo,
     note: (repo) => noted.push(repo),
     seen: () => [...noted],
     forget: (repo) => forgotten.push(repo)
@@ -100,12 +114,14 @@ function harness(opts: {
   snapshot?: { seeded: boolean[] };
   /** Refuse to release a container, as one with an install running does. */
   releaseRefused?: boolean;
+  /** Each repository's own checkout, and what it carries. */
+  recorded?: Record<string, { checkout: ActiveCheckout; submodules: string[] }>;
 }) {
   const calls: string[] = [];
   let cloneFails = opts.cloneFails;
   const dirs = { ...(opts.dirs ?? {}) };
   const pool = memoryPoolStore();
-  const active = fakeActive(opts.selected, opts.checkout);
+  const active = fakeActive(opts.selected, opts.checkout, opts.recorded);
   const placed: Record<string, string>[] = [];
   const keeps: { cwd: string; env: Record<string, string> }[] = [];
   const stopped: string[] = [];
@@ -506,6 +522,48 @@ describe("preparing a worktree for a writing session", () => {
     });
 
     expect(await nameOf(subtasks.resolve(ctx))).toBe(SLOT0);
+  });
+
+  /**
+   * A change to one repository of a set kept together often needs the others,
+   * so a session for a submodule works in a worktree of the superproject the
+   * parent checked out — whichever of them the parent was reading.
+   */
+  it("places a submodule's session in a worktree of its superproject", async () => {
+    const SUPER: ActiveCheckout = {
+      url: "https://github.com/acme/super.git",
+      dir: "/workspace/super",
+      branch: "main"
+    };
+    const { subtasks, calls, pool } = harness({
+      selected: "acme/api",
+      checkout: CHECKOUT,
+      recorded: { "acme/super": { checkout: SUPER, submodules: ["acme/api"] } }
+    });
+
+    const place = await subtasks.resolve(ctx);
+
+    expect(place).toMatchObject({
+      dir: SUPER.dir,
+      slot: { repo: "acme/super", slot: 0 }
+    });
+    expect(calls).toContain(`clone ${SUPER.dir}@main`);
+    expect(pool.rows().map((row) => row.repo)).toEqual(["acme/super"]);
+  });
+
+  it("holds the branches a revision works on until it is released", async () => {
+    const { subtasks } = harness({ selected: "acme/api", checkout: CHECKOUT });
+
+    await subtasks.resolve({ ...ctx, revising: ["feat/x"] });
+
+    expect(subtasks.working("feat/x")).toBe(true);
+    expect(subtasks.working("feat/y")).toBe(false);
+    await expect(
+      subtasks.resolve({ ...ctx, runId: "detached:2", continue: "feat/x" })
+    ).rejects.toThrow(/being worked on by another session/);
+
+    await subtasks.release(ctx, { forgetBranch: true });
+    expect(subtasks.working("feat/x")).toBe(false);
   });
 
   /**
@@ -1332,5 +1390,26 @@ describe("releasing what an ended task still holds", () => {
       .filter((row) => row.live)
       .map((row) => row.live);
     expect(live).toEqual([{ taskId: "task-b", runId: "detached:9" }]);
+  });
+});
+
+describe("the repositories a superproject carries", () => {
+  it("reads them from `.gitmodules` as text, resolving relative urls and leaving out other hosts", () => {
+    const gitmodules = [
+      '[submodule "core"]',
+      "\tpath = core",
+      "\turl = https://github.com/acme/core",
+      '[submodule "plugins"]',
+      "\tpath = plugins",
+      "\turl = ../plugins.git",
+      "\tbranch = main",
+      '[submodule "elsewhere"]',
+      "\tpath = elsewhere",
+      "\turl = https://gitlab.com/acme/elsewhere"
+    ].join("\n");
+
+    expect(submoduleRepos(gitmodules, "https://github.com/acme/super")).toEqual(
+      ["acme/core", "acme/plugins"]
+    );
   });
 });

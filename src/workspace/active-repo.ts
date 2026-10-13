@@ -51,6 +51,7 @@
 const TABLE = "coder_active_repo";
 const SEEN_TABLE = "coder_seen_repos";
 const CHECKOUT_TABLE = "coder_active_checkout";
+const CHECKOUTS_TABLE = "coder_checkouts";
 
 /** Reads and writes for one caller's current repository. */
 export interface ActiveRepo {
@@ -75,8 +76,24 @@ export interface ActiveRepo {
    * nothing to clone" rather than guessing.
    */
   checkout(): ActiveCheckout | undefined;
-  /** Record it, from `/repo`'s `afterCheckout`, which is told all three. */
-  setCheckout(checkout: ActiveCheckout): void;
+  /**
+   * Record it, from `/repo`'s `afterCheckout`, which is told all three — and,
+   * given `record`, as that repository's own checkout too: see {@link rootOf}.
+   */
+  setCheckout(checkout: ActiveCheckout, record?: CheckoutRecord): void;
+  /** A repository's checkout as `/repo` last recorded it, whatever is selected now. */
+  checkoutOf(repo: string): ActiveCheckout | undefined;
+  /** The repositories a recorded checkout carries as submodules. */
+  submodulesOf(repo: string): string[];
+  /**
+   * Where a session works for the repository `repo`: a superproject this caller
+   * checked out that carries it as a submodule, or `repo` itself.
+   *
+   * A change in one repository of a set kept together often needs the others —
+   * the plan reads them, the change reaches into them — so a session works in
+   * the checkout that holds them all, whichever of them the parent was reading.
+   */
+  rootOf(repo: string): string;
   /**
    * Add a name to the sweep's candidate list **without** routing anything to it.
    *
@@ -141,6 +158,17 @@ export interface ActiveCheckout {
   branch: string;
 }
 
+/** A checkout as its repository's own, and what it carries. */
+export interface CheckoutRecord {
+  /** `owner/repo`. */
+  repo: string;
+  /**
+   * Its submodules' repositories, as `owner/repo`. Unknown — they could not be
+   * read just now — keeps what was recorded before.
+   */
+  submodules?: readonly string[];
+}
+
 /**
  * One selection per storage, whoever asks for it: the parent's tools, its
  * sub-agents' settle hooks and its task hooks each reach it from somewhere
@@ -178,7 +206,39 @@ function createActiveRepo(storage: DurableObjectStorage): ActiveRepo {
     storage.sql.exec(
       `CREATE TABLE IF NOT EXISTS ${CHECKOUT_TABLE} (id INTEGER PRIMARY KEY CHECK (id = 1), url TEXT NOT NULL, dir TEXT NOT NULL, branch TEXT NOT NULL)`
     );
+    // Keyed lowercase, as GitHub matches names, beside the name as cloned —
+    // which is what a worktree pool is keyed on. `submodules` one per line.
+    storage.sql.exec(
+      `CREATE TABLE IF NOT EXISTS ${CHECKOUTS_TABLE} (repo TEXT PRIMARY KEY, name TEXT NOT NULL, url TEXT NOT NULL, dir TEXT NOT NULL, branch TEXT NOT NULL, submodules TEXT NOT NULL, at INTEGER NOT NULL)`
+    );
     ready = true;
+  };
+
+  type Recorded = {
+    repo: string;
+    name: string;
+    url: string;
+    dir: string;
+    branch: string;
+    submodules: string;
+  };
+  const recorded = (): Recorded[] => {
+    try {
+      ensure();
+      return storage.sql
+        .exec<Recorded>(
+          `SELECT repo, name, url, dir, branch, submodules FROM ${CHECKOUTS_TABLE} ORDER BY at DESC`
+        )
+        .toArray();
+    } catch {
+      // A sub-agent has no selection of its own — the same reason `get()` swallows.
+      return [];
+    }
+  };
+  const lines = (text: string) => text.split("\n").filter(Boolean);
+  const submodulesOf = (repo: string): string[] => {
+    const row = recorded().find((row) => row.repo === repo.toLowerCase());
+    return row ? lines(row.submodules) : [];
   };
 
   return {
@@ -232,7 +292,7 @@ function createActiveRepo(storage: DurableObjectStorage): ActiveRepo {
       }
     },
 
-    setCheckout(checkout: ActiveCheckout): void {
+    setCheckout(checkout: ActiveCheckout, record?: CheckoutRecord): void {
       ensure();
       storage.sql.exec(
         `INSERT INTO ${CHECKOUT_TABLE} (id, url, dir, branch) VALUES (1, ?, ?, ?)
@@ -241,6 +301,34 @@ function createActiveRepo(storage: DurableObjectStorage): ActiveRepo {
         checkout.dir,
         checkout.branch
       );
+      if (!record) return;
+      const submodules = record.submodules ?? submodulesOf(record.repo);
+      storage.sql.exec(
+        `INSERT INTO ${CHECKOUTS_TABLE} (repo, name, url, dir, branch, submodules, at) VALUES (?, ?, ?, ?, ?, ?, ?)
+           ON CONFLICT(repo) DO UPDATE SET name = excluded.name, url = excluded.url, dir = excluded.dir, branch = excluded.branch, submodules = excluded.submodules, at = excluded.at`,
+        record.repo.toLowerCase(),
+        record.repo,
+        checkout.url,
+        checkout.dir,
+        checkout.branch,
+        submodules.map((sub) => sub.toLowerCase()).join("\n"),
+        Date.now()
+      );
+    },
+
+    checkoutOf(repo: string): ActiveCheckout | undefined {
+      const row = recorded().find((row) => row.repo === repo.toLowerCase());
+      return row && { url: row.url, dir: row.dir, branch: row.branch };
+    },
+
+    submodulesOf,
+
+    rootOf(repo: string): string {
+      const name = repo.toLowerCase();
+      const root = recorded().find(
+        (row) => row.repo !== name && lines(row.submodules).includes(name)
+      );
+      return root?.name ?? repo;
     },
 
     note(repo: string): void {

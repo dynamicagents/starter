@@ -43,6 +43,11 @@ export interface Worktree {
   /** The run working in it now: a sub-agent run id, which names its session. */
   live?: { taskId: string; runId: string };
   /**
+   * The branches {@link live} is revising, which it checks out itself rather
+   * than holding as {@link branch}: no other session is placed on them meanwhile.
+   */
+  revising?: string[];
+  /**
    * How {@link live} came to hold it, which decides what preparing it does: a
    * branch of its own, a branch this worktree already holds, or a pushed branch
    * brought into a worktree that does not.
@@ -157,7 +162,8 @@ export function isFree(worktree: Worktree): boolean {
  *
  * - The one already live for this run: a `prepare` repeated for the same run
  *   finishes the worktree it claimed, and a second answer would strand the work.
- * - For `continue`, the worktree holding that branch, unless a session is in it.
+ * - For `continue`, the worktree holding that branch, unless a session is in it
+ *   or is revising the branch from another.
  *   When none holds it — it was pushed and released, or its worktree went to
  *   another run — a free one adopts it from the remote.
  * - Otherwise `near`, when that slot is free: it holds a conversation the run
@@ -181,6 +187,7 @@ export function claim(
     branch?: string;
     near?: number;
     avoid?: number;
+    revising?: readonly string[];
   },
   now: number
 ): Worktree {
@@ -194,7 +201,16 @@ export function claim(
     ctx.continue === undefined
       ? undefined
       : rows.find((row) => row.branch === ctx.continue);
-  if (holder?.live) {
+  const reviser =
+    ctx.continue === undefined
+      ? undefined
+      : store
+          .every()
+          .find(
+            (row) =>
+              row.live && (row.revising ?? []).includes(ctx.continue as string)
+          );
+  if (holder?.live || reviser) {
     throw new Error(
       `claude-coordinator: ${ctx.continue} is being worked on by another session ` +
         "right now. Wait for its report, then continue the branch."
@@ -229,6 +245,7 @@ export function claim(
     branch,
     previous: previous === branch ? undefined : previous,
     live: { taskId: ctx.taskId, runId: ctx.runId },
+    ...(ctx.revising?.length ? { revising: [...ctx.revising] } : {}),
     mode: holder ? "continue" : ctx.continue ? "adopt" : "new",
     ready: false,
     usedAt: now

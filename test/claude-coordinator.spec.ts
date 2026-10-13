@@ -8,7 +8,11 @@ import {
   credentialPool,
   type CredentialState
 } from "@dynamicagents/plugins/claude-code";
-import { openWorkspace, workspaceName } from "@dynamicagents/plugins/workspace";
+import {
+  openWorkspace,
+  workspaceName,
+  WORKSPACE_RUNTIME_KEY
+} from "@dynamicagents/plugins/workspace";
 import type { AgentToolLifecycleResult, AgentToolRunInfo } from "agents";
 import type { ContextConfig } from "agents/context";
 import type { ClaudeCoordinatorWorkspace } from "@/index";
@@ -21,28 +25,33 @@ import {
   claimSession,
   forgetKept,
   keepNote,
+  keptNote,
   preparePlanner,
   prepareReviser,
   prepareWriter,
   reportPlan,
   settlePlanner,
+  settleReviser,
   settleSession
 } from "@/agents/claude-coordinator/children";
 import {
   branchSession,
-  openPullRequest,
   recordBranchRun
 } from "@/agents/claude-coordinator/branches";
+import { pullsFrom, type BranchPull } from "@/agents/claude-coordinator/github";
 import {
   createPlan,
   ownsPlan,
   PLAN_LABEL,
-  PLAN_OUTPUT
+  PLAN_OUTPUT,
+  revisionsText,
+  type ReviseInput
 } from "@/agents/claude-coordinator/plans";
 import { SOUL } from "@/agents/claude-coordinator/soul";
 import {
   notResumable,
   planBrief,
+  revisionNote,
   sessionBrief,
   sessionFooter,
   sessionReport,
@@ -1048,7 +1057,8 @@ function recordingPool(
     },
     releaseTask: async () => {
       calls.push("releaseTask");
-    }
+    },
+    working: () => false
   } satisfies SubtaskWorkspaces;
   return { pool, calls };
 }
@@ -1151,6 +1161,50 @@ describe("a writing session's worktree", () => {
       })
     );
     expect(calls).toEqual(["keep", "release, held"]);
+  });
+
+  /**
+   * A revision's worktree holds none of its work on the branch the worktree
+   * is on: what it kept it pushed, and the rest is wherever it was when stopped.
+   */
+  it("frees a completed revision's worktree, and holds a stopped one's with a note saying where", async () => {
+    const place = worktree();
+    const runtime = {
+      [WORKSPACE_RUNTIME_KEY]: place.workspaceName,
+      dir: place.dir,
+      branch: place.branch,
+      revisions: [{ branch: "feat/x", pulls: [] }]
+    };
+    const done = recordingPool();
+    const stopped = recordingPool();
+    const note = await onParent(async (agent) => {
+      await settleReviser(
+        {
+          taskId: "task-1",
+          runId: "detached:call_1",
+          runtime,
+          result: { status: "completed" } as AgentToolLifecycleResult
+        },
+        done.pool,
+        agent.ctx.storage
+      );
+      await settleReviser(
+        {
+          taskId: "task-1",
+          runId: "detached:call_2",
+          runtime,
+          result: { status: "aborted" } as AgentToolLifecycleResult
+        },
+        stopped.pool,
+        agent.ctx.storage
+      );
+      return keptNote(agent.ctx.storage, "detached:call_2");
+    });
+
+    expect(done.calls).toEqual(["release, forgetting its branch"]);
+    expect(stopped.calls).toEqual(["keep", "release, held"]);
+    expect(note).toContain("What it pushed is on the pull requests.");
+    expect(note).toContain("`repo_worktree` with `claude-coordinator/p`");
   });
 
   it("tells the parent where a failed run's work was kept, once, in its follow-up", async () => {
@@ -1308,23 +1362,36 @@ describe("the branch a writing session is told about", () => {
     expect(brief).not.toContain("## Pull request #");
   });
 
-  it("tells a revision which pull request is its own, and how to answer what landed", () => {
+  it("tells a revision to check its branches out itself, and how to answer what landed", () => {
     const brief = sessionBrief(
-      "Copilot has reviewed it.",
+      "Work on these branches:\n\n- `feat/x`: Copilot has reviewed it.",
       undefined,
-      { branch: "feat/x", submodules: [], continues: true },
-      undefined,
-      { number: 12, url: "https://github.com/acme/api/pull/12" }
+      {
+        branch: "claude-coordinator/r",
+        submodules: ["core"],
+        continues: false,
+        revising: true
+      }
     );
 
-    expect(brief.startsWith("Copilot has reviewed it.")).toBe(true);
-    expect(brief).toContain("## Pull request #12");
-    expect(brief).toContain("https://github.com/acme/api/pull/12 is");
+    expect(brief.startsWith("Work on these branches:")).toBe(true);
+    expect(brief).toContain("## Your branches");
+    expect(brief).toMatch(
+      /on `claude-coordinator\/r`: a place to\s+start from, not a branch to push/
+    );
+    expect(brief).toContain("gh pr list --head <branch>");
+    expect(brief).toContain("stop and say so rather than switch over them");
+    expect(brief).toContain("Push those branches and no others");
+    expect(brief).toContain("### Submodules");
+    expect(brief).toContain("## What brought you back");
     expect(brief).toContain("resolve it either way");
-    expect(brief).toContain("Before you finish, look once");
+    expect(brief).toContain(
+      "look once at each pull request's review and checks"
+    );
+    expect(brief).not.toContain("## Your branch\n");
+    expect(brief).not.toContain("Do not switch or rename the branch");
     expect(brief).not.toContain("## Delivering it");
-    // A revision needs the stop channel as much as a build does, and this
-    // brief carries no delivery note: `DESIGN_NOTE` is where it comes from.
+    // The stop channel comes from `DESIGN_NOTE`, as it does for a build.
     expect(brief).toContain("## The bar for this work");
     expect(brief).toContain("`needs_input`");
   });
@@ -1365,13 +1432,12 @@ describe("the branch a writing session is told about", () => {
    * definition, and reading it as a deviation would stop the one pass.
    */
   it("aims a self-review at the diff, and asks about a review point that is not a fix", () => {
-    const brief = sessionBrief(
-      "A self-review, please.",
-      undefined,
-      { branch: "feat/x", submodules: [], continues: true },
-      undefined,
-      { number: 12 }
-    );
+    const brief = sessionBrief("A self-review, please.", undefined, {
+      branch: "claude-coordinator/r",
+      submodules: [],
+      continues: false,
+      revising: true
+    });
 
     expect(brief).toContain("**The diff is the subject**");
     expect(brief).toMatch(
@@ -1446,6 +1512,29 @@ describe("the warning round", () => {
  */
 describe("the note on what a writing session kept", () => {
   const branch = "claude-coordinator/task-1/1";
+
+  it("says what reached each pull request a revision was checked against", () => {
+    const note = revisionNote(
+      [
+        {
+          branch: "feat/x",
+          pulls: [
+            { repo: "acme/api", number: 12, pushed: 2 },
+            { repo: "acme/core", number: 5, pushed: 0 },
+            { repo: "acme/web", number: 7 }
+          ]
+        }
+      ],
+      [{ path: ".", files: ["notes.md"] }]
+    );
+
+    expect(note).toContain(
+      "- `feat/x`: acme/api#12 (2 commits pushed), acme/core#5 (nothing pushed), acme/web#7 (could not be read)"
+    );
+    expect(note).toContain(
+      "**Deleted, uncommitted:** the repository: `notes.md`."
+    );
+  });
 
   it("names each repository with commits, and how to add to the branch", () => {
     const note = writingNote({
@@ -1822,102 +1911,282 @@ describe("going back to a branch", () => {
     );
     expect(refused).toContain("not both");
   });
+});
 
-  it("sends a revision to the pull request's own branch, and tells it which one", async () => {
-    const place = { ...worktree(3), branch: "feat/rate-limit" };
-    const pullRequest = {
-      number: 12,
-      branch: "feat/rate-limit",
-      url: "https://github.com/acme/api/pull/12"
-    };
-    const { runtime, asked } = await onParent(async (agent) => {
-      const placing = placingPool(place);
-      const runtime = await prepareReviser(
+/**
+ * A revision names branches, and the host only checks them: each must have an
+ * open pull request in the checkout's repositories and nobody working on it.
+ * The session checks them out itself, so nothing here places it on one.
+ */
+describe("sending branches back to be revised", () => {
+  const pull = (
+    repo: string,
+    number: number,
+    state: BranchPull["state"] = "open"
+  ): BranchPull => ({
+    repo,
+    number,
+    url: `https://github.com/${repo}/pull/${number}`,
+    state,
+    head: `sha-${number}`
+  });
+
+  /**
+   * `revisions` sent back, with the parent on `POOL_REPO`, a superproject that
+   * carries `acme/core`. `pulls` is GitHub's answer, by `repo branch`.
+   */
+  const revising = (
+    agent: Parent,
+    revisions: ReviseInput["revisions"],
+    pulls: Record<string, BranchPull[]>,
+    working: string[] = []
+  ) => {
+    const active = activeRepo(agent.ctx.storage);
+    active.set(POOL_REPO);
+    active.setCheckout(
+      {
+        url: `https://github.com/${POOL_REPO}`,
+        dir: "/workspace/plan",
+        branch: "main"
+      },
+      { repo: POOL_REPO, submodules: ["acme/core"] }
+    );
+    const placing = placingPool(worktree());
+    const asked: string[] = [];
+    return prepareReviser(
+      {
+        input: { revisions },
+        taskId: "task-1",
+        runId: `detached:${crypto.randomUUID()}`,
+        parent: agent.pluginContext()
+      },
+      { ...placing.pool, working: (branch) => working.includes(branch) },
+      async (repo, branch) => {
+        asked.push(`${repo} ${branch}`);
+        return pulls[`${repo} ${branch}`] ?? [];
+      }
+    ).then(
+      (runtime) => ({ runtime, placed: placing.asked, asked, refused: "" }),
+      (err: unknown) => ({
+        runtime: undefined,
+        placed: placing.asked,
+        asked,
+        refused: String(err)
+      })
+    );
+  };
+
+  it("checks every branch across the checkout's repositories, then claims one fresh worktree for them all", async () => {
+    const { runtime, placed, asked } = await onParent((agent) =>
+      revising(
+        agent,
+        [
+          { branch: "feat/x", task: "Copilot has reviewed it." },
+          { branch: "feat/y", task: "The test check failed." }
+        ],
         {
-          input: { pr: 12, task: "Copilot has reviewed it." },
+          [`${POOL_REPO} feat/x`]: [pull(POOL_REPO, 12)],
+          "acme/core feat/x": [pull("acme/core", 5)],
+          [`${POOL_REPO} feat/y`]: [
+            pull(POOL_REPO, 13),
+            pull(POOL_REPO, 9, "closed")
+          ]
+        }
+      )
+    );
+
+    expect(asked.sort()).toEqual(
+      [
+        `${POOL_REPO} feat/x`,
+        "acme/core feat/x",
+        `${POOL_REPO} feat/y`,
+        "acme/core feat/y"
+      ].sort()
+    );
+    expect(placed).toEqual([
+      {
+        taskId: "task-1",
+        runId: expect.any(String),
+        revising: ["feat/x", "feat/y"]
+      }
+    ]);
+    expect(runtime).toMatchObject({
+      revisions: [
+        {
+          branch: "feat/x",
+          pulls: [
+            { repo: POOL_REPO, number: 12, head: "sha-12" },
+            { repo: "acme/core", number: 5, head: "sha-5" }
+          ]
+        },
+        {
+          branch: "feat/y",
+          pulls: [{ repo: POOL_REPO, number: 13, head: "sha-13" }]
+        }
+      ]
+    });
+    // A fresh session: its branches are not one conversation to carry on.
+    expect(runtime).not.toHaveProperty("resume");
+  });
+
+  it("refuses the whole call, saying why for each branch it cannot revise", async () => {
+    const { refused, placed } = await onParent((agent) =>
+      revising(
+        agent,
+        [
+          { branch: "feat/ok", task: "t" },
+          { branch: "feat/merged", task: "t" },
+          { branch: "feat/none", task: "t" },
+          { branch: "not a branch", task: "t" },
+          { branch: "feat/ok", task: "again" },
+          { branch: "feat/busy", task: "t" }
+        ],
+        {
+          [`${POOL_REPO} feat/ok`]: [pull(POOL_REPO, 1)],
+          [`${POOL_REPO} feat/merged`]: [pull(POOL_REPO, 2, "merged")],
+          [`${POOL_REPO} feat/busy`]: [pull(POOL_REPO, 3)]
+        },
+        ["feat/busy"]
+      )
+    );
+
+    expect(placed).toEqual([]);
+    expect(refused).toContain("nothing was started");
+    expect(refused).toContain(
+      `\`feat/merged\`: its pull request ${POOL_REPO}#2 is merged.`
+    );
+    expect(refused).toContain(
+      `\`feat/none\`: no pull request is from it in ${POOL_REPO}, acme/core.`
+    );
+    expect(refused).toContain("`not a branch`: not a branch name.");
+    expect(refused).toContain("`feat/ok`: named more than once.");
+    expect(refused).toContain("`feat/busy`: a session is working on it now");
+    // The branch that passed is not listed as a refusal.
+    expect(refused).not.toContain("`feat/ok`: its");
+  });
+
+  it("refuses with nothing checked out", async () => {
+    const refused = await onParent((agent) =>
+      prepareReviser(
+        {
+          input: { revisions: [{ branch: "feat/x", task: "t" }] },
           taskId: "task-1",
-          runId: `detached:${crypto.randomUUID()}`,
+          runId: "detached:call_1",
           parent: agent.pluginContext()
         },
-        placing.pool,
-        async () => pullRequest
-      );
-      return { runtime, asked: placing.asked };
-    });
+        placingPool(worktree()).pool,
+        async () => []
+      ).then(
+        () => "",
+        (err: unknown) => String(err)
+      )
+    );
+    expect(refused).toContain("Clone the one the branches are in");
+  });
 
-    expect(asked[0]).toMatchObject({ continue: "feat/rate-limit" });
-    expect(runtime).toMatchObject({ pullRequest });
+  it("hands the session each branch and what brought it back", () => {
+    expect(
+      revisionsText({
+        revisions: [
+          { branch: "feat/x", task: "Copilot has reviewed it. " },
+          { branch: "feat/y", task: "The test check failed." }
+        ]
+      })
+    ).toBe(
+      [
+        "Work on these branches:",
+        "",
+        "- `feat/x`: Copilot has reviewed it.",
+        "- `feat/y`: The test check failed."
+      ].join("\n")
+    );
   });
 });
 
-/** The pull request a revision goes back to is GitHub's answer, never a model's. */
-describe("looking up a pull request to revise", () => {
-  const answering = (status: number, body: unknown) =>
-    vi
-      .spyOn(globalThis, "fetch")
-      .mockResolvedValue(new Response(JSON.stringify(body), { status }));
-  const repo = { full_name: "acme/api" };
-
-  it("answers an open pull request's head branch", async () => {
-    const spy = answering(200, {
-      state: "open",
-      html_url: "https://github.com/acme/api/pull/12",
-      head: { ref: "feat/x", repo },
-      base: { repo }
-    });
-    try {
-      expect(
-        await openPullRequest("t", "https://github.com/acme/api", 12)
-      ).toEqual({
-        number: 12,
-        branch: "feat/x",
-        url: "https://github.com/acme/api/pull/12"
+/** Where a session works is the checkout that carries the repository the parent reads. */
+describe("the checkouts a caller has recorded", () => {
+  it("roots a submodule at the superproject that carries it, keeping what it carries when a read fails", async () => {
+    const roots = await onParent((agent) => {
+      const active = activeRepo(agent.ctx.storage);
+      const at = (repo: string) => ({
+        url: `https://github.com/${repo}`,
+        dir: `/workspace/${repo}`,
+        branch: "main"
       });
+      active.setCheckout(at("Acme/Super"), {
+        repo: "Acme/Super",
+        submodules: ["acme/Core"]
+      });
+      active.setCheckout(at("acme/core"), {
+        repo: "acme/core",
+        submodules: []
+      });
+      // A refresh whose `.gitmodules` could not be read.
+      active.setCheckout(at("Acme/Super"), { repo: "Acme/Super" });
+      return [
+        active.rootOf("ACME/core"),
+        active.rootOf("acme/other"),
+        active.checkoutOf("acme/super")?.dir
+      ];
+    });
+
+    // GitHub's names match whatever the case; the pool is keyed on the name as cloned.
+    expect(roots).toEqual([
+      "Acme/Super",
+      "acme/other",
+      "/workspace/Acme/Super"
+    ]);
+  });
+});
+
+/** The pull requests a revision is checked against are GitHub's answer, never a model's. */
+describe("the pull requests from a branch", () => {
+  it("asks for the repository's own branch, and reads each one's state", async () => {
+    const spy = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(
+        JSON.stringify([
+          { number: 3, state: "open", html_url: "u3", head: { sha: "h3" } },
+          {
+            number: 2,
+            state: "closed",
+            merged_at: "2026-10-01T00:00:00Z",
+            html_url: "u2",
+            head: { sha: "h2" }
+          },
+          {
+            number: 1,
+            state: "closed",
+            merged_at: null,
+            html_url: "u1",
+            head: { sha: "h1" }
+          }
+        ]),
+        { status: 200 }
+      )
+    );
+    try {
+      expect(await pullsFrom("t", "acme/api", "feat/x")).toEqual([
+        { repo: "acme/api", number: 3, url: "u3", state: "open", head: "h3" },
+        { repo: "acme/api", number: 2, url: "u2", state: "merged", head: "h2" },
+        { repo: "acme/api", number: 1, url: "u1", state: "closed", head: "h1" }
+      ]);
+      // `head` names the owner, so a fork's branch of the same name is not asked for.
       expect(String(spy.mock.calls[0]![0])).toBe(
-        "https://api.github.com/repos/acme/api/pulls/12"
+        "https://api.github.com/repos/acme/api/pulls?state=all&head=acme%3Afeat%2Fx&per_page=10"
       );
     } finally {
       spy.mockRestore();
     }
   });
 
-  it.each([
-    [
-      "a merged one",
-      {
-        state: "closed",
-        merged: true,
-        head: { ref: "x", repo },
-        base: { repo }
-      },
-      "is merged"
-    ],
-    [
-      "one from a fork",
-      {
-        state: "open",
-        head: { ref: "x", repo: { full_name: "someone/api" } },
-        base: { repo }
-      },
-      "from a fork"
-    ]
-  ])("refuses %s", async (_label, body, said) => {
-    const spy = answering(200, body);
+  it("throws when GitHub does not answer, so no branch passes on a guess", async () => {
+    const spy = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValue(new Response("{}", { status: 502 }));
     try {
-      await expect(
-        openPullRequest("t", "https://github.com/acme/api", 12)
-      ).rejects.toThrow(said);
-    } finally {
-      spy.mockRestore();
-    }
-  });
-
-  it("refuses a number that is not a pull request", async () => {
-    const spy = answering(404, { message: "Not Found" });
-    try {
-      await expect(
-        openPullRequest("t", "https://github.com/acme/api", 99)
-      ).rejects.toThrow("is not a pull request in acme/api");
+      await expect(pullsFrom("t", "acme/api", "feat/x")).rejects.toThrow(
+        "GitHub answered 502"
+      );
     } finally {
       spy.mockRestore();
     }
@@ -1979,7 +2248,9 @@ describe("a writing session's answer", () => {
       ended({
         status: "done",
         summary: "Added --json, with tests.",
-        pullRequest: { number: 12, url: "https://github.com/acme/api/pull/12" },
+        pullRequests: [
+          { number: 12, url: "https://github.com/acme/api/pull/12" }
+        ],
         checks: [
           { command: "npm test", passed: true },
           { command: "npm run lint", passed: false }
@@ -1992,6 +2263,23 @@ describe("a writing session's answer", () => {
     );
     expect(report).toContain("Added --json, with tests.");
     expect(report).toContain("`npm test` passed; `npm run lint` FAILED");
+  });
+
+  it("is reported with every pull request, one per repository it changed", () => {
+    const report = sessionReport(
+      ended({
+        status: "done",
+        summary: "Moved the hook into core, and starter onto it.",
+        pullRequests: [
+          { number: 81, url: "https://github.com/acme/core/pull/81" },
+          { number: 110, url: "https://github.com/acme/starter/pull/110" }
+        ]
+      })
+    );
+
+    expect(report).toContain(
+      "**Done.** Pull requests #81: https://github.com/acme/core/pull/81, #110: https://github.com/acme/starter/pull/110"
+    );
   });
 
   it("carries the question a session stopped on", () => {

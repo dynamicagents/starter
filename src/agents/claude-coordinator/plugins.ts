@@ -13,6 +13,7 @@ import { repo } from "@dynamicagents/plugins/repo";
 import { browser } from "@dynamicagents/plugins/browser";
 import { activeRepo, type ActiveRepo } from "@/workspace/active-repo";
 import {
+  submoduleRepos,
   subtaskWorkspaces,
   type SubtaskWorkspaces
 } from "@/workspace/subtask-workspace";
@@ -27,6 +28,7 @@ import { gitIdentity } from "@/workspace/git-identity";
 import { hostScratch } from "@/workspace/scratch";
 import { claudeCodeConfig } from "./claude-code";
 import { claudeCoordinator } from "./definition";
+import { gitmodulesOf } from "./github";
 
 /**
  * The one file you edit to add or remove a capability for this agent.
@@ -189,8 +191,21 @@ export const parentPlugins = (
         const ws = workspace();
         // Recorded so a writing session can clone the same thing into a
         // container of its own. The url has already been through this plugin's
-        // host allowlist, which is why it is the one worth keeping.
-        active.setCheckout({ url, dir, branch });
+        // host allowlist, which is why it is the one worth keeping. With the
+        // repositories it carries, so a session for any of them works in this
+        // one — see `rootOf` in `@/workspace/active-repo`. Read from GitHub,
+        // because a command here would start the container ahead of the install
+        // below and cost it the snapshot it restores from.
+        const gitmodules = await gitmodulesOf(env.GITHUB_TOKEN, url, branch);
+        active.setCheckout(
+          { url, dir, branch },
+          {
+            repo: repoName,
+            ...(gitmodules === undefined
+              ? {}
+              : { submodules: submoduleRepos(gitmodules, url) })
+          }
+        );
         // Before the install, and never inside it: an install is conditional
         // where a checkout is not, so no install outcome may decide whether the
         // path is recorded. The reasoning is on `noteCheckout` in the

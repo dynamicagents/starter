@@ -5,7 +5,7 @@ import {
 } from "@dynamicagents/plugins/workspace";
 import type { RepoWorktrees } from "@dynamicagents/plugins/repo";
 import type { ActiveRepo } from "./active-repo";
-import { selectedRepo } from "./subtask-workspace";
+import { placementRepo, selectedRepo } from "./subtask-workspace";
 import {
   holderOf,
   parseWorktreeRepo,
@@ -89,7 +89,7 @@ export function worktreeSwitch(config: {
 
   return {
     async list(): Promise<string> {
-      const repo = selectedRepo(config.active.get());
+      const repo = placementRepo(config.active);
       if (!repo) return noRepo;
       const rows = config.pool.all(repo).filter((row) => row.branch);
       if (rows.length === 0) {
@@ -113,10 +113,12 @@ export function worktreeSwitch(config: {
         if (!here)
           return "Your file reads and repo tools already run in your own checkout.";
         config.active.set(here.repo);
-        const dir = config.active.checkout()?.dir;
+        const dir = (
+          config.active.checkoutOf(here.repo) ?? config.active.checkout()
+        )?.dir;
         return `Your file reads and repo tools are back on your own checkout${dir ? `, at ${dir}` : ""}.`;
       }
-      const repo = selectedRepo(config.active.get());
+      const repo = placementRepo(config.active);
       if (!repo) return noRepo;
       const row = holderOf(config.pool, repo, branch);
       if (!row) {
@@ -171,7 +173,7 @@ export function worktreeSwitch(config: {
     },
 
     async release(branch: string): Promise<string> {
-      const repo = selectedRepo(config.active.get());
+      const repo = placementRepo(config.active);
       if (!repo) return noRepo;
       const row = holderOf(config.pool, repo, branch);
       if (!row) return `No worktree holds \`${branch}\`.`;
@@ -205,7 +207,8 @@ export function worktreeSwitch(config: {
       if (!here) {
         const repo = selectedRepo(selected);
         if (!repo) return "Your file reads run in your scratchpad.";
-        const dir = config.active.checkout()?.dir;
+        const dir = (config.active.checkoutOf(repo) ?? config.active.checkout())
+          ?.dir;
         return `Your file reads and repo tools run in your own checkout of ${repo}${dir ? `, at ${dir}` : ""}.`;
       }
       const row = slotOf(config.pool, here.repo, here.slot);

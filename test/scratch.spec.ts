@@ -45,6 +45,9 @@ function fakeActive(): ActiveRepo {
     setCheckout: (next) => {
       checkout = next;
     },
+    checkoutOf: () => undefined,
+    submodulesOf: () => [],
+    rootOf: (repo) => repo,
     note,
     seen: () => [...seen],
     forget: (repo) => {

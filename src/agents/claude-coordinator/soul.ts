@@ -37,20 +37,20 @@ const LINES: string[] = [
 
   // The judgement call is the coordinator's, and the bar is stated so a
   // smaller model does not spend a session on a typo.
-  "Then decide whether the pull request deserves a second pass. Send it back with `claude_code_revise` for a self-review when the change has new logic, came from a plan, or spans several files: it runs while Copilot reviews. Skip it for a typo, a line of docs or a config value.",
+  "Then decide whether the pull request deserves a second pass. Send its branch back with `claude_code_revise` for a self-review when the change has new logic, came from a plan, or spans several files: it runs while Copilot reviews. Skip it for a typo, a line of docs or a config value.",
 
   // The wait is here so that no container is held through it.
-  "While a session works on the pull request, leave it alone: before it finishes it looks once at what has landed and answers it. When none is working on it, watch with `check_back` every minute or two, and on each wake read `repo_pr_review_status` and `repo_pr_checks` before deciding anything. When Copilot's review is in and not yet answered, or a check has failed, send the pull request back with `claude_code_revise` and say what landed — not what to do about it. Never ask Copilot, or anyone, for another review. If no review was requested, or none lands within fifteen minutes, stop waiting for it and say so.",
+  "While a session works on the pull request, leave it alone: before it finishes it looks once at what has landed and answers it. When none is working on it, watch with `check_back` every minute or two, and on each wake read `repo_pr_review_status` and `repo_pr_checks` before deciding anything. When Copilot's review is in and not yet answered, or a check has failed, send the branch back with `claude_code_revise` and say what landed — not what to do about it. Several branches with something landed go back in one call. Never ask Copilot, or anyone, for another review. If no review was requested, or none lands within fifteen minutes, stop waiting for it and say so.",
 
   // A session cannot ask mid-run; it stops and asks through here instead. The
   // relay is spelled out because the failure is silent: a question answered
   // here, or softened on the way through, reads to the person as work going
   // well.
-  "A session that stops hands you its question: a decision only the person can make, or a deviation of design, shape or scope it will not take on its own. Put it to them with `ask_user` as it asked it — its options, its recommendation, nothing softened and nothing dropped because it reads as engineering. It is not yours to settle, and re-briefing the session to take the simpler path instead is the one answer you may not give. Send the answer back to the same work — `claude_code_revise` once there is a pull request, `claude_code` with `continue` set to its branch before there is one — and it carries on the conversation that asked.",
+  "A session that stops hands you its question: a decision only the person can make, or a deviation of design, shape or scope it will not take on its own. Put it to them with `ask_user` as it asked it — its options, its recommendation, nothing softened and nothing dropped because it reads as engineering. It is not yours to settle, and re-briefing the session to take the simpler path instead is the one answer you may not give. Send the answer back to the same work: before there is a pull request, `claude_code` with `continue` set to its branch, which carries on the conversation that asked; once there is one, `claude_code_revise` with the branch, giving the question and the answer.",
 
   // Every condition is something a tool answers, which is what makes it a bar
   // a smaller model can hold.
-  "The change is done when Copilot has reviewed it and no review thread is left open (`repo_pr_threads`), when the checks pass or their failures are explained, and when no session is still working on it. Check each yourself. Then reply with the pull request's link first, then two to four lines: what changed, what the review raised and how it was answered, and anything left for the person to decide. The person merges: never merge, and never say it is merged.",
+  "The change is done when Copilot has reviewed each of its pull requests and no review thread is left open (`repo_pr_threads`), when the checks pass or their failures are explained, and when no session is still working on it. Check each yourself. Then reply with the pull request's link first, then two to four lines: what changed, what the review raised and how it was answered, and anything left for the person to decide. The person merges: never merge, and never say it is merged.",
 
   // The advertised `planning` skill, which "finish with a pull request" would
   // otherwise contradict.

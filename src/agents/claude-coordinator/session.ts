@@ -78,20 +78,23 @@ container and added on the way out, so there is no token here to read or print. 
 them to read issues, pull requests, reviews and CI.`;
 
 /**
- * The rules a writer works under. The last one is why the coordinator exists:
- * a session that waits on a review keeps a container running for minutes, and
- * the agent that briefed it watches the pull request for nothing.
+ * The rules a writer works under, on its own branch or on the branches it was
+ * sent back to. The last one is why the coordinator exists: a session that
+ * waits on a review keeps a container running for minutes, and the agent that
+ * briefed it watches the pull request for nothing.
  */
-const OWNERSHIP_NOTE = `This branch and its pull request are yours, within limits that are not negotiable:
+function ownershipNote(many: boolean): string {
+  return `${many ? "These branches and their pull requests are" : "This branch and its pull request are"} yours, within limits that are not negotiable:
 
-- Push this branch and no other. Never push to the default branch, never force-push,
+- Push ${many ? "those branches and no others" : "this branch and no other"}. Never push to the default branch, never force-push,
   never delete a branch.
 - Never merge, approve, or enable auto-merge. Merging is the person's.
-- Never request a reviewer, Copilot included. Opening the pull request asks for its
+- Never request a reviewer, Copilot included. Opening a pull request asks for its
   one review, and another costs money.
 - **Never wait for a review or for CI** — no sleeping, no polling. Finish and report.
-  The agent that briefed you watches the pull request and brings you back when
+  The agent that briefed you watches the pull requests and brings you back when
   something lands. This holds whatever the repository's own instructions say.`;
+}
 
 /**
  * The bar a writing session works to, and when a deviation from what it was
@@ -160,35 +163,33 @@ If the work changed nothing — the task was to find something out, or there was
 do — push nothing and open nothing.`;
 
 /**
- * How a **revising** session works on the pull request it opened. What brought
- * it back is its task, in the coordinator's words; how to answer each kind of
- * thing is said here once, so the coordinator never has to.
+ * How a **revising** session works on the branches it was sent back to. What
+ * brought each back is in its task, in the coordinator's words; how to answer
+ * each kind of thing is said here once, so the coordinator never has to.
  */
-function reviseNote(pr: { number: number; url?: string }): string {
-  return `## Pull request #${pr.number}
+const REVISE_NOTE = `## What brought you back
 
-${pr.url ? `${pr.url} is` : "It is"} open from this branch, and it is yours. What brought you back
-is at the top.
+Each branch above says what landed on it. Its pull requests are yours: there may be one in
+each repository the branch is in.
 
 - **A self-review**: have a subagent with none of this conversation review the pull
   request's diff against what it was for, then improve what holds up — correctness and
-  tests first, then the shape of what you wrote: modularity, the idiom of the code around
-  it, duplication and debt you added. **The diff is the subject**: this pass makes what is
-  there better, and does not go looking for work elsewhere or for behaviour to add.
+  tests first, then the shape of what was written: modularity, the idiom of the code
+  around it, duplication and debt it added. **The diff is the subject**: this pass makes
+  what is there better, and does not go looking for work elsewhere or for behaviour to add.
 - **A review**: answer it in one pass. Read the review's body as well as its threads,
   since a review can raise points that are not threads, and read each point against the
   code — a reviewer is sometimes confidently wrong. A point you would answer by adding
-  behaviour this pull request was not for, or by materially changing its design or scope,
+  behaviour the pull request was not for, or by materially changing its design or scope,
   is not a fix: ask rather than build it under cover of a review. Correcting what a point
   shows is wrong is a fix, however visibly the behaviour changes. Fix what holds up and
   push, then reply on every thread, naming the commit or saying why not, and
   resolve it either way (\`resolveReviewThread\`, through \`gh api graphql\`).
 - **A failing check**: read its log (\`gh run view --log-failed\`), fix the cause, push.
-- **Something the person asked for**: do it, on this branch.
+- **Something the person asked for**: do it, on that branch.
 
-Before you finish, look once at the pull request's review and checks, and answer whatever
+Before you finish, look once at each pull request's review and checks, and answer whatever
 landed while you worked. Then stop: do not wait for anything still running.`;
-}
 
 /**
  * What a writing session must answer, as \`--json-schema\`, so the coordinator
@@ -209,16 +210,19 @@ export const WRITE_OUTPUT = {
       description:
         "For the agent that briefed you, which relays it to the person: what you changed and why, or what you found. On a pull request, say whether you answered its review and how its checks stand. Say where you departed from the brief or the plan, including what you judged too small to stop for. Plain and short."
     },
-    pullRequest: {
-      type: "object",
-      properties: {
-        number: { type: "integer" },
-        url: { type: "string" }
+    pullRequests: {
+      type: "array",
+      items: {
+        type: "object",
+        properties: {
+          number: { type: "integer" },
+          url: { type: "string" }
+        },
+        required: ["number", "url"],
+        additionalProperties: false
       },
-      required: ["number", "url"],
-      additionalProperties: false,
       description:
-        "The pull request you opened or pushed to. Leave it out when you pushed nothing."
+        "Every pull request you opened or pushed to, one per repository the work changed. Leave it out when you pushed nothing."
     },
     checks: {
       type: "array",
@@ -248,8 +252,8 @@ export const WRITE_OUTPUT = {
 export const WriteAnswer = z.object({
   status: z.enum(["done", "needs_input", "blocked"]),
   summary: z.string(),
-  pullRequest: z
-    .object({ number: z.number().int(), url: z.string() })
+  pullRequests: z
+    .array(z.object({ number: z.number().int(), url: z.string() }))
     .optional(),
   checks: z
     .array(z.object({ command: z.string(), passed: z.boolean() }))
@@ -266,9 +270,13 @@ export function answerText(answer: WriteAnswer): string {
     needs_input: "**Stopped for the person's decision.**",
     blocked: "**Blocked.**"
   }[answer.status];
-  const pr = answer.pullRequest
-    ? ` Pull request #${answer.pullRequest.number}: ${answer.pullRequest.url}`
-    : "";
+  const pulls = answer.pullRequests ?? [];
+  const pr =
+    pulls.length === 0
+      ? ""
+      : ` ${pulls.length === 1 ? "Pull request" : "Pull requests"} ${pulls
+          .map((pull) => `#${pull.number}: ${pull.url}`)
+          .join(", ")}`;
   const checks = answer.checks?.length
     ? `Checks run: ${answer.checks
         .map((c) => `\`${c.command}\` ${c.passed ? "passed" : "FAILED"}`)
@@ -336,18 +344,57 @@ uncommitted is deleted when you finish. Commit as you go if that suits you.
 
 Do not switch or rename the branch. The name above is how your work is found.
 
-${OWNERSHIP_NOTE}`;
+${ownershipNote(false)}`;
   if (submodules.length === 0) return note;
   return `${note}
 
-### Submodules
+${submodulesNote(
+  submodules,
+  `Each is a repository of its own, on \`${branch}\` too. **Commit inside each one you
+change** — only a submodule's own commits are kept — and push it there under the same
+branch name. Recording the new commit in the superproject is a separate commit, and
+only if the task asks for it. Only one level of submodules is checked out.`
+)}`;
+}
+
+/**
+ * What a **revising** session is told about the branches it was sent back to.
+ *
+ * Nothing put it on them: it checks each out itself, in whichever repository
+ * holds it, because a branch of a set kept together may be in several. The
+ * worktree's own branch is only where it starts.
+ */
+function branchesNote(start: string, submodules: readonly string[]): string {
+  const note = `## Your branches
+
+You are in a worktree nobody else is working in while you are, on \`${start}\`: a place to
+start from, not a branch to push.
+
+The branches to work on are listed at the top, and a branch may be in more than one
+repository here. For each, find where it is (\`git ls-remote --heads origin <branch>\` in
+each repository), fetch it and check it out there, and find its pull requests
+(\`gh pr list --head <branch>\`). If a repository has uncommitted changes when you come to
+it, stop and say so rather than switch over them.
+
+**Push each branch when you are done with it.** Only what you push leaves this session.
+
+${ownershipNote(true)}`;
+  if (submodules.length === 0) return note;
+  return `${note}
+
+${submodulesNote(
+  submodules,
+  "Each is a repository of its own. Only one level of submodules is checked out."
+)}`;
+}
+
+/** The submodules a worktree carries, what of them is the session's, and their dependencies. */
+function submodulesNote(submodules: readonly string[], own: string): string {
+  return `### Submodules
 
 ${submodules.map((path) => `- \`${path}\``).join("\n")}
 
-Each is a repository of its own, on \`${branch}\` too. **Commit inside each one you
-change** — only a submodule's own commits are kept — and push it there under the same
-branch name. Recording the new commit in the superproject is a separate commit, and
-only if the task asks for it. Only one level of submodules is checked out.
+${own}
 
 Dependencies are installed at the top of the checkout, and in a submodule only when the
 repository's own install covers it. Run \`npm ci\` in a submodule before building or testing
@@ -418,23 +465,72 @@ export function writingNote(writing: WritingOutcome): string {
     lines.push(
       `**Committed on \`${writing.branch}\`** in ${where}. To add to it before ` +
         "there is a pull request, delegate with `continue` set to that branch; " +
-        "once there is one, `claude_code_revise` with its number."
+        "once there is one, `claude_code_revise` with the branch."
     );
   }
   if (writing.discarded.length > 0) {
     lines.push(
-      `${
-        writing.discardFailed
-          ? "**Still uncommitted — deleting it failed**, so these are in the worktree:"
-          : "**Deleted, uncommitted:**"
-      } ${writing.discarded
-        .map(
-          (repo) => `${repoLabel(repo.path, many)}: ${listFiles(repo.files)}`
-        )
-        .join("; ")}.`
+      discardedLine(writing.discarded, writing.discardFailed ?? false, many)
     );
   }
   return lines.join("\n\n");
+}
+
+/**
+ * What was still uncommitted when a session ended, and whether deleting it
+ * worked: the files are listed either way, and only `failed` says which.
+ */
+function discardedLine(
+  discarded: readonly Uncommitted[],
+  failed: boolean,
+  many: boolean
+): string {
+  return `${
+    failed
+      ? "**Still uncommitted — deleting it failed**, so these are in the worktree:"
+      : "**Deleted, uncommitted:**"
+  } ${discarded
+    .map((repo) => `${repoLabel(repo.path, many)}: ${listFiles(repo.files)}`)
+    .join("; ")}.`;
+}
+
+/** What a revision pushed to one pull request, read from GitHub. */
+export interface PullPush {
+  repo: string;
+  number: number;
+  /** Commits added to its head; `undefined` where its head could not be read. */
+  pushed?: number;
+}
+
+/**
+ * What a revising session left, from GitHub rather than the worktree: it
+ * switched between branches, so no local count describes one of them. Each
+ * pull request a revision was checked against, and what reached it.
+ */
+export function revisionNote(
+  revisions: readonly { branch: string; pulls: readonly PullPush[] }[],
+  discarded: readonly Uncommitted[] = [],
+  discardFailed = false
+): string {
+  const lines = revisions.map(({ branch, pulls }) => {
+    const each = pulls.map(({ repo, number, pushed }) => {
+      const what =
+        pushed === undefined
+          ? "could not be read"
+          : pushed === 0
+            ? "nothing pushed"
+            : `${pushed} commit${pushed === 1 ? "" : "s"} pushed`;
+      return `${repo}#${number} (${what})`;
+    });
+    return `- \`${branch}\`: ${each.join(", ")}`;
+  });
+  const parts = [`**What reached the pull requests:**\n${lines.join("\n")}`];
+  if (discarded.length > 0) {
+    const many =
+      discarded.length > 1 || discarded.some((repo) => repo.path !== ".");
+    parts.push(discardedLine(discarded, discardFailed, many));
+  }
+  return parts.join("\n\n");
 }
 
 /**
@@ -448,8 +544,8 @@ export function writingNote(writing: WritingOutcome): string {
  * install or a workspace that has stopped accepting writes is the difference
  * between a failure worth retrying and one that never will be.
  *
- * A writer on a branch finishes by delivering a pull request, or — given one —
- * by revising it.
+ * A writer on a branch finishes by delivering a pull request, or — sent back to
+ * branches — by revising theirs.
  */
 export function sessionBrief(
   task: string,
@@ -458,14 +554,15 @@ export function sessionBrief(
     branch: string;
     submodules: readonly string[];
     continues: boolean;
+    /** Sent back to the branches its task names, rather than on its own. */
+    revising?: boolean;
   },
   plan?: {
     /** The plan it carries out, as the caller was shown it. */
     text: string;
     /** Whether it carries on from the conversation that wrote the plan. */
     resumed: boolean;
-  },
-  pullRequest?: { number: number; url?: string }
+  }
 ): string {
   const parts = [task, "", GITHUB_NOTE];
   // On a branch only. A scratchpad session has none, and keeps what it leaves
@@ -473,13 +570,15 @@ export function sessionBrief(
   if (writing) {
     parts.push(
       "",
-      branchNote(writing.branch, writing.submodules, writing.continues),
+      writing.revising
+        ? branchesNote(writing.branch, writing.submodules)
+        : branchNote(writing.branch, writing.submodules, writing.continues),
       "",
       DESIGN_NOTE,
       "",
       CHECK_NOTE,
       "",
-      pullRequest ? reviseNote(pullRequest) : DELIVERY_NOTE
+      writing.revising ? REVISE_NOTE : DELIVERY_NOTE
     );
   }
   if (plan) parts.push("", planNote(plan.text, plan.resumed));
@@ -694,6 +793,21 @@ $REPO_PATHS
 EOF
 exit $rc`;
 
+/**
+ * Put each listed repository back on the worktree's own branch, after a
+ * revision checked out others: a worktree left on one of those reads as holding
+ * work, and is held from the next session. After {@link DISCARD}, so `-f` takes
+ * nothing that was still uncommitted.
+ */
+export const RETURN_TO_START = `rc=0
+while IFS= read -r p; do
+  [ -n "$p" ] || continue
+  git -C "$p" checkout -q -f "$WORKTREE_BRANCH" || rc=1
+done <<EOF
+$REPO_PATHS
+EOF
+exit $rc`;
+
 /** Commits each listed repository has past where it started. */
 export const COUNT_COMMITS = `tab="$(printf '\\t')"
 while IFS="$tab" read -r p start; do
@@ -723,16 +837,14 @@ export function tabbed(out: string): string[][] {
  * Claude Code's per-response output limit bounds it. The parent cannot fetch a
  * part cut from it, and the middle is where a report's findings are.
  *
- * The footer under both is {@link sessionFooter}, which carries its own
- * reasoning — including why a denial count belongs beside the cost.
+ * `kept` is what became of the branches, the host's account rather than the
+ * session's: {@link writingNote} or {@link revisionNote}. The footer under it
+ * is {@link sessionFooter}, which carries its own reasoning — including why a
+ * denial count belongs beside the cost.
  */
-export function sessionReport(
-  outcome: SessionOutcome,
-  writing?: WritingOutcome
-): string {
+export function sessionReport(outcome: SessionOutcome, kept = ""): string {
   const { session } = outcome;
   const result = session.result;
-  const kept = writing ? writingNote(writing) : "";
 
   if (!result) {
     /**

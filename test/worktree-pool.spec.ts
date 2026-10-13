@@ -372,6 +372,41 @@ describe("claiming a worktree", () => {
     ).toThrow(/claude-coordinator\/t\/1 is being worked on by another session/);
   });
 
+  /**
+   * Checked in the step that writes the claim, so two revisions prepared at
+   * once — each past its own check before either claimed — cannot both hold
+   * a branch. Within one repository's pool, where a name means one branch.
+   */
+  it("refuses a branch another live run is revising, in that repository only", () => {
+    const pool = memoryPoolStore();
+    claim(pool, REPO, { ...ctx, revising: ["feat/x"] }, 10);
+
+    expect(() =>
+      claim(
+        pool,
+        REPO,
+        { taskId: "t", runId: "detached:2", revising: ["feat/x"] },
+        11
+      )
+    ).toThrow(/feat\/x is being worked on by another session/);
+    expect(() =>
+      claim(
+        pool,
+        REPO,
+        { taskId: "t", runId: "detached:3", continue: "feat/x" },
+        12
+      )
+    ).toThrow(/feat\/x is being worked on by another session/);
+    expect(
+      claim(
+        pool,
+        "acme/other",
+        { taskId: "t", runId: "detached:4", revising: ["feat/x"] },
+        13
+      ).revising
+    ).toEqual(["feat/x"]);
+  });
+
   it("adopts a branch no worktree holds into a free one", () => {
     const pool = memoryPoolStore();
     const claimed = claim(

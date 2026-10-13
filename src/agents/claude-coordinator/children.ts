@@ -23,21 +23,17 @@ import {
   WORKSPACE_RUNTIME_KEY
 } from "@dynamicagents/plugins/workspace";
 import {
+  placementRepo,
   readSubmodules,
-  selectedRepo,
   type RunRef,
   type SessionPlace,
   type SubtaskWorkspaces
 } from "@/workspace/subtask-workspace";
 import { activeRepo } from "@/workspace/active-repo";
+import { isBranchName } from "@/workspace/worktree-pool";
 import { claudeCodeConfig } from "./claude-code";
-import {
-  branchSession,
-  openPullRequest,
-  recordBranchRun,
-  type BranchScope,
-  type OpenPullRequest
-} from "./branches";
+import { branchSession, recordBranchRun, type BranchScope } from "./branches";
+import { commitsSince, pullHead, pullsFrom, type BranchPull } from "./github";
 import {
   createPlan,
   lastPlanIndex,
@@ -54,6 +50,7 @@ import {
   recordPlanRun,
   REVISE_INPUT,
   REVISER_DESCRIPTION,
+  revisionsText,
   WRITE_INPUT,
   WRITER_DESCRIPTION,
   type PlannedSession,
@@ -68,16 +65,20 @@ import {
   DISCARD,
   LIST_UNCOMMITTED,
   READ_HEADS,
+  RETURN_TO_START,
   STOPPED_EXIT,
   needsWarning,
   notResumable,
   planBrief,
   planReport,
+  revisionNote,
   sessionBrief,
   sessionReport,
   tabbed,
   unresumableReport,
   warningPrompt,
+  writingNote,
+  type PullPush,
   type RepoStart,
   type Uncommitted,
   type WritingOutcome,
@@ -346,8 +347,7 @@ export async function prepareWriter(
 async function placeOnBranch(
   ctx: SubAgentPrepareContext<{ task: string }, Env>,
   branch: string,
-  workspaces: SubtaskWorkspaces,
-  pullRequest?: OpenPullRequest
+  workspaces: SubtaskWorkspaces
 ): Promise<Record<string, unknown>> {
   const last = await branchSession(
     ctx.parent.storage,
@@ -366,26 +366,25 @@ async function placeOnBranch(
   const resume = carryOn(last, place, { fork: false });
   return {
     ...runtimeOf(place),
-    ...(pullRequest ? { [PR_KEY]: pullRequest } : {}),
     ...(resume ? { [RESUME_KEY]: resume } : {})
   };
 }
 
 /**
  * Which of this caller's runs on a branch name are *this* branch's: the ones
- * placed where this session will be. Read from the parent's selection, which is
- * what `resolve` in `@/workspace/subtask-workspace.ts` places the session from —
- * a worktree in the selected repository, or the parent's own workspace when the
- * selection names no repository. See {@link BranchScope}.
+ * placed where this session will be. Read the way `resolve` in
+ * `@/workspace/subtask-workspace.ts` places the session — a worktree of the
+ * selected repository's root, or the parent's own workspace when the selection
+ * names no repository. See {@link BranchScope}.
  */
 function branchScope(parent: {
   storage: DurableObjectStorage;
   callerKey: () => string;
 }): BranchScope {
-  const selected = activeRepo(parent.storage).get();
-  const repo = selectedRepo(selected);
+  const active = activeRepo(parent.storage);
+  const repo = placementRepo(active);
   return repo === undefined
-    ? { workspaceName: workspaceName(parent.callerKey(), selected) }
+    ? { workspaceName: workspaceName(parent.callerKey(), active.get()) }
     : { repo };
 }
 
@@ -404,24 +403,138 @@ function noteBranchRun(
 }
 
 /**
- * A revising session goes back to the branch an open pull request is from,
- * which GitHub names — never a model — and is told which pull request it is.
+ * A revising session, sent back to branches with open pull requests.
+ *
+ * **Every branch is checked before anything is claimed**, and a call naming one
+ * that cannot be worked on is refused whole, saying why for each: a name git
+ * would not take, one named twice, one a session is working on now, or one with
+ * no open pull request in the root or its submodules. The pull requests are
+ * GitHub's answer, never a model's.
+ *
+ * Then the session gets a worktree of the root at its base, and checks each
+ * branch out itself. It starts fresh: its branches may come from several
+ * conversations, and none of them is the one to carry on.
  */
 export async function prepareReviser(
   ctx: SubAgentPrepareContext<ReviseInput, Env>,
   workspaces: SubtaskWorkspaces = sessionWorkspaces(ctx.parent),
-  lookUp: (number: number) => Promise<OpenPullRequest> = (number) => {
-    const checkout = activeRepo(ctx.parent.storage).checkout();
-    if (!checkout) {
-      throw new Error(
-        "claude_code_revise: there is no repository checked out. Clone the one the pull request is in with `repo_clone` first."
-      );
-    }
-    return openPullRequest(ctx.parent.env.GITHUB_TOKEN, checkout.url, number);
-  }
+  lookUp: (repo: string, branch: string) => Promise<BranchPull[]> = (
+    repo,
+    branch
+  ) => pullsFrom(ctx.parent.env.GITHUB_TOKEN, repo, branch)
 ): Promise<Record<string, unknown>> {
-  const pullRequest = await lookUp(ctx.input.pr);
-  return await placeOnBranch(ctx, pullRequest.branch, workspaces, pullRequest);
+  const active = activeRepo(ctx.parent.storage);
+  const root = placementRepo(active);
+  if (root === undefined) {
+    throw new Error(
+      "claude_code_revise: there is no repository checked out. Clone the one the branches are in with `repo_clone` first."
+    );
+  }
+  const repos = [root, ...active.submodulesOf(root)];
+  const seen = new Set<string>();
+  const checked = await Promise.all(
+    ctx.input.revisions.map(async ({ branch }) => {
+      const refuse = (why: string) => ({ branch, why });
+      if (!isBranchName(branch)) return refuse("not a branch name");
+      if (seen.has(branch)) return refuse("named more than once");
+      seen.add(branch);
+      if (workspaces.working(branch)) {
+        return refuse("a session is working on it now; wait for its report");
+      }
+      let pulls: BranchPull[];
+      try {
+        pulls = (
+          await Promise.all(repos.map((repo) => lookUp(repo, branch)))
+        ).flat();
+      } catch (err) {
+        return refuse(err instanceof Error ? err.message : String(err));
+      }
+      const open = pulls.filter((pull) => pull.state === "open");
+      if (open.length > 0) return { branch, pulls: open };
+      const last = pulls[0];
+      return refuse(
+        last
+          ? `its pull request ${last.repo}#${last.number} is ${last.state}`
+          : `no pull request is from it in ${repos.join(", ")}`
+      );
+    })
+  );
+  const refused = checked.filter((check) => "why" in check);
+  if (refused.length > 0) {
+    throw new Error(
+      [
+        "claude_code_revise: nothing was started, because:",
+        ...refused.map((check) => `- \`${check.branch}\`: ${check.why}.`)
+      ].join("\n")
+    );
+  }
+  const revisions: Revision[] = checked.flatMap((check) =>
+    "pulls" in check
+      ? [
+          {
+            branch: check.branch,
+            pulls: check.pulls.map(({ repo, number, head }) => ({
+              repo,
+              number,
+              head
+            }))
+          }
+        ]
+      : []
+  );
+  const place = await claimPlace(workspaces, {
+    taskId: ctx.taskId,
+    runId: ctx.runId,
+    revising: revisions.map((revision) => revision.branch)
+  });
+  return { ...runtimeOf(place), [REVISIONS_KEY]: revisions };
+}
+
+/** A branch a revising session was sent back to, and its pull requests' heads then. */
+interface Revision {
+  branch: string;
+  pulls: { repo: string; number: number; head: string }[];
+}
+
+/** Where a revising run's branches are kept in what `prepare` hands it. */
+const REVISIONS_KEY = "revisions";
+
+function revisionsOf(
+  runtime: Record<string, unknown> | undefined
+): Revision[] | undefined {
+  const revisions = runtime?.[REVISIONS_KEY];
+  return Array.isArray(revisions) ? (revisions as Revision[]) : undefined;
+}
+
+/**
+ * What a revising session leaves. Completed, its worktree is freed: it pushed
+ * what it kept, and the worktree's own branch never held any of it. Stopped
+ * before that, what it had not pushed is kept in the worktree, which stays
+ * held — and the note says so, rather than `keep`'s, which names the branch
+ * the worktree holds and none of the session's work is on.
+ */
+export async function settleReviser(
+  ctx: Pick<
+    SubAgentSettleContext<Env>,
+    "taskId" | "runId" | "result" | "runtime"
+  >,
+  workspaces: SubtaskWorkspaces,
+  storage: DurableObjectStorage
+): Promise<void> {
+  const run = { taskId: ctx.taskId, runId: ctx.runId };
+  if (ctx.result.status === "completed") {
+    return workspaces.release(run, { forgetBranch: true });
+  }
+  await workspaces.keep(run);
+  const branch = placeOf(ctx.runtime).branch;
+  keepNote(
+    storage,
+    ctx.taskId,
+    ctx.runId,
+    "What it pushed is on the pull requests. What it had not is kept in its " +
+      `worktree, which \`repo_worktree\` with \`${branch}\` points your reads at.`
+  );
+  await workspaces.release(run, { hold: true });
 }
 
 const settleWriter = (ctx: SubAgentSettleContext<Env>): Promise<void> =>
@@ -480,9 +593,9 @@ function carryOn(
 
 /**
  * The transcript a run files on, when it is not its own: the conversation's it
- * carries on. A sub-agent spec's `transcriptKey`, so a plan edited or a pull
- * request revised goes on the page the session already has, and the thread is
- * not given a second link to it.
+ * carries on. A sub-agent spec's `transcriptKey`, so a plan edited or a branch
+ * continued goes on the page the session already has, and the thread is not
+ * given a second link to it.
  */
 export function carriedTranscript({
   runtime
@@ -640,19 +753,6 @@ export async function reportPlan(
 /** Where a run's plan is kept in what `prepare` hands it. */
 const PLAN_KEY = "plan";
 
-/** Where a revising run's pull request is kept in what `prepare` hands it. */
-const PR_KEY = "pullRequest";
-
-/** The pull request a revising session works on, if it is one. */
-function pullRequestOf(
-  runtime: Record<string, unknown> | undefined
-): OpenPullRequest | undefined {
-  const pr = runtime?.[PR_KEY];
-  return pr && typeof pr === "object" && "number" in pr
-    ? (pr as OpenPullRequest)
-    : undefined;
-}
-
 /** A planning session's plan, as `prepare` hands it over. */
 export interface PlanPlace {
   id: string;
@@ -679,12 +779,13 @@ function writerPlanOf(
 
 /** A Claude Code session as a sub-agent: the writer, the planner and the reader below. */
 abstract class ClaudeCodeRun extends SubAgent<Env> {
-  protected abstract readonly kind: "write" | "plan";
+  protected abstract readonly kind: "write" | "revise" | "plan";
 
   override getModel(): ThinkModel {
     const runtime = this.pluginContext().runtime();
     const place = placeOf(runtime);
-    const writes = this.kind === "write" && place.branch !== undefined;
+    const writes = this.kind !== "plan" && place.branch !== undefined;
+    const revisions = this.kind === "revise" ? revisionsOf(runtime) : undefined;
     const plan = this.kind === "plan" ? planPlaceOf(runtime) : undefined;
     if (this.kind === "plan" && !plan) {
       throw new Error(
@@ -734,7 +835,7 @@ abstract class ClaudeCodeRun extends SubAgent<Env> {
               writes,
               writerPlanOf(runtime),
               resume !== undefined,
-              pullRequestOf(runtime)
+              revisions !== undefined
             ),
       ...(writes
         ? { followUp: (session: SessionEnd) => this.#followUp(session, place) }
@@ -758,7 +859,7 @@ abstract class ClaudeCodeRun extends SubAgent<Env> {
                   version
                 })
             )
-          : this.#report(outcome, place, writes);
+          : this.#report(outcome, place, writes, revisions);
       }
     });
   }
@@ -817,7 +918,7 @@ abstract class ClaudeCodeRun extends SubAgent<Env> {
     writes: boolean,
     planId: string | undefined,
     resumed: boolean,
-    pullRequest?: OpenPullRequest
+    revising: boolean
   ): Promise<string> {
     const note = sessionAdvisory(
       await this.#stub(place.workspaceName).advisories()
@@ -834,12 +935,10 @@ abstract class ClaudeCodeRun extends SubAgent<Env> {
       {
         branch: place.branch as string,
         submodules,
-        continues: place.continues ?? false
+        continues: place.continues ?? false,
+        ...(revising ? { revising } : {})
       },
-      plan,
-      pullRequest
-        ? { number: pullRequest.number, url: pullRequest.url }
-        : undefined
+      plan
     );
   }
 
@@ -917,7 +1016,8 @@ abstract class ClaudeCodeRun extends SubAgent<Env> {
   async #report(
     outcome: SessionOutcome,
     place: SessionPlace,
-    writes: boolean
+    writes: boolean,
+    revisions?: readonly Revision[]
   ): Promise<string> {
     const last = outcome.followUp ?? outcome.session;
     const reading = last.rateLimit ?? outcome.session.rateLimit;
@@ -929,13 +1029,85 @@ abstract class ClaudeCodeRun extends SubAgent<Env> {
     const discarded = stopped
       ? { files: [], failed: false }
       : await this.#discard(place, repos);
+    if (revisions) {
+      // A worktree left on a revised branch is held from the next session.
+      // Only over a clean tree: one that would not clean is held as it is.
+      if (!stopped && !discarded.failed)
+        await this.#returnToStart(place, repos);
+      return sessionReport(
+        outcome,
+        revisionNote(
+          await this.#pushes(revisions),
+          discarded.files,
+          discarded.failed
+        )
+      );
+    }
     const writing: WritingOutcome = {
       branch: place.branch as string,
       commits: await this.#commits(place, repos),
       discarded: discarded.files,
       ...(discarded.failed ? { discardFailed: true } : {})
     };
-    return sessionReport(outcome, writing);
+    return sessionReport(outcome, writingNote(writing));
+  }
+
+  /** Put the worktree back on its own branch: see `RETURN_TO_START`. */
+  async #returnToStart(
+    place: SessionPlace,
+    repos: readonly RepoStart[]
+  ): Promise<void> {
+    try {
+      const done = await this.#exec(place.workspaceName)(RETURN_TO_START, {
+        cwd: place.dir,
+        env: {
+          REPO_PATHS: repos.map((repo) => repo.path).join("\n"),
+          WORKTREE_BRANCH: place.branch as string
+        }
+      });
+      if (!done.success) {
+        console.warn(
+          "[claude-coordinator] a revised worktree did not go back to its branch",
+          { stderr: done.stderr.trim().slice(0, 500) }
+        );
+      }
+    } catch (err) {
+      console.warn(
+        "[claude-coordinator] could not put a revised worktree back on its branch",
+        { err: String(err) }
+      );
+    }
+  }
+
+  /**
+   * What reached each pull request a revision was checked against: its head
+   * then and now, from GitHub. Unreadable reads as unknown, never as nothing.
+   */
+  async #pushes(
+    revisions: readonly Revision[]
+  ): Promise<{ branch: string; pulls: PullPush[] }[]> {
+    const token = this.env.GITHUB_TOKEN;
+    return Promise.all(
+      revisions.map(async ({ branch, pulls }) => ({
+        branch,
+        pulls: await Promise.all(
+          pulls.map(async ({ repo, number, head }) => {
+            const now = await pullHead(token, repo, number);
+            const pushed =
+              now === undefined
+                ? undefined
+                : now === head
+                  ? 0
+                  : await commitsSince(token, repo, head, now);
+            return {
+              repo,
+              number,
+              ...(pushed === undefined ? {} : { pushed })
+            };
+          })
+        )
+      }))
+    );
   }
 
   /**
@@ -1137,8 +1309,8 @@ export class ClaudeCoordinatorWriterChild extends ClaudeCodeRun {
 }
 
 /**
- * A writing session sent back to an open pull request, carrying on the
- * conversation that wrote it — see {@link prepareReviser}.
+ * A writing session sent back to branches with open pull requests, in a fresh
+ * worktree of the root — see {@link prepareReviser}.
  */
 export class ClaudeCoordinatorReviserChild extends ClaudeCodeRun {
   static override spec = {
@@ -1146,12 +1318,13 @@ export class ClaudeCoordinatorReviserChild extends ClaudeCodeRun {
     name: "claude_code_revise",
     description: REVISER_DESCRIPTION,
     inputSchema: REVISE_INPUT,
+    formatInput: revisionsText,
     prepare: (ctx: SubAgentPrepareContext<ReviseInput, Env>) =>
       prepareReviser(ctx),
-    settle: settleWriter,
-    transcriptKey: carriedTranscript
+    settle: (ctx: SubAgentSettleContext<Env>) =>
+      settleReviser(ctx, sessionWorkspaces(ctx.parent), ctx.parent.storage)
   } as SubAgentSpec<never, never>;
-  protected readonly kind = "write";
+  protected readonly kind = "revise";
 }
 
 /**

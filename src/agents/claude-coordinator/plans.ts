@@ -90,35 +90,57 @@ export const WRITER_DESCRIPTION = [
   "nothing: it pushes nothing and opens nothing."
 ].join("\n");
 
-/** `claude_code_revise`'s input: which pull request, and what brought it back. */
+/** `claude_code_revise`'s input: which branches, and what brought each back. */
 export const REVISE_INPUT = z.object({
-  pr: z
-    .number()
-    .int()
-    .positive()
+  revisions: z
+    .array(
+      z.object({
+        branch: z
+          .string()
+          .describe(
+            "A branch with an open pull request: one a session's report named, or the head branch `repo_pr_view` shows."
+          ),
+        task: z
+          .string()
+          .describe(
+            "What brought it back, in a sentence: a self-review, Copilot's review having landed, a check that failed (by name), or what the person asked for, in their words. Say what happened, not how to answer it."
+          )
+      })
+    )
+    .min(1)
     .describe(
-      "The pull request's number, in the repository you have checked out."
-    ),
-  task: z
-    .string()
-    .describe(
-      "What brought it back, in a sentence: a self-review, Copilot's review having landed, a check that failed (by name), or what the person asked for, in their words. Say what happened, not how to answer it."
+      "Each branch to send back, with what brought it back. Several go in one call when several have something landed: one session answers them all."
     )
 });
 
 export type ReviseInput = z.infer<typeof REVISE_INPUT>;
 
+/** What a revising session is handed: each branch, and what brought it back. */
+export function revisionsText(input: ReviseInput): string {
+  return [
+    "Work on these branches:",
+    "",
+    ...input.revisions.map(
+      (revision) => `- \`${revision.branch}\`: ${revision.task.trim()}`
+    )
+  ].join("\n");
+}
+
 /** What the parent model is told `claude_code_revise` does. */
 export const REVISER_DESCRIPTION = [
-  "Send a Claude Code session back to an open pull request to work on it: a",
-  "self-review, Copilot's review once it has landed, a failing check, or something",
-  "the person asked for. It carries on the conversation that wrote the pull",
-  "request where it can, so it starts knowing the code.",
+  "Send a Claude Code session back to branches with open pull requests to work on",
+  "them: a self-review, Copilot's review once it has landed, a failing check, or",
+  "something the person asked for. Name each branch and what brought it back.",
+  "Several go in one call, and one session answers them all — every pull request",
+  "from each branch, in whichever repositories it is in.",
+  "",
+  "Each branch must have an open pull request and no session working on it. A",
+  "call naming one that does not is refused with the reason, and nothing starts.",
   "",
   "It already knows how to answer each of those — a review in one pass, every",
   "thread replied to and resolved, CI's logs read and fixed — so tell it what",
   "landed, not what to do about it. Before it finishes it looks once at the",
-  "review and the checks, and answers whatever landed while it worked.",
+  "reviews and the checks, and answers whatever landed while it worked.",
   "",
   "A self-review pass improves the pull request it already has: the shape of that",
   "diff, its modularity, the debt in it — not new behaviour and not work elsewhere.",
@@ -127,8 +149,8 @@ export const REVISER_DESCRIPTION = [
   "that under cover of a review. Correcting what a point shows is wrong is a fix,",
   "however visibly the behaviour changes, and it makes those in the one pass.",
   "",
-  "One session at a time on a pull request: while one is running, wait for its",
-  "report rather than start another."
+  "One session at a time on a branch: while one is running, wait for its report",
+  "rather than start another."
 ].join("\n");
 
 /** What the parent model is told `claude_code_plan` does. */

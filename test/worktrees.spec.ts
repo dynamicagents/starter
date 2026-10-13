@@ -47,7 +47,9 @@ function setup(opts: { selected?: string | null; checkoutDir?: string } = {}) {
     set: (repo: string) => {
       selected = repo;
     },
-    checkout: () => CHECKOUT
+    checkout: () => CHECKOUT,
+    checkoutOf: () => undefined,
+    rootOf: (repo: string) => repo
   } as unknown as ActiveRepo;
   const pool = memoryPoolStore();
   pool.put(HELD);

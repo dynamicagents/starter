@@ -9,6 +9,7 @@ import { SCRATCH_REPO } from "./scratch";
 import {
   claim,
   isBranchName,
+  workingOn,
   parseWorktreeRepo,
   worktreeRepo,
   type PoolRepo,
@@ -471,7 +472,7 @@ export interface SubtaskWorkspaces {
       revising?: readonly string[];
     }
   ): Promise<SessionPlace>;
-  /** Whether a live session holds `branch`, or is revising it. */
+  /** Whether a live session holds `branch` in the placement root's pool, or is revising it. */
   working(branch: string): boolean;
   /**
    * The run is over: record where it left each repository and free it. `hold`
@@ -933,13 +934,8 @@ export function subtaskWorkspaces(config: {
     },
 
     working(branch: string): boolean {
-      return config.pool
-        .every()
-        .some(
-          (row) =>
-            row.live !== undefined &&
-            (row.branch === branch || (row.revising ?? []).includes(branch))
-        );
+      const repo = placementRepo(config.active);
+      return repo !== undefined && workingOn(config.pool.all(repo), branch);
     },
 
     async release(ctx, options = {}): Promise<void> {

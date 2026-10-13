@@ -162,8 +162,8 @@ export function isFree(worktree: Worktree): boolean {
  *
  * - The one already live for this run: a `prepare` repeated for the same run
  *   finishes the worktree it claimed, and a second answer would strand the work.
- * - For `continue`, the worktree holding that branch, unless a session is in it
- *   or is revising the branch from another.
+ * - For `continue`, the worktree holding that branch. A branch a live run holds
+ *   or is revising — `continue` or `revising` — is refused.
  *   When none holds it — it was pushed and released, or its worktree went to
  *   another run — a free one adopts it from the remote.
  * - Otherwise `near`, when that slot is free: it holds a conversation the run
@@ -201,19 +201,16 @@ export function claim(
     ctx.continue === undefined
       ? undefined
       : rows.find((row) => row.branch === ctx.continue);
-  const reviser =
-    ctx.continue === undefined
-      ? undefined
-      : store
-          .every()
-          .find(
-            (row) =>
-              row.live && (row.revising ?? []).includes(ctx.continue as string)
-          );
-  if (holder?.live || reviser) {
+  // Here, in the one synchronous step that writes the claim, so two runs
+  // prepared at once cannot both pass a check made before either was written.
+  const busy = [
+    ...(ctx.continue === undefined ? [] : [ctx.continue]),
+    ...(ctx.revising ?? [])
+  ].find((branch) => workingOn(rows, branch));
+  if (busy !== undefined) {
     throw new Error(
-      `claude-coordinator: ${ctx.continue} is being worked on by another session ` +
-        "right now. Wait for its report, then continue the branch."
+      `claude-coordinator: ${busy} is being worked on by another session ` +
+        "right now. Wait for its report before sending it back."
     );
   }
 
@@ -252,6 +249,18 @@ export function claim(
   };
   store.put(claimed);
   return claimed;
+}
+
+/**
+ * Whether a live run in `rows` — one repository's pool, where a branch name
+ * means one branch — holds `branch` or is revising it.
+ */
+export function workingOn(rows: readonly Worktree[], branch: string): boolean {
+  return rows.some(
+    (row) =>
+      row.live !== undefined &&
+      (row.branch === branch || (row.revising ?? []).includes(branch))
+  );
 }
 
 /**

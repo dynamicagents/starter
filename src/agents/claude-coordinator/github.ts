@@ -28,9 +28,9 @@ function repoPath(repo: string): string {
 }
 
 /**
- * A checkout's `.gitmodules` on `branch`, or `undefined` when GitHub has none
- * to give: the repository is not on github.com, has no submodules, or could
- * not be read just now.
+ * A checkout's `.gitmodules` on `branch`: empty when GitHub says there is none,
+ * and `undefined` when it cannot say — the repository is not on github.com, or
+ * could not be read just now — which a caller keeps its last answer for.
  */
 export async function gitmodulesOf(
   token: string,
@@ -46,6 +46,7 @@ export async function gitmodulesOf(
       `${repoPath(`${repo.owner}/${repo.repo}`)}/contents/.gitmodules?ref=${encodeURIComponent(branch)}`,
       "application/vnd.github.raw"
     );
+    if (answer.status === 404) return "";
     return answer.ok ? await answer.text() : undefined;
   } catch {
     return undefined;
@@ -63,22 +64,37 @@ export interface BranchPull {
 }
 
 /**
- * The pull requests from `branch` in `repo`, newest first. Only from the
- * repository's own branch: `head` names the owner, so a fork's pull request
- * under the same branch name is not one of them — and a session could not push
- * to it anyway.
+ * The open pull requests from `branch` in `repo` — or, with none open, the
+ * latest closed one, which says why. Only from the repository's own branch:
+ * `head` names the owner, so a fork's pull request under the same branch name
+ * is not one of them, and a session could not push to it anyway.
  *
- * Throws when GitHub does not answer, so a check is never passed on a guess.
+ * Open ones are asked for on their own, so any number of closed pull requests
+ * from a reused branch cannot hide one. Throws when GitHub does not answer, so
+ * a check is never passed on a guess.
  */
 export async function pullsFrom(
   token: string,
   repo: string,
   branch: string
 ): Promise<BranchPull[]> {
+  const open = await pullsIn(token, repo, branch, "open", 100);
+  return open.length > 0
+    ? open
+    : await pullsIn(token, repo, branch, "closed", 1);
+}
+
+async function pullsIn(
+  token: string,
+  repo: string,
+  branch: string,
+  state: "open" | "closed",
+  limit: number
+): Promise<BranchPull[]> {
   const [owner = ""] = repo.split("/");
   const answer = await get(
     token,
-    `${repoPath(repo)}/pulls?state=all&head=${encodeURIComponent(`${owner}:${branch}`)}&per_page=10`
+    `${repoPath(repo)}/pulls?state=${state}&head=${encodeURIComponent(`${owner}:${branch}`)}&per_page=${limit}`
   );
   if (!answer.ok) {
     throw new Error(

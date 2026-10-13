@@ -38,7 +38,11 @@ import {
   branchSession,
   recordBranchRun
 } from "@/agents/claude-coordinator/branches";
-import { pullsFrom, type BranchPull } from "@/agents/claude-coordinator/github";
+import {
+  gitmodulesOf,
+  pullsFrom,
+  type BranchPull
+} from "@/agents/claude-coordinator/github";
 import {
   createPlan,
   ownsPlan,
@@ -2141,38 +2145,48 @@ describe("the checkouts a caller has recorded", () => {
 
 /** The pull requests a revision is checked against are GitHub's answer, never a model's. */
 describe("the pull requests from a branch", () => {
-  it("asks for the repository's own branch, and reads each one's state", async () => {
-    const spy = vi.spyOn(globalThis, "fetch").mockResolvedValue(
-      new Response(
-        JSON.stringify([
-          { number: 3, state: "open", html_url: "u3", head: { sha: "h3" } },
-          {
-            number: 2,
-            state: "closed",
-            merged_at: "2026-10-01T00:00:00Z",
-            html_url: "u2",
-            head: { sha: "h2" }
-          },
-          {
-            number: 1,
-            state: "closed",
-            merged_at: null,
-            html_url: "u1",
-            head: { sha: "h1" }
-          }
-        ]),
-        { status: 200 }
-      )
-    );
+  /** GitHub, answering each `state` with its own list. */
+  const github = (by: Record<string, unknown[]>, status = 200) =>
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+      const state = new URL(String(input)).searchParams.get("state") ?? "";
+      return new Response(JSON.stringify(by[state] ?? []), { status });
+    });
+
+  it("asks for the open ones from the repository's own branch, on their own", async () => {
+    const spy = github({
+      open: [{ number: 3, state: "open", html_url: "u3", head: { sha: "h3" } }]
+    });
     try {
       expect(await pullsFrom("t", "acme/api", "feat/x")).toEqual([
-        { repo: "acme/api", number: 3, url: "u3", state: "open", head: "h3" },
-        { repo: "acme/api", number: 2, url: "u2", state: "merged", head: "h2" },
-        { repo: "acme/api", number: 1, url: "u1", state: "closed", head: "h1" }
+        { repo: "acme/api", number: 3, url: "u3", state: "open", head: "h3" }
       ]);
       // `head` names the owner, so a fork's branch of the same name is not asked for.
-      expect(String(spy.mock.calls[0]![0])).toBe(
-        "https://api.github.com/repos/acme/api/pulls?state=all&head=acme%3Afeat%2Fx&per_page=10"
+      expect(spy.mock.calls.map(([url]) => String(url))).toEqual([
+        "https://api.github.com/repos/acme/api/pulls?state=open&head=acme%3Afeat%2Fx&per_page=100"
+      ]);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("answers the latest closed one when none is open, saying whether it was merged", async () => {
+    const spy = github({
+      closed: [
+        {
+          number: 2,
+          state: "closed",
+          merged_at: "2026-10-01T00:00:00Z",
+          html_url: "u2",
+          head: { sha: "h2" }
+        }
+      ]
+    });
+    try {
+      expect(await pullsFrom("t", "acme/api", "feat/x")).toEqual([
+        { repo: "acme/api", number: 2, url: "u2", state: "merged", head: "h2" }
+      ]);
+      expect(String(spy.mock.calls[1]![0])).toContain(
+        "state=closed&head=acme%3Afeat%2Fx&per_page=1"
       );
     } finally {
       spy.mockRestore();
@@ -2180,13 +2194,46 @@ describe("the pull requests from a branch", () => {
   });
 
   it("throws when GitHub does not answer, so no branch passes on a guess", async () => {
-    const spy = vi
-      .spyOn(globalThis, "fetch")
-      .mockResolvedValue(new Response("{}", { status: 502 }));
+    const spy = github({}, 502);
     try {
       await expect(pullsFrom("t", "acme/api", "feat/x")).rejects.toThrow(
         "GitHub answered 502"
       );
+    } finally {
+      spy.mockRestore();
+    }
+  });
+});
+
+/** A superproject's submodules are read from GitHub, and only a real answer replaces the last one. */
+describe("a checkout's .gitmodules", () => {
+  const answering = (status: number, body = "") =>
+    vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValue(new Response(body, { status }));
+
+  it.each([
+    ["is the file", 200, "[submodule]", "[submodule]"],
+    ["is empty when there is none", 404, "", ""],
+    ["is unknown when GitHub cannot say", 503, "", undefined]
+  ])("%s", async (_label, status, body, expected) => {
+    const spy = answering(status, body);
+    try {
+      expect(
+        await gitmodulesOf("t", "https://github.com/acme/super", "main")
+      ).toBe(expected);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("is unknown for a repository not on github.com, without asking", async () => {
+    const spy = answering(200, "[submodule]");
+    try {
+      expect(
+        await gitmodulesOf("t", "https://gitlab.com/acme/super", "main")
+      ).toBeUndefined();
+      expect(spy).not.toHaveBeenCalled();
     } finally {
       spy.mockRestore();
     }

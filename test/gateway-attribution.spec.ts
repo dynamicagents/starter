@@ -27,9 +27,9 @@ interface Dispatch {
   /**
    * `returnRawResponse`, which only the catalog arm sets, and the prefix-cache
    * key, which only the Workers AI arm sends. Between them they are the whole
-   * of what says which arm built the model: both arms pass the model id
-   * through untouched and both pass a `gateway`, so neither of those tells
-   * them apart. Each arm is wrong in its own silent way without these — a slug
+   * of what says which arm built the model: every arm passes the model id
+   * through untouched and every arm passes a `gateway`, so those say nothing
+   * about it. Each arm is wrong in its own silent way without these — a slug
    * on the Workers AI arm reaches a provider nothing serves, and a `@cf/` id on
    * the catalog arm still works but routes off its own re-sent prefix.
    */
@@ -172,14 +172,14 @@ describe("an agent's calls", () => {
 });
 
 /**
- * Which of `src/model.ts`'s two arms each agent's turn takes.
+ * Which arm of `src/model.ts` each agent's turn takes.
  *
  * The id is read at the binding rather than off the built model, because for a
  * catalog slug the model's own `modelId` is the provider-native half (`gpt-…`)
  * and it is the whole slug that has to arrive for AI Gateway to route it. The
- * id alone would not catch an arm chosen wrongly, though — both arms pass it
- * through untouched — so what pins the arm is `Dispatch`'s other two fields,
- * one of which each arm sets and the other not.
+ * id alone would not catch an arm chosen wrongly, though — every arm passes it
+ * through untouched — so what pins the arm is `raw` and `affinity`, which no
+ * arm sets both of.
  */
 describe("an agent's turn model", () => {
   it.each([

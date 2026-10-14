@@ -16,8 +16,8 @@ import {
  * AI one rather than beside nothing.
  *
  * Which arm is the id's to say, and the split is the one `@dynamicagents/core/model`
- * draws between its two providers: a leading `@` is a Workers AI id, anything
- * else is the `"<provider>/<model>"` slug AI Gateway's provider catalog lists.
+ * draws between its providers: a leading `@` is a Workers AI id, anything else
+ * is the `"<provider>/<model>"` slug AI Gateway's provider catalog lists.
  * Both reach the gateway over the same `AI` binding, so neither needs a
  * credential this deployment would have to hold.
  *

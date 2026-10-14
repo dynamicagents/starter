@@ -18,9 +18,9 @@ import type { WorkspaceObjectConfig } from "@dynamicagents/plugins/workspace";
 export interface AgentTuning {
   /**
    * The turn's model: a `@cf/...` Workers AI id, or a `"<provider>/<model>"`
-   * slug from AI Gateway's provider catalog. `src/model.ts` reads which of the
-   * two this is off the id itself. Either way it must call tools reliably over
-   * a long context, because a turn ends when the model stops calling them.
+   * slug from AI Gateway's provider catalog. `src/model.ts` reads which it is
+   * from the id itself. Either way it must call tools reliably over a long
+   * context, because a turn ends when the model stops calling them.
    */
   modelId: string;
   /**
@@ -73,20 +73,20 @@ export const CODING: AgentTuning = {
 /**
  * `claude-coordinator`: `coding`'s shape, with the work done elsewhere.
  *
- * **The one agent here whose turn runs on an AI Gateway catalog slug rather
- * than on Workers AI.** It reaches the provider over the same `AI` binding
- * every other model call uses, so the deployment still holds no model
- * credential and the spend lands on the account's own AI Gateway balance —
- * `@dynamicagents/core/model` carries why that beats the provider's own
- * endpoint. This agent's model coordinates and writes no code, so what it has
- * to be good at is calling tools over a long context.
+ * **`modelId` here names AI Gateway's provider catalog rather than Workers
+ * AI.** A `"<provider>/<model>"` id reaches a catalog provider and an
+ * `@`-prefixed one reaches Workers AI — `src/model.ts` reads which from the id
+ * — and both go over the same `AI` binding, so the deployment holds no model
+ * credential either way and this turn's spend lands on the account's AI Gateway
+ * balance. `@dynamicagents/core/model` carries why that beats the provider's
+ * own endpoint. This agent's model coordinates and writes no code, so what it
+ * has to be good at is calling tools over a long context.
  *
- * Nothing stands in if that provider is unavailable: Think takes one model per
- * turn and core ships no fallback model, so the provider's availability is now
- * this agent's. The exposure is bounded by keeping the pilot to this one field
- * — `compactionModelId` is still the full-size Workers AI model, which answers
- * a share of calls with `429` / `3040` "Capacity temporarily exceeded", so that
- * call has an availability limit of its own.
+ * Nothing stands in if a provider is unavailable: Think takes one model per
+ * turn and core ships no fallback model. `compactionModelId` below is its own
+ * choice and still a Workers AI id, where the full-size `glm-5.3` answers a
+ * share of calls with `429` / `3040` "Capacity temporarily exceeded" — so each
+ * call carries the availability of whichever provider its own id names.
  *
  * **The fan-out is bounded by containers, not by this file.** A writing session
  * works in a worktree of its own, so N writers cost N+1 container instances,

@@ -93,12 +93,13 @@ describe("tuning", () => {
   });
 
   it("leaves claude-coordinator the rest of `coding`'s tuning", () => {
-    // The turn model and its reasoning effort are the only fields that differ,
+    // Its two models and its reasoning effort are the only fields that differ,
     // so a change to anything else in `coding`'s tuning still reaches this
     // agent through the spread.
     expect(CLAUDE_COORDINATOR).toEqual({
       ...CODING,
       modelId: CLAUDE_COORDINATOR.modelId,
+      compactionModelId: CLAUDE_COORDINATOR.compactionModelId,
       reasoningEffort: CLAUDE_COORDINATOR.reasoningEffort
     });
   });
@@ -107,12 +108,18 @@ describe("tuning", () => {
     expect(GENERIC.compactionModelId).toBe("@cf/zai-org/glm-5.3-flash");
   });
 
-  it.each([CODING, CLAUDE_COORDINATOR])(
-    "compacts a coding agent on the full-size model",
-    (tuning) => {
-      expect(tuning.compactionModelId).toBe("@cf/zai-org/glm-5.3");
-    }
-  );
+  it("compacts coding on the full-size Workers AI model", () => {
+    expect(CODING.compactionModelId).toBe("@cf/zai-org/glm-5.3");
+  });
+
+  it("compacts claude-coordinator on the slug its turns run", () => {
+    // Summarizing on the model that reads the summary, so the override has to
+    // be the turn's own id and not merely some catalog slug.
+    expect(CLAUDE_COORDINATOR.compactionModelId).toBe("openai/gpt-6-luna");
+    expect(CLAUDE_COORDINATOR.compactionModelId).toBe(
+      CLAUDE_COORDINATOR.modelId
+    );
+  });
 
   it.each([GENERIC, CODING, CLAUDE_COORDINATOR])(
     "keeps a recent tail inside the compaction threshold",

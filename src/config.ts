@@ -24,11 +24,15 @@ export interface AgentTuning {
    */
   modelId: string;
   /**
-   * The model compaction summarizes with, and the turn waits for it. Flash
-   * where the prompt it summarizes stays small; the full-size model where it
-   * does not, because flash has timed out (`408` / `3046`, after ~235 s) on
-   * every summary of a ~275 KB conversation, while glm-5.3 reads a
-   * 111k-token uncached prompt in ~34 s.
+   * The model compaction summarizes with, and the turn waits for it. Either
+   * form `modelId` takes, read the same way.
+   *
+   * Among the Workers AI ids: flash where the prompt it summarizes stays
+   * small, the full-size model where it does not, because flash has timed out
+   * (`408` / `3046`, after ~235 s) on every summary of a ~275 KB conversation,
+   * while `@cf/zai-org/glm-5.3` reads a 111k-token uncached prompt in ~34 s —
+   * and answers a share of calls with `429` / `3040` "Capacity temporarily
+   * exceeded".
    */
   compactionModelId: string;
   /** Compact once the conversation's estimate crosses this. */
@@ -36,7 +40,7 @@ export interface AgentTuning {
   /** The recent tail compaction keeps verbatim. */
   keepRecentTokens: number;
   /**
-   * The reasoning effort an `openai/*` `modelId` runs at, sent on each call as
+   * The reasoning effort an `openai/*` `modelId` runs at, sent on each turn as
    * `providerOptions.openai.reasoningEffort`. Unset leaves OpenAI's default.
    */
   reasoningEffort?: string;
@@ -91,11 +95,13 @@ export const CODING: AgentTuning = {
  * tools with reasoning only on its Responses API, which is where core sends an
  * `openai/*` slug.
  *
- * Nothing stands in if a provider is unavailable: Think takes one model per
- * turn and core ships no fallback model. `compactionModelId` below is its own
- * choice and still a Workers AI id, where the full-size `glm-5.3` answers a
- * share of calls with `429` / `3040` "Capacity temporarily exceeded" — so each
- * call carries the availability of whichever provider its own id names.
+ * **Compaction is on the same slug**, overriding `CODING`'s Workers AI id: the
+ * summary a long conversation runs on from there is written by the model that
+ * reads it, and the model's share of this agent's spend sits with one provider.
+ *
+ * Nothing stands in if that provider is unavailable: Think takes one model per
+ * turn and core ships no fallback model, so a turn and the compaction it waits
+ * on both carry this slug's availability.
  *
  * **The fan-out is bounded by containers, not by this file.** A writing session
  * works in a worktree of its own, so N writers cost N+1 container instances,
@@ -106,6 +112,7 @@ export const CODING: AgentTuning = {
 export const CLAUDE_COORDINATOR: AgentTuning = {
   ...CODING,
   modelId: "openai/gpt-6-luna",
+  compactionModelId: "openai/gpt-6-luna",
   reasoningEffort: "max"
 };
 

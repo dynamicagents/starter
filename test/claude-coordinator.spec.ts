@@ -240,6 +240,18 @@ describe("the parent's surface", () => {
     }
   });
 
+  it("reasons at max, in the shape the OpenAI provider reads", async () => {
+    const options = await onParent(async (agent) => {
+      const tools = Object.fromEntries(
+        Object.keys(agent.getTools()).map((name) => [name, {}])
+      );
+      const turn = await agent.beforeTurn({ tools } as unknown as TurnContext);
+      return turn?.providerOptions;
+    });
+
+    expect(options).toEqual({ openai: { reasoningEffort: "max" } });
+  });
+
   it("offers building, then revising, then planning", async () => {
     const names = await onParent((agent) =>
       agent.getSubAgents().map((Cls) => Cls.name)

@@ -35,6 +35,11 @@ interface Dispatch {
    */
   raw: boolean;
   affinity: unknown;
+  /**
+   * The catalog arm's prefix-cache key, which an `openai/*` slug sends in the
+   * Responses body as `prompt_cache_key` rather than as a header.
+   */
+  cacheKey: unknown;
 }
 
 /**
@@ -66,7 +71,8 @@ function recordingAI() {
         model,
         gateway: options.gateway,
         raw,
-        affinity: options.extraHeaders?.["x-session-affinity"]
+        affinity: options.extraHeaders?.["x-session-affinity"],
+        cacheKey: inputs.prompt_cache_key
       });
       if (!raw) {
         return {
@@ -212,7 +218,8 @@ describe("an agent's turn model", () => {
   ])(
     "reaches the binding as %s's configured id",
     async (tenant, tuning, catalog) => {
-      const stub = parentStub(tenant, `turn-model:${tenant}`);
+      const name = `turn-model:${tenant}`;
+      const stub = parentStub(tenant, name);
       const dispatch = await runInDurableObject(stub, (instance) =>
         callOf(instance, (agent: { getModel(): LanguageModel }) =>
           agent.getModel()
@@ -221,7 +228,9 @@ describe("an agent's turn model", () => {
       expect(dispatch).toMatchObject({
         model: tuning.modelId,
         raw: catalog,
-        affinity: catalog ? undefined : expect.any(String)
+        // The object's name on whichever arm, each in its own spelling.
+        affinity: catalog ? undefined : name,
+        cacheKey: catalog ? name : undefined
       });
     }
   );

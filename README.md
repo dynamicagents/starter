@@ -240,9 +240,10 @@ that caller's agent edits, approves or builds it.
 The agent's own model coordinates and neither writes nor reviews code — and it is the
 one model in this deployment that is not a Workers AI one: its `modelId` in
 [`src/config.ts`](src/config.ts) is an AI Gateway catalog slug, reached over the same
-`AI` binding. A session pushes its branch, opens the pull request — ready for review,
-which is what asks for Copilot's — and answers through `--json-schema` how it ended:
-done, stopped for the person's decision, or blocked. Between sessions the agent watches the
+`AI` binding, and it compacts on that slug too. A session pushes its branch, opens the
+pull request — ready for review, which is what asks for Copilot's — and answers through
+`--json-schema` how it ended: done, stopped for the person's decision, or blocked.
+Between sessions the agent watches the
 pull request with `check_back`, `repo_pr_review_status` and `repo_pr_checks`, none of
 which starts a container, and sends it back with **`claude_code_revise`** when a review
 or a failing check lands, or for a self-review it judges worth one. A revision carries
@@ -282,8 +283,8 @@ egress gateway also holds an ordered **pool** of credentials and rotates when
 Anthropic says one's 5-hour or weekly bucket is spent.
 
 Every agent's own model, both coders included, runs through the `AI` binding —
-Workers AI for all of them but `claude-coordinator`, whose turn names an AI
-Gateway catalog slug and so reaches a third-party provider over that same
+Workers AI for all of them but `claude-coordinator`, whose calls name an AI
+Gateway catalog slug and so reach a third-party provider over that same
 binding. **There is no model credential in this deployment** on either path: the
 binding is authenticated by the platform and AI Gateway decides what pays, so
 there is nothing to store, nothing to rotate, and `coding`'s container has never

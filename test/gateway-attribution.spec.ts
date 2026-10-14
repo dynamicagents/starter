@@ -149,6 +149,34 @@ async function gatewayOf(
   return (await callOf(instance, build))?.gateway;
 }
 
+/**
+ * That a call arrived as the id it was configured with, over the arm that id
+ * names.
+ *
+ * The id is read at the binding rather than off the built model, because for a
+ * catalog slug the model's own `modelId` is the provider-native half (`gpt-…`)
+ * and it is the whole slug that has to arrive for AI Gateway to route it. The
+ * id alone would not catch an arm chosen wrongly, though — every arm passes it
+ * through untouched — so what pins the arm is `raw` and `affinity`, which no
+ * arm sets both of.
+ */
+function expectConfiguredId(
+  dispatch: Dispatch | undefined,
+  {
+    modelId,
+    name,
+    catalog
+  }: { modelId: string; name: string; catalog: boolean }
+): void {
+  expect(dispatch).toMatchObject({
+    model: modelId,
+    raw: catalog,
+    // The object's name on whichever arm, each in its own spelling.
+    affinity: catalog ? undefined : name,
+    cacheKey: catalog ? name : undefined
+  });
+}
+
 const PARENTS = [generic, coding, claudeCoordinator];
 
 /** An agent's own object, by tenant. `resolveAgent` hands back its RPC shape. */
@@ -200,16 +228,7 @@ describe("an agent's calls", () => {
   );
 });
 
-/**
- * Which arm of `src/model.ts` each agent's turn takes.
- *
- * The id is read at the binding rather than off the built model, because for a
- * catalog slug the model's own `modelId` is the provider-native half (`gpt-…`)
- * and it is the whole slug that has to arrive for AI Gateway to route it. The
- * id alone would not catch an arm chosen wrongly, though — every arm passes it
- * through untouched — so what pins the arm is `raw` and `affinity`, which no
- * arm sets both of.
- */
+/** Which arm of `src/model.ts` each agent's turn takes. */
 describe("an agent's turn model", () => {
   it.each([
     [generic.tenant, GENERIC, false],
@@ -225,32 +244,39 @@ describe("an agent's turn model", () => {
           agent.getModel()
         )
       );
-      expect(dispatch).toMatchObject({
-        model: tuning.modelId,
-        raw: catalog,
-        // The object's name on whichever arm, each in its own spelling.
-        affinity: catalog ? undefined : name,
-        cacheKey: catalog ? name : undefined
-      });
+      expectConfiguredId(dispatch, { modelId: tuning.modelId, name, catalog });
     }
   );
 });
 
-describe("an agent's compaction", () => {
+/**
+ * And which arm its compaction takes, which each agent chooses for itself: a
+ * Workers AI turn may summarize on a larger Workers AI model, and a catalog
+ * turn may summarize on the slug it already runs. So the arm is spelled per
+ * agent here rather than inherited from the turn above.
+ */
+describe("an agent's compaction model", () => {
   it.each([
-    [generic.tenant, GENERIC],
-    [coding.tenant, CODING],
-    [claudeCoordinator.tenant, CLAUDE_COORDINATOR]
-  ])("runs %s on its compaction model", async (tenant, tuning) => {
-    const stub = parentStub(tenant, `compaction-model:${tenant}`);
-    const modelId = await runInDurableObject(
-      stub,
-      (instance) =>
-        (instance as unknown as { compactionModel(): V3 }).compactionModel()
-          .modelId
-    );
-    expect(modelId).toBe(tuning.compactionModelId);
-  });
+    [generic.tenant, GENERIC, false],
+    [coding.tenant, CODING, false],
+    [claudeCoordinator.tenant, CLAUDE_COORDINATOR, true]
+  ])(
+    "reaches the binding as %s's configured id",
+    async (tenant, tuning, catalog) => {
+      const name = `compaction-model:${tenant}`;
+      const stub = parentStub(tenant, name);
+      const dispatch = await runInDurableObject(stub, (instance) =>
+        callOf(instance, (agent: { compactionModel(): LanguageModel }) =>
+          agent.compactionModel()
+        )
+      );
+      expectConfiguredId(dispatch, {
+        modelId: tuning.compactionModelId,
+        name,
+        catalog
+      });
+    }
+  );
 });
 
 /**

@@ -95,9 +95,10 @@ export const CODING: AgentTuning = {
  * tools with reasoning only on its Responses API, which is where core sends an
  * `openai/*` slug.
  *
- * **Compaction is on the same slug**, overriding `CODING`'s Workers AI id: the
- * summary a long conversation runs on from there is written by the model that
- * reads it, and the model's share of this agent's spend sits with one provider.
+ * **Compaction is on the same slug**, an explicit override of `CODING`'s
+ * Workers AI id: the summary the rest of a conversation runs on is written by
+ * the model that will read it, and this agent's model spend lands on one
+ * provider.
  *
  * Nothing stands in if that provider is unavailable: Think takes one model per
  * turn and core ships no fallback model, so a turn and the compaction it waits

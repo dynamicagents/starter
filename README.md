@@ -72,7 +72,9 @@ live](#where-the-endpoints-live). Register whatever path this deployment actuall
 > **The default models need a paid Workers plan**, or prepaid AI Gateway credits. Every
 > agent takes its model from [`src/config.ts`](src/config.ts), and those are not served
 > on Workers Free. On the free tier, point each agent's `modelId` at one that is, and that
-> supports function calling.
+> supports function calling. `claude-coordinator`'s is the exception in both directions:
+> its `modelId` is an AI Gateway catalog slug rather than a Workers AI model, so a paid
+> Workers plan does nothing for it and AI Gateway credits are what it spends.
 
 > **Browser Rendering needs a paid Workers plan.** On the free tier, remove `browser()`
 > from the agents' `plugins.ts` and the `browser` binding from `wrangler.jsonc`.
@@ -233,10 +235,12 @@ that caller's agent edits, approves or builds it.
 
 ### `claude-coordinator` coordinates, and the sessions own the pull request
 
-The agent's own model is a small one on Workers AI, so it neither writes nor reviews
-code. A session pushes its branch, opens the pull request — ready for review, which is
-what asks for Copilot's — and answers through `--json-schema` how it ended: done,
-stopped for the person's decision, or blocked. Between sessions the agent watches the
+The agent's own model coordinates and neither writes nor reviews code — and it is the
+one model in this deployment that is not a Workers AI one: its `modelId` in
+[`src/config.ts`](src/config.ts) is an AI Gateway catalog slug, reached over the same
+`AI` binding. A session pushes its branch, opens the pull request — ready for review,
+which is what asks for Copilot's — and answers through `--json-schema` how it ended:
+done, stopped for the person's decision, or blocked. Between sessions the agent watches the
 pull request with `check_back`, `repo_pr_review_status` and `repo_pr_checks`, none of
 which starts a container, and sends it back with **`claude_code_revise`** when a review
 or a failing check lands, or for a self-review it judges worth one. A revision carries
@@ -254,8 +258,8 @@ placeholder, and the egress gateway swaps in `GITHUB_TOKEN` for GitHub's hosts o
 
 ### The two coders need one thing the others do not
 
-A **container**. Everything else about them — the turn, the A2A task, the
-Workers AI model — is what every other agent here runs.
+A **container**. Everything else about them — the turn, the A2A task, the model
+call through AI Gateway — is what every other agent here runs.
 
 The two differ in exactly one place, and it is one level below the agent: what a
 sub-agent _is_. `coding`'s `code` is a Think sub-agent on Workers AI, working in
@@ -275,12 +279,15 @@ request through a `Fetcher` on the Worker side which swaps the real one in. That
 egress gateway also holds an ordered **pool** of credentials and rotates when
 Anthropic says one's 5-hour or weekly bucket is spent.
 
-Every agent's own model, both coders included, runs on Workers AI through the
-`AI` binding. **There is no model credential in this deployment**: the binding is
-authenticated by the platform, so there is nothing to store, nothing to rotate,
-and `coding`'s container has never seen one. An AI Gateway `401` means
-Authenticated Gateway is switched on for the `default` AI Gateway every call goes
-through — switch it off, because the binding does not send a token.
+Every agent's own model, both coders included, runs through the `AI` binding —
+Workers AI for all of them but `claude-coordinator`, whose turn names an AI
+Gateway catalog slug and so reaches a third-party provider over that same
+binding. **There is no model credential in this deployment** on either path: the
+binding is authenticated by the platform and AI Gateway decides what pays, so
+there is nothing to store, nothing to rotate, and `coding`'s container has never
+seen one. An AI Gateway `401` means Authenticated Gateway is switched on for the
+`default` AI Gateway every call goes through — switch it off, because the binding
+does not send a token.
 [`.env.example`](.env.example) is the full list of what a deployment does need.
 
 The container needs the **Workers Paid** plan and a running Docker daemon on the
@@ -556,7 +563,7 @@ src/
   host-manifest.ts      ← the stub card served at the well-known path
   config.ts             ← model ids and compaction (values; core ships no numbers)
   copy.ts               ← user-facing copy + guidance every soul shares (core ships none)
-  model.ts              ← the one Workers AI model each class runs, tagged for AI Gateway
+  model.ts              ← the one model each class runs (Workers AI or a catalog slug), tagged for AI Gateway
   workspace/            ← the container-backed workspace both coders share
   agents/
     generic/           ← agent, children (the `general` sub-agent), definition, plugins, soul, manifest

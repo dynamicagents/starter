@@ -1,5 +1,6 @@
 import type { LanguageModel } from "ai";
 import {
+  catalogModel,
   gatewayLogFields,
   workersAIModel,
   type GatewayCorrelation
@@ -10,22 +11,35 @@ import {
  *
  * One function for every class here, because what each call tells AI Gateway
  * about itself has to be spelled the same way everywhere or a log filter on it
- * silently misses the classes that spelled it differently.
+ * silently misses the classes that spelled it differently. Both arms below are
+ * handed the same fields, so a catalog slug's log row groups beside a Workers
+ * AI one rather than beside nothing.
  *
- * `sessionAffinity` is the object's name: every call an object makes re-sends
- * one history, so anything finer routes a call away from the prefix it is about
- * to re-send.
+ * Which arm is the id's to say, and the split is the one `@dynamicagents/core/model`
+ * draws between its two providers: a leading `@` is a Workers AI id, anything
+ * else is the `"<provider>/<model>"` slug AI Gateway's provider catalog lists.
+ * Both reach the gateway over the same `AI` binding, so neither needs a
+ * credential this deployment would have to hold.
+ *
+ * `sessionAffinity` is the object's name, and rides on the Workers AI arm only:
+ * every call an object makes re-sends one history, so anything finer routes a
+ * call away from the prefix it is about to re-send. A catalog provider keeps no
+ * such prefix cache to be routed to, and core's `catalogModel` carries what
+ * else it declines for that reason.
  */
 export function agentModel(
   env: Env,
   model: { modelId: string; name: string },
   correlation: GatewayCorrelation
 ): LanguageModel {
-  return workersAIModel(env, {
-    modelId: model.modelId,
-    sessionAffinity: model.name,
-    ...gatewayLogFields(correlation)
-  });
+  const log = gatewayLogFields(correlation);
+  return model.modelId.startsWith("@")
+    ? workersAIModel(env, {
+        modelId: model.modelId,
+        sessionAffinity: model.name,
+        ...log
+      })
+    : catalogModel(env, { slug: model.modelId, ...log });
 }
 
 /**

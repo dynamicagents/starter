@@ -56,17 +56,22 @@
     }
   },
 
-  // No `vars` and no model credential anywhere in this file — every agent reaches
-  // Workers AI through the `AI` binding below, which the platform authenticates.
-  // See the secrets block at the bottom for what remains and what was removed.
+  // No `vars` and no model credential anywhere in this file — every agent
+  // reaches its model through the `AI` binding below, which the platform
+  // authenticates. See the secrets block at the bottom for what remains and
+  // what was removed.
 
   // --- shared: required by core itself -------------------------------------
 
-  // Workers AI backs every agent's model (via AI Gateway). `remote: true`
-  // reflects reality — Workers AI has no local execution mode and always hits
-  // remote resources — and suppresses wrangler's per-run warning. In tests the
-  // pool-level `remoteBindings: false` (vitest.config.ts) overrides this and
-  // keeps the suite from eagerly opening that remote connection.
+  // The binding every agent's model goes through, via AI Gateway: Workers AI
+  // for all of them but claude-coordinator, whose model id names AI Gateway's
+  // provider catalog instead and takes the same binding to a third-party
+  // provider. One binding either way, so adding a provider adds nothing here.
+  // `remote: true` reflects reality — Workers AI has no local execution mode
+  // and always hits remote resources — and suppresses wrangler's per-run
+  // warning. In tests the pool-level `remoteBindings: false`
+  // (vitest.config.ts) overrides this and keeps the suite from eagerly opening
+  // that remote connection.
   "ai": {
     "binding": "AI",
     "remote": true
@@ -373,9 +378,10 @@
   // dev`'s missing-secret warnings.
   //
   // **There is no model credential here, for any agent.** Every agent in this
-  // Worker reaches Workers AI through the `AI` binding above, which Cloudflare
-  // authenticates for the Worker — there is no key to store, rotate or leak, and
-  // no AI Gateway token either. See `.env.example`.
+  // Worker reaches its model through the `AI` binding above, which Cloudflare
+  // authenticates for the Worker, and AI Gateway decides what pays past it — so
+  // a third-party provider adds no key either. There is nothing to store,
+  // rotate or leak, and no AI Gateway token. See `.env.example`.
   "secrets": {
     "required": [
       "A2A_SIGNING_KEY",

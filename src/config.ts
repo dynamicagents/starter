@@ -35,6 +35,11 @@ export interface AgentTuning {
   compactAfterTokens: number;
   /** The recent tail compaction keeps verbatim. */
   keepRecentTokens: number;
+  /**
+   * The reasoning effort an `openai/*` `modelId` runs at, sent on each call as
+   * `providerOptions.openai.reasoningEffort`. Unset leaves OpenAI's default.
+   */
+  reasoningEffort?: string;
 }
 
 /**
@@ -82,6 +87,10 @@ export const CODING: AgentTuning = {
  * own endpoint. This agent's model coordinates and writes no code, so what it
  * has to be good at is calling tools over a long context.
  *
+ * **Reasoning at `max`, for the quality of those calls.** OpenAI takes function
+ * tools with reasoning only on its Responses API, which is where core sends an
+ * `openai/*` slug.
+ *
  * Nothing stands in if a provider is unavailable: Think takes one model per
  * turn and core ships no fallback model. `compactionModelId` below is its own
  * choice and still a Workers AI id, where the full-size `glm-5.3` answers a
@@ -96,7 +105,8 @@ export const CODING: AgentTuning = {
  */
 export const CLAUDE_COORDINATOR: AgentTuning = {
   ...CODING,
-  modelId: "openai/gpt-6-luna"
+  modelId: "openai/gpt-6-luna",
+  reasoningEffort: "max"
 };
 
 /**

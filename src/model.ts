@@ -21,11 +21,10 @@ import {
  * Both reach the gateway over the same `AI` binding, so neither needs a
  * credential this deployment would have to hold.
  *
- * `sessionAffinity` is the object's name, and rides on the Workers AI arm only:
- * every call an object makes re-sends one history, so anything finer routes a
- * call away from the prefix it is about to re-send. A catalog provider keeps no
- * such prefix cache to be routed to, and core's `catalogModel` carries what
- * else it declines for that reason.
+ * `sessionAffinity` is the object's name on both arms: every call an object
+ * makes re-sends one history, so anything finer routes a call away from the
+ * prefix it is about to re-send. Workers AI routes on it, and an `openai/*`
+ * slug sends it as OpenAI's prompt-cache key.
  */
 export function agentModel(
   env: Env,
@@ -39,7 +38,11 @@ export function agentModel(
         sessionAffinity: model.name,
         ...log
       })
-    : catalogModel(env, { slug: model.modelId, ...log });
+    : catalogModel(env, {
+        slug: model.modelId,
+        sessionAffinity: model.name,
+        ...log
+      });
 }
 
 /**

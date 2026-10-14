@@ -45,10 +45,14 @@ const LABEL = "claude-coordinator";
 /**
  * The claude-coordinator agent — `coding`'s sibling, with a different engine.
  *
- * The parent is an ordinary agent on Workers AI: it clones, reviews diffs,
- * commits, pushes and opens pull requests, and it has no shell, no editor and
- * no way to write a file. What is different is one level down: each sub-agent
- * is a Claude Code session inside a workspace container. See `./children.ts`.
+ * The parent is an ordinary agent, on a model from AI Gateway's provider
+ * catalog rather than a Workers AI one (`src/config.ts`): it clones, reads,
+ * briefs a session and watches the pull request between them, and it has no
+ * shell, no editor and no way to write a file. Every write — the code, the
+ * checks, the push, the pull request and the answer to its review — is a
+ * session's. `./soul.ts` draws that split and `./plugins.ts` is where the
+ * parent's tools stop. What is different is one level down: each sub-agent is
+ * a Claude Code session inside a workspace container. See `./children.ts`.
  *
  * That exists because a Claude **subscription** credential 429s at zero tokens
  * against the raw Messages API on every frontier model, and the same credential

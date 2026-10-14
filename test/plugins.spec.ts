@@ -82,12 +82,22 @@ describe("contract skew between the repos", () => {
 });
 
 describe("tuning", () => {
-  it("runs every agent's turns on the flash model", () => {
+  it("runs the Workers AI agents' turns on the flash model", () => {
     expect(GENERIC.modelId).toBe("@cf/zai-org/glm-5.3-flash");
     expect(CODING.modelId).toBe(GENERIC.modelId);
-    // claude-coordinator is `coding`'s tuning whole, so a change to one reaches
-    // the other.
-    expect(CLAUDE_COORDINATOR).toEqual(CODING);
+  });
+
+  it("runs claude-coordinator's turns on its catalog slug", () => {
+    expect(CLAUDE_COORDINATOR.modelId).toBe("openai/gpt-6-luna");
+  });
+
+  it("leaves claude-coordinator the rest of `coding`'s tuning", () => {
+    // The turn model is the only field that differs, so a change to anything
+    // else in `coding`'s tuning still reaches this agent through the spread.
+    expect(CLAUDE_COORDINATOR).toEqual({
+      ...CODING,
+      modelId: CLAUDE_COORDINATOR.modelId
+    });
   });
 
   it("compacts generic on the flash model", () => {

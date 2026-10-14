@@ -17,8 +17,10 @@ import type { WorkspaceObjectConfig } from "@dynamicagents/plugins/workspace";
 /** What one agent tunes: its model, and when its conversation compacts. */
 export interface AgentTuning {
   /**
-   * The Workers AI model. It must call tools reliably over a long context,
-   * because a turn ends when the model stops calling them.
+   * The turn's model: a `@cf/...` Workers AI id, or a `"<provider>/<model>"`
+   * slug from AI Gateway's provider catalog. `src/model.ts` reads which it is
+   * from the id itself. Either way it must call tools reliably over a long
+   * context, because a turn ends when the model stops calling them.
    */
   modelId: string;
   /**
@@ -71,10 +73,20 @@ export const CODING: AgentTuning = {
 /**
  * `claude-coordinator`: `coding`'s shape, with the work done elsewhere.
  *
- * **The flash model, like `coding`.** The full-size `glm-5.3` answers a share of
- * calls with `429` / `3040` "Capacity temporarily exceeded", and nothing falls
- * back to another model on it: Think takes one model per turn, and
- * `@dynamicagents/core/model` ships no fallback.
+ * **`modelId` here names AI Gateway's provider catalog rather than Workers
+ * AI.** A `"<provider>/<model>"` id reaches a catalog provider and an
+ * `@`-prefixed one reaches Workers AI — `src/model.ts` reads which from the id
+ * — and both go over the same `AI` binding, so the deployment holds no model
+ * credential either way and this turn's spend lands on the account's AI Gateway
+ * balance. `@dynamicagents/core/model` carries why that beats the provider's
+ * own endpoint. This agent's model coordinates and writes no code, so what it
+ * has to be good at is calling tools over a long context.
+ *
+ * Nothing stands in if a provider is unavailable: Think takes one model per
+ * turn and core ships no fallback model. `compactionModelId` below is its own
+ * choice and still a Workers AI id, where the full-size `glm-5.3` answers a
+ * share of calls with `429` / `3040` "Capacity temporarily exceeded" — so each
+ * call carries the availability of whichever provider its own id names.
  *
  * **The fan-out is bounded by containers, not by this file.** A writing session
  * works in a worktree of its own, so N writers cost N+1 container instances,
@@ -82,7 +94,10 @@ export const CODING: AgentTuning = {
  * the account's limits — the containers block in `wrangler.jsonc` carries the
  * arithmetic — and `npm run cf -- containers` is what shows it.
  */
-export const CLAUDE_COORDINATOR: AgentTuning = { ...CODING };
+export const CLAUDE_COORDINATOR: AgentTuning = {
+  ...CODING,
+  modelId: "openai/gpt-6-luna"
+};
 
 /**
  * The size a `coding` workspace's container starts at — 2 vCPU, 6 GiB, 8 GB

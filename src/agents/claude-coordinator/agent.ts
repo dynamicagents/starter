@@ -146,15 +146,24 @@ export class ClaudeCoordinatorAgent extends StepAgent<Env> {
    * The turn core configures, minus Think's own file writers: the parent has
    * no editor, and those would write the checkout the sessions' work lands in.
    * Core's own list wins where it sets one: a turn for a job that has ended gets
-   * no tools.
+   * no tools. The model reasons at `CLAUDE_COORDINATOR`'s effort.
    */
   override async beforeTurn(ctx: TurnContext): Promise<TurnConfig | void> {
     const base = await super.beforeTurn(ctx);
+    const { reasoningEffort } = CLAUDE_COORDINATOR;
     return {
       ...base,
       activeTools:
         base?.activeTools ??
-        Object.keys(ctx.tools).filter((name) => !WORKSPACE_WRITERS.has(name))
+        Object.keys(ctx.tools).filter((name) => !WORKSPACE_WRITERS.has(name)),
+      ...(reasoningEffort
+        ? {
+            providerOptions: {
+              ...base?.providerOptions,
+              openai: { reasoningEffort }
+            }
+          }
+        : {})
     };
   }
 

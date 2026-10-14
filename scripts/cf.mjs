@@ -678,6 +678,41 @@ function messageText(msg) {
   return JSON.stringify(msg.content ?? msg);
 }
 
+// One Responses API input or output item, as a heading and its text.
+function responsesItem(item) {
+  switch (item.type) {
+    case "function_call":
+      return [`[call ${item.name} ${item.call_id}]`, item.arguments];
+    case "function_call_output":
+      return [
+        `[result ${item.call_id}]`,
+        typeof item.output === "string"
+          ? item.output
+          : JSON.stringify(item.output)
+      ];
+    case "reasoning":
+      return [
+        `[reasoning${item.encrypted_content ? ", encrypted" : ""}]`,
+        (item.summary ?? []).map((part) => part.text).join("\n")
+      ];
+    default:
+      return [`[${item.role ?? item.type ?? "item"}]`, messageText(item)];
+  }
+}
+
+// A streamed Responses reply is logged as its SSE, and only the terminal event
+// carries the whole response.
+function responsesReply(text) {
+  let response = null;
+  for (const line of String(text).split("\n")) {
+    if (!line.startsWith("data: ")) continue;
+    const event = parseJson(line.slice("data: ".length));
+    if (/^response\.(completed|incomplete|failed)$/.test(event?.type ?? ""))
+      response = event.response;
+  }
+  return response;
+}
+
 async function cmdWf(args) {
   const { flags, pos } = parseFlags(args, { bool: ["--json", "--raw"] });
   const [name, instance] = pos;
@@ -968,7 +1003,7 @@ async function cmdAiDetail(gw, id, flags) {
         {
           meta: parseJson(meta.text)?.result ?? parseJson(meta.text),
           request: parseJson(reqR.text),
-          response: parseJson(resR.text)
+          response: parseJson(resR.text) ?? responsesReply(resR.text)
         },
         null,
         2
@@ -980,7 +1015,7 @@ async function cmdAiDetail(gw, id, flags) {
   const max = flags.full ? Infinity : Number(flags.max ?? 1500);
   const m = parseJson(meta.text)?.result ?? {};
   const reqBody = parseJson(reqR.text) ?? {};
-  const resBody = parseJson(resR.text) ?? {};
+  const resBody = parseJson(resR.text) ?? responsesReply(resR.text) ?? {};
   const rule = "─".repeat(60);
   const st = m.success ? (m.cached ? "cached" : "ok") : "FAIL";
   out(
@@ -998,11 +1033,22 @@ async function cmdAiDetail(gw, id, flags) {
 
   out(rule);
   const msgs = reqBody.messages;
+  const items = reqBody.input;
   if (Array.isArray(msgs)) {
     out(`▶ REQUEST — ${msgs.length} message${msgs.length === 1 ? "" : "s"}`);
     for (const msg of msgs) {
       out(`\n[${msg.role}]`);
       out(truncate(messageText(msg), max));
+    }
+  } else if (Array.isArray(items)) {
+    const effort = reqBody.reasoning?.effort;
+    out(
+      `▶ REQUEST — ${items.length} item${items.length === 1 ? "" : "s"}${effort ? ` · reasoning ${effort}` : ""}`
+    );
+    for (const item of items) {
+      const [heading, text] = responsesItem(item);
+      out(`\n${heading}`);
+      out(truncate(text, max));
     }
   } else {
     out("▶ REQUEST");
@@ -1019,6 +1065,16 @@ async function cmdAiDetail(gw, id, flags) {
     if (reply.reasoning_content) {
       out("\n  reasoning:");
       out(`  ${truncate(reply.reasoning_content, max).replace(/\n/g, "\n  ")}`);
+    }
+  } else if (Array.isArray(resBody.output)) {
+    const reasoning = resBody.usage?.output_tokens_details?.reasoning_tokens;
+    out(
+      `◀ REPLY — status: ${resBody.status ?? "?"}${reasoning != null ? ` · ${reasoning} reasoning tok` : ""}`
+    );
+    for (const item of resBody.output) {
+      const [heading, text] = responsesItem(item);
+      out(`\n${heading}`);
+      out(truncate(text, max));
     }
   } else {
     out("◀ REPLY");

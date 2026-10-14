@@ -44,7 +44,8 @@ interface Dispatch {
  * Workers AI id is called for its parsed output, while a catalog slug is
  * dispatched with `returnRawResponse` and parsed by an `@ai-sdk` provider, so
  * for that one the binding has to answer an HTTP response in the provider's own
- * wire format. No `cf-aig-run-id` on it, deliberately — the header is what puts
+ * wire format: Responses for an `openai/*` slug, whose body carries `input`,
+ * and Chat Completions otherwise. No `cf-aig-run-id` on it, deliberately — the header is what puts
  * the delegate's resumable-stream engine in the path, and a resume has nothing
  * to do with what this spec is watching.
  */
@@ -53,7 +54,7 @@ function recordingAI() {
   const AI = {
     run: async (
       model: string,
-      _inputs: unknown,
+      inputs: Record<string, unknown>,
       options: {
         gateway?: unknown;
         returnRawResponse?: boolean;
@@ -73,20 +74,42 @@ function recordingAI() {
           usage: { prompt_tokens: 1, completion_tokens: 1 }
         };
       }
-      return Response.json({
-        id: "chatcmpl-attribution",
-        object: "chat.completion",
-        created: 0,
-        model,
-        choices: [
-          {
-            index: 0,
-            message: { role: "assistant", content: "ok" },
-            finish_reason: "stop"
-          }
-        ],
-        usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 }
-      });
+      return Response.json(
+        "input" in inputs
+          ? {
+              id: "resp_attribution",
+              object: "response",
+              created_at: 0,
+              status: "completed",
+              model,
+              output: [
+                {
+                  type: "message",
+                  id: "msg_attribution",
+                  role: "assistant",
+                  status: "completed",
+                  content: [
+                    { type: "output_text", text: "ok", annotations: [] }
+                  ]
+                }
+              ],
+              usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 }
+            }
+          : {
+              id: "chatcmpl-attribution",
+              object: "chat.completion",
+              created: 0,
+              model,
+              choices: [
+                {
+                  index: 0,
+                  message: { role: "assistant", content: "ok" },
+                  finish_reason: "stop"
+                }
+              ],
+              usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 }
+            }
+      );
     }
   } as unknown as Ai;
   return { AI, calls };

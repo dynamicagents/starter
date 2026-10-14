@@ -87,16 +87,19 @@ describe("tuning", () => {
     expect(CODING.modelId).toBe(GENERIC.modelId);
   });
 
-  it("runs claude-coordinator's turns on its catalog slug", () => {
+  it("runs claude-coordinator's turns on its catalog slug, reasoning at max", () => {
     expect(CLAUDE_COORDINATOR.modelId).toBe("openai/gpt-6-luna");
+    expect(CLAUDE_COORDINATOR.reasoningEffort).toBe("max");
   });
 
   it("leaves claude-coordinator the rest of `coding`'s tuning", () => {
-    // The turn model is the only field that differs, so a change to anything
-    // else in `coding`'s tuning still reaches this agent through the spread.
+    // The turn model and its reasoning effort are the only fields that differ,
+    // so a change to anything else in `coding`'s tuning still reaches this
+    // agent through the spread.
     expect(CLAUDE_COORDINATOR).toEqual({
       ...CODING,
-      modelId: CLAUDE_COORDINATOR.modelId
+      modelId: CLAUDE_COORDINATOR.modelId,
+      reasoningEffort: CLAUDE_COORDINATOR.reasoningEffort
     });
   });
 

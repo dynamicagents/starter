@@ -2152,7 +2152,13 @@ describe("a checkout's .gitmodules", () => {
       fs,
       useThink: false,
       hasAssets: false,
-      runtime: { backends: async () => [] }
+      runtime: { backends: async () => [] },
+      // What the client's own `Symbol.dispose` reaches, and the reason the
+      // caller binds it with `using`: these are RPC handles into the object,
+      // and `afterCheckout` runs on every checkout of every session.
+      [Symbol.dispose]: () => {
+        reached.push("disposed");
+      }
     };
     const host = {
       __getWorkspaceFsStub: async () => {
@@ -2201,6 +2207,25 @@ describe("a checkout's .gitmodules", () => {
       "/workspace/super/.gitmodules": { throws: new Error("EIO") }
     });
     expect(text).toBeUndefined();
+  });
+
+  /**
+   * Every exit releases the client, the two that answer nothing included. This
+   * runs once per checkout per session, so a handle left behind here leaks for
+   * as long as the object lives.
+   */
+  it.each([
+    ["the file read", { "/workspace/super/.gitmodules": "[submodule]" }],
+    ["no file at all", {}],
+    [
+      "a read that threw",
+      { "/workspace/super/.gitmodules": { throws: new Error("EIO") } }
+    ]
+  ])("releases the workspace client after %s", async (_what, files) => {
+    const { reached } = await read(
+      files as Record<string, string | { throws: unknown }>
+    );
+    expect(reached.at(-1)).toBe("disposed");
   });
 
   it("is unknown when the workspace cannot be reached at all", async () => {

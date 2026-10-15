@@ -77,7 +77,11 @@ export async function gitmodulesOf(
 ): Promise<string | undefined> {
   const path = `${dir}/.gitmodules`;
   try {
-    const opened = await openWorkspaceFs(host);
+    // `using`, because the client holds RPC handles into the object and every
+    // exit here has to release them — an absent file and a failed read
+    // included. `stopSession` in `src/agents/claude-coordinator/plugins.ts`
+    // binds the other opener the same way.
+    using opened = await openWorkspaceFs(host);
     // Asked before reading, because the two nothings differ and `readFile`
     // gives one error for both. A repository with no submodules is the common
     // case and must record "none"; a read that failed must record nothing at

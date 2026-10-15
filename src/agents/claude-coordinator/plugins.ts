@@ -68,39 +68,26 @@ export async function stopSession(
   );
 }
 
-/** What to say when the whole credential pool is unavailable. */
-function exhausted(retryAt: number | undefined): string {
-  if (retryAt === undefined) {
-    return (
-      "no Anthropic credential in this deployment is usable, and none will " +
-      "recover on its own — every one was rejected, or none is configured. " +
-      "An operator has to mint a fresh `claude setup-token` credential. " +
-      "Nothing was changed in the repository."
-    );
-  }
-  return (
-    "every Anthropic credential in this deployment has reached its " +
-    `subscription limit. The earliest resets at ${new Date(retryAt).toISOString()}. ` +
-    "Nothing was changed in the repository — send this request again after that."
-  );
-}
+/** What to say when the deployment has no Anthropic credential to try. */
+const NO_CREDENTIAL =
+  "no Anthropic credential is configured in this deployment. An operator " +
+  "has to set a `claude setup-token` credential. Nothing was changed in the " +
+  "repository.";
 
 /**
- * Refuse a session the credential pool cannot pay for, before its container
- * starts — what that saves is on `credentials` in
- * `@dynamicagents/plugins/claude-code`. From `prepare`, not `brief`: a writer's
- * worktree is cloned before `brief` runs. The refusal is the tool's answer,
- * with the reset time in it, and nothing is dispatched.
+ * Admit a session: reopen the credential pool, so the session asks Anthropic
+ * again rather than trusting a stored reset — `admit` in
+ * `@dynamicagents/plugins/claude-code` says why. A spent pool still admits; the
+ * session ends on the egress gateway's `429` naming the earliest reset. Only a
+ * deployment with no credential is refused here, before anything is dispatched.
  *
  * Asked of the workspace the session runs in, because each keeps its own pool:
  * see `./workspace.ts`.
  */
 export async function admitSession(env: Env, workspace: string): Promise<void> {
   const binding = env.CLAUDE_COORDINATOR_WORKSPACE;
-  const lead = await binding
-    .get(binding.idFromName(workspace))
-    .claudeCredentials();
-  if (!lead.ok) throw new Error(exhausted(lead.retryAt));
+  const lead = await binding.get(binding.idFromName(workspace)).claudeAdmit();
+  if (!lead.ok) throw new Error(NO_CREDENTIAL);
 }
 
 /**

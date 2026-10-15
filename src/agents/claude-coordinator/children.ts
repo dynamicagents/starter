@@ -9,7 +9,6 @@ import { SubAgent } from "@dynamicagents/core/subagent";
 import {
   CLAUDE_CODE_AGENT,
   claudeCodeModel,
-  type RateLimitInfo,
   type SessionEnd,
   type SessionOutcome,
   type SessionWorkspace
@@ -871,8 +870,8 @@ abstract class ClaudeCodeRun extends SubAgent<Env> {
 
   /**
    * The session's prompt. Runs once per run, before the session starts, and a
-   * throw fails the run with its message. Whether the run can be paid for was
-   * asked in `prepare` — see `admitSession` in `./plugins.ts`.
+   * throw fails the run with its message. The credential pool was reopened in
+   * `prepare` — see `admitSession` in `./plugins.ts`.
    *
    * **What is true about the workspace, folded in.** The session starts whatever
    * the workspace's state, and it has no tool that reaches the host, so a fact
@@ -987,10 +986,8 @@ abstract class ClaudeCodeRun extends SubAgent<Env> {
     writes: boolean,
     revisions?: readonly Revision[]
   ): Promise<string> {
-    const last = outcome.followUp ?? outcome.session;
-    const reading = last.rateLimit ?? outcome.session.rateLimit;
-    if (reading) await this.#noteRateLimit(place, reading);
     if (!writes) return sessionReport(outcome);
+    const last = outcome.followUp ?? outcome.session;
 
     const repos = await this.#starts();
     const stopped = last.exitCode === STOPPED_EXIT;
@@ -1044,27 +1041,6 @@ abstract class ClaudeCodeRun extends SubAgent<Env> {
         "[claude-coordinator] could not put a revised worktree back on its branch",
         { err: String(err) }
       );
-    }
-  }
-
-  /**
-   * Tell the credential pool what the session's own client reported.
-   *
-   * The pool's state lives on the workspace object, which is also where the
-   * egress gateway reads it, so the reading goes there rather than being acted
-   * on here. Best-effort — a session that did the work must not fail for want
-   * of a bookkeeping RPC.
-   */
-  async #noteRateLimit(
-    place: SessionPlace,
-    info: RateLimitInfo
-  ): Promise<void> {
-    try {
-      await this.#stub(place.workspaceName).claudeNoteRateLimit(info);
-    } catch (err) {
-      console.warn("[claude-coordinator] could not record the bucket reading", {
-        err: String(err)
-      });
     }
   }
 

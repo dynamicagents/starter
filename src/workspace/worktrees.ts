@@ -3,7 +3,7 @@ import {
   workspaceName,
   type WorkspaceObjectBase
 } from "@dynamicagents/plugins/workspace";
-import type { RepoWorktrees } from "@dynamicagents/plugins/repo";
+import type { RepoWorktrees } from "@dynamicagents/plugins/repo-github";
 import type { ActiveRepo } from "./active-repo";
 import { placementRepo, selectedRepo } from "./subtask-workspace";
 import {

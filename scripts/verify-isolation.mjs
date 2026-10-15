@@ -74,7 +74,7 @@ const AGENTS = [
     forbidden: [
       plugin("computer"),
       plugin("workspace"),
-      plugin("repo"),
+      plugin("repo-github"),
       plugin("scratch"),
       plugin("claude-code"),
       "@cloudflare/computer"

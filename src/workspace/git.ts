@@ -1,4 +1,7 @@
-import type { RepoGit, RepoGitResult } from "@dynamicagents/plugins/repo";
+import type {
+  RepoGit,
+  RepoGitResult
+} from "@dynamicagents/plugins/repo-github";
 import type { WorkspaceObjectBase } from "@dynamicagents/plugins/workspace";
 
 /**

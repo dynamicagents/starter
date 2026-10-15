@@ -9,7 +9,7 @@ import {
 } from "@dynamicagents/plugins/claude-code";
 import { computer, type ComputerConfig } from "@dynamicagents/plugins/computer";
 import { openWorkspace, workspaceExec } from "@dynamicagents/plugins/workspace";
-import { repo } from "@dynamicagents/plugins/repo";
+import { repo } from "@dynamicagents/plugins/repo-github";
 import { browser } from "@dynamicagents/plugins/browser";
 import { activeRepo, type ActiveRepo } from "@/workspace/active-repo";
 import {

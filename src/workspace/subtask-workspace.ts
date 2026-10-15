@@ -1,4 +1,4 @@
-import { parseRepo } from "@dynamicagents/plugins/repo";
+import { parseRepo } from "@dynamicagents/plugins/repo-github";
 import {
   openWorkspaceFs,
   pathExists,

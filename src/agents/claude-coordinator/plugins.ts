@@ -13,6 +13,7 @@ import { repo } from "@dynamicagents/plugins/repo";
 import { browser } from "@dynamicagents/plugins/browser";
 import { activeRepo, type ActiveRepo } from "@/workspace/active-repo";
 import {
+  gitmodulesOf,
   submoduleRepos,
   subtaskWorkspaces,
   type SubtaskWorkspaces
@@ -28,7 +29,6 @@ import { gitIdentity } from "@/workspace/git-identity";
 import { hostScratch } from "@/workspace/scratch";
 import { claudeCodeConfig } from "./claude-code";
 import { claudeCoordinator } from "./definition";
-import { gitmodulesOf } from "./github";
 
 /**
  * The one file you edit to add or remove a capability for this agent.
@@ -178,7 +178,6 @@ export const parentPlugins = (
         "repo_clone",
         "repo_issue_view",
         "repo_pr_view",
-        "repo_pr_review_status",
         "repo_pr_threads",
         "repo_pr_checks",
         "repo_worktrees",
@@ -193,10 +192,8 @@ export const parentPlugins = (
         // container of its own. The url has already been through this plugin's
         // host allowlist, which is why it is the one worth keeping. With the
         // repositories it carries, so a session for any of them works in this
-        // one — see `rootOf` in `@/workspace/active-repo`. Read from GitHub,
-        // because a command here would start the container ahead of the install
-        // below and cost it the snapshot it restores from.
-        const gitmodules = await gitmodulesOf(env.GITHUB_TOKEN, url, branch);
+        // one — see `rootOf` in `@/workspace/active-repo`.
+        const gitmodules = await gitmodulesOf(ws, dir);
         active.setCheckout(
           { url, dir, branch },
           {

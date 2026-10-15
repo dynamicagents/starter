@@ -494,37 +494,24 @@ function discardedLine(
     .join("; ")}.`;
 }
 
-/** What a revision pushed to one pull request, read from GitHub. */
-export interface PullPush {
-  repo: string;
-  number: number;
-  /** Commits added to its head; `undefined` where its head could not be read. */
-  pushed?: number;
-}
-
 /**
- * What a revising session left, from GitHub rather than the worktree: it
- * switched between branches, so no local count describes one of them. Each
- * pull request a revision was checked against, and what reached it.
+ * What a revising session was sent to, under its own account of what it did.
+ *
+ * The branches alone, and no count of what reached each pull request: a
+ * revising session switches between branches, so no local count describes one
+ * of them, and the remote's answer costs a GitHub call per pull request on the
+ * path of every revision. What it pushed is the session's own to report — its
+ * `pullRequests` field names every pull request it pushed to — so this says
+ * where it was sent and leaves what happened there to the answer above it.
  */
 export function revisionNote(
-  revisions: readonly { branch: string; pulls: readonly PullPush[] }[],
+  branches: readonly string[],
   discarded: readonly Uncommitted[] = [],
   discardFailed = false
 ): string {
-  const lines = revisions.map(({ branch, pulls }) => {
-    const each = pulls.map(({ repo, number, pushed }) => {
-      const what =
-        pushed === undefined
-          ? "could not be read"
-          : pushed === 0
-            ? "nothing pushed"
-            : `${pushed} commit${pushed === 1 ? "" : "s"} pushed`;
-      return `${repo}#${number} (${what})`;
-    });
-    return `- \`${branch}\`: ${each.join(", ")}`;
-  });
-  const parts = [`**What reached the pull requests:**\n${lines.join("\n")}`];
+  const parts = [
+    `**Sent back to:** ${branches.map((branch) => `\`${branch}\``).join(", ")}.`
+  ];
   if (discarded.length > 0) {
     const many =
       discarded.length > 1 || discarded.some((repo) => repo.path !== ".");

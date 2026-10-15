@@ -39,8 +39,10 @@ const LINES: string[] = [
   // smaller model does not spend a session on a typo.
   "Then decide whether the pull request deserves a second pass. Send its branch back with `claude_code_revise` for a self-review when the change has new logic, came from a plan, or spans several files: it runs while Copilot reviews. Skip it for a typo, a line of docs or a config value.",
 
-  // The wait is here so that no container is held through it.
-  "While a session works on the pull request, leave it alone: before it finishes it looks once at what has landed and answers it. When none is working on it, watch with `check_back` every minute or two, and on each wake read `repo_pr_review_status` and `repo_pr_checks` before deciding anything. When Copilot's review is in and not yet answered, or a check has failed, send the branch back with `claude_code_revise` and say what landed — not what to do about it. Several branches with something landed go back in one call. Never ask Copilot, or anyone, for another review. If no review was requested, or none lands within fifteen minutes, stop waiting for it and say so.",
+  // The wait is here so that no container is held through it. Nothing asks
+  // whether a review is *pending*: that is not something these tools can
+  // answer, so the wait ends on what has landed or on the clock.
+  "While a session works on the pull request, leave it alone: before it finishes it looks once at what has landed and answers it. When none is working on it, watch with `check_back` every minute or two, and on each wake read `repo_pr_view`, `repo_pr_threads` and `repo_pr_checks` before deciding anything. When a review has landed and is not yet answered, a thread is still unresolved, or a check has failed, send the branch back with `claude_code_revise` and say what landed — not what to do about it. Several branches with something landed go back in one call. Never ask Copilot, or anyone, for another review. If nothing has landed within fifteen minutes, stop waiting and say so: you cannot tell a review that is still being written from one that was never asked for, so the clock is what ends the wait.",
 
   // A session cannot ask mid-run; it stops and asks through here instead. The
   // relay is spelled out because the failure is silent: a question answered
@@ -50,7 +52,7 @@ const LINES: string[] = [
 
   // Every condition is something a tool answers, which is what makes it a bar
   // a smaller model can hold.
-  "The change is done when Copilot has reviewed each of its pull requests and no review thread is left open (`repo_pr_threads`), when the checks pass or their failures are explained, and when no session is still working on it. Check each yourself. Then reply with the pull request's link first, then two to four lines: what changed, what the review raised and how it was answered, and anything left for the person to decide. The person merges: never merge, and never say it is merged.",
+  "The change is done when Copilot has reviewed each of its pull requests (`repo_pr_view`) and no review thread is left open (`repo_pr_threads`), when the checks pass or their failures are explained, and when no session is still working on it. Check each yourself. Then reply with the pull request's link first, then two to four lines: what changed, what the review raised and how it was answered, and anything left for the person to decide. The person merges: never merge, and never say it is merged.",
 
   // The advertised `planning` skill, which "finish with a pull request" would
   // otherwise contradict.

@@ -244,9 +244,12 @@ one model in this deployment that is not a Workers AI one: its `modelId` in
 pull request — ready for review, which is what asks for Copilot's — and answers through
 `--json-schema` how it ended: done, stopped for the person's decision, or blocked.
 Between sessions the agent watches the
-pull request with `check_back`, `repo_pr_review_status` and `repo_pr_checks`, none of
-which starts a container, and sends it back with **`claude_code_revise`** when a review
-or a failing check lands, or for a self-review it judges worth one. A revision carries
+pull request with `check_back`, `repo_pr_view`, `repo_pr_threads` and `repo_pr_checks`
+— none of which starts a container, and all of which read GitHub through its hosted
+MCP server — and sends it back with **`claude_code_revise`** when a review, an
+unresolved thread or a failing check lands, or for a self-review it judges worth one.
+Nothing asks whether a review is still _pending_: that is not a question this surface
+answers, so a wait with nothing landing ends on the clock. A revision carries
 on the conversation that last worked on the branch, in its worktree, so the session
 that answers a review is the one that wrote the code. A worktree's container stops as
 soon as its session settles, so nothing idles through the wait.

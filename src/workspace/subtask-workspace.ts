@@ -1,5 +1,7 @@
-import { parseRepo } from "@dynamicagents/plugins/repo";
+import { parseRepo } from "@dynamicagents/plugins/repo-github";
 import {
+  openWorkspaceFs,
+  pathExists,
   sessionAdvisory,
   workspaceName,
   type WorkspaceObjectBase
@@ -56,8 +58,45 @@ export function placementRepo(active: ActiveRepo): string | undefined {
 }
 
 /**
+ * A checkout's `.gitmodules`, as text: empty when it has none, and `undefined`
+ * when it could not be read — which a caller keeps its last answer for rather
+ * than recording "no submodules".
+ *
+ * **Read from the workspace object's filesystem, which starts no container.**
+ * That is the whole constraint this function exists under. The caller is
+ * `afterCheckout`, which runs immediately before the dependency install, and a
+ * container command there would start the container ahead of the install and
+ * cost it the snapshot it restores from. The filesystem is the object's own
+ * SQLite, so `openWorkspaceFs` serves a read without one — the same property
+ * `gitOrigin` relies on, and the reason this is not
+ * {@link readSubmodules}, which runs `git config` through a shell.
+ */
+export async function gitmodulesOf(
+  host: Parameters<typeof openWorkspaceFs>[0],
+  dir: string
+): Promise<string | undefined> {
+  const path = `${dir}/.gitmodules`;
+  try {
+    // `using`, because the client holds RPC handles into the object and every
+    // exit here has to release them — an absent file and a failed read
+    // included. `stopSession` in `src/agents/claude-coordinator/plugins.ts`
+    // binds the other opener the same way.
+    using opened = await openWorkspaceFs(host);
+    // Asked before reading, because the two nothings differ and `readFile`
+    // gives one error for both. A repository with no submodules is the common
+    // case and must record "none"; a read that failed must record nothing at
+    // all, or a transient fault would erase a superproject's submodules from
+    // the selection and send the next session to clone the root alone.
+    if (!(await pathExists(opened.fs, path))) return "";
+    return await opened.fs.readFile(path, "utf8");
+  } catch {
+    return undefined;
+  }
+}
+
+/**
  * The repositories a `.gitmodules` file names, as `owner/repo` — read as text,
- * since it is read from GitHub rather than from a checkout. A url
+ * since {@link gitmodulesOf} reads the file rather than git's view of it. A url
  * {@link submoduleCloneUrl} would not clone from, or one naming no repository,
  * is left out.
  */

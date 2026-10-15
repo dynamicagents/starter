@@ -1,6 +1,6 @@
 import { restrictTools, type AgentPlugin } from "@dynamicagents/core";
 import { computer, type ComputerConfig } from "@dynamicagents/plugins/computer";
-import { repo } from "@dynamicagents/plugins/repo";
+import { repo } from "@dynamicagents/plugins/repo-github";
 import { browser } from "@dynamicagents/plugins/browser";
 import { workspaceExec } from "@dynamicagents/plugins/workspace";
 import type { ActiveRepo } from "@/workspace/active-repo";

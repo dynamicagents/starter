@@ -32,7 +32,6 @@ import { activeRepo } from "@/workspace/active-repo";
 import { isBranchName } from "@/workspace/worktree-pool";
 import { claudeCodeConfig } from "./claude-code";
 import { branchSession, recordBranchRun, type BranchScope } from "./branches";
-import { commitsSince, pullHead, pullsFrom, type BranchPull } from "./github";
 import {
   createPlan,
   lastPlanIndex,
@@ -77,7 +76,6 @@ import {
   unresumableReport,
   warningPrompt,
   writingNote,
-  type PullPush,
   type RepoStart,
   type Uncommitted,
   type WritingOutcome,
@@ -402,13 +400,19 @@ function noteBranchRun(
 }
 
 /**
- * A revising session, sent back to branches with open pull requests.
+ * A revising session, sent back to the branches it is named.
  *
  * **Every branch is checked before anything is claimed**, and a call naming one
  * that cannot be worked on is refused whole, saying why for each: a name git
- * would not take, one named twice, one a session is working on now, or one with
- * no open pull request in the root or its submodules. The pull requests are
- * GitHub's answer, never a model's.
+ * would not take, one named twice, or one a session is working on now. Each of
+ * those is answerable here, from this object's own state.
+ *
+ * **Whether a pull request is open is not checked, deliberately.** It was, and
+ * it cost an API call per branch per repository on the path of every revision —
+ * to prevent a failure a session reports for itself in a sentence. A branch
+ * whose pull request is merged, closed or absent is dispatched, and the session
+ * says so. The worst of it is one container start; a revising session pushes
+ * only the branches it was named and never merges.
  *
  * Then the session gets a worktree of the root at its base, and checks each
  * branch out itself. It starts fresh: its branches may come from several
@@ -416,11 +420,7 @@ function noteBranchRun(
  */
 export async function prepareReviser(
   ctx: SubAgentPrepareContext<ReviseInput, Env>,
-  workspaces: SubtaskWorkspaces = sessionWorkspaces(ctx.parent),
-  lookUp: (repo: string, branch: string) => Promise<BranchPull[]> = (
-    repo,
-    branch
-  ) => pullsFrom(ctx.parent.env.GITHUB_TOKEN, repo, branch)
+  workspaces: SubtaskWorkspaces = sessionWorkspaces(ctx.parent)
 ): Promise<Record<string, unknown>> {
   const active = activeRepo(ctx.parent.storage);
   const root = placementRepo(active);
@@ -429,35 +429,17 @@ export async function prepareReviser(
       "claude_code_revise: there is no repository checked out. Clone the one the branches are in with `repo_clone` first."
     );
   }
-  const repos = [root, ...active.submodulesOf(root)];
   const seen = new Set<string>();
-  const checked = await Promise.all(
-    ctx.input.revisions.map(async ({ branch }) => {
-      const refuse = (why: string) => ({ branch, why });
-      if (!isBranchName(branch)) return refuse("not a branch name");
-      if (seen.has(branch)) return refuse("named more than once");
-      seen.add(branch);
-      if (workspaces.working(branch)) {
-        return refuse("a session is working on it now; wait for its report");
-      }
-      let pulls: BranchPull[];
-      try {
-        pulls = (
-          await Promise.all(repos.map((repo) => lookUp(repo, branch)))
-        ).flat();
-      } catch (err) {
-        return refuse(err instanceof Error ? err.message : String(err));
-      }
-      const open = pulls.filter((pull) => pull.state === "open");
-      if (open.length > 0) return { branch, pulls: open };
-      const last = pulls[0];
-      return refuse(
-        last
-          ? `its pull request ${last.repo}#${last.number} is ${last.state}`
-          : `no pull request is from it in ${repos.join(", ")}`
-      );
-    })
-  );
+  const checked = ctx.input.revisions.map(({ branch }) => {
+    const refuse = (why: string) => ({ branch, why });
+    if (!isBranchName(branch)) return refuse("not a branch name");
+    if (seen.has(branch)) return refuse("named more than once");
+    seen.add(branch);
+    if (workspaces.working(branch)) {
+      return refuse("a session is working on it now; wait for its report");
+    }
+    return { branch };
+  });
   const refused = checked.filter((check) => "why" in check);
   if (refused.length > 0) {
     throw new Error(
@@ -467,20 +449,7 @@ export async function prepareReviser(
       ].join("\n")
     );
   }
-  const revisions: Revision[] = checked.flatMap((check) =>
-    "pulls" in check
-      ? [
-          {
-            branch: check.branch,
-            pulls: check.pulls.map(({ repo, number, head }) => ({
-              repo,
-              number,
-              head
-            }))
-          }
-        ]
-      : []
-  );
+  const revisions: Revision[] = checked.map(({ branch }) => ({ branch }));
   const place = await claimPlace(workspaces, {
     taskId: ctx.taskId,
     runId: ctx.runId,
@@ -489,10 +458,9 @@ export async function prepareReviser(
   return { ...runtimeOf(place), [REVISIONS_KEY]: revisions };
 }
 
-/** A branch a revising session was sent back to, and its pull requests' heads then. */
+/** A branch a revising session was sent back to. */
 interface Revision {
   branch: string;
-  pulls: { repo: string; number: number; head: string }[];
 }
 
 /** Where a revising run's branches are kept in what `prepare` hands it. */
@@ -1034,7 +1002,7 @@ abstract class ClaudeCodeRun extends SubAgent<Env> {
       return sessionReport(
         outcome,
         revisionNote(
-          await this.#pushes(revisions),
+          revisions.map(({ branch }) => branch),
           discarded.files,
           discarded.failed
         )
@@ -1074,37 +1042,6 @@ abstract class ClaudeCodeRun extends SubAgent<Env> {
         { err: String(err) }
       );
     }
-  }
-
-  /**
-   * What reached each pull request a revision was checked against: its head
-   * then and now, from GitHub. Unreadable reads as unknown, never as nothing.
-   */
-  async #pushes(
-    revisions: readonly Revision[]
-  ): Promise<{ branch: string; pulls: PullPush[] }[]> {
-    const token = this.env.GITHUB_TOKEN;
-    return Promise.all(
-      revisions.map(async ({ branch, pulls }) => ({
-        branch,
-        pulls: await Promise.all(
-          pulls.map(async ({ repo, number, head }) => {
-            const now = await pullHead(token, repo, number);
-            const pushed =
-              now === undefined
-                ? undefined
-                : now === head
-                  ? 0
-                  : await commitsSince(token, repo, head, now);
-            return {
-              repo,
-              number,
-              ...(pushed === undefined ? {} : { pushed })
-            };
-          })
-        )
-      }))
-    );
   }
 
   /**

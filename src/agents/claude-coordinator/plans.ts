@@ -98,7 +98,7 @@ export const REVISE_INPUT = z.object({
         branch: z
           .string()
           .describe(
-            "A branch with an open pull request: one a session's report named, or the head branch `repo_pr_view` shows."
+            "A branch with a pull request: one a session's report named, or the head branch `repo_pr_view` shows."
           ),
         task: z
           .string()
@@ -134,8 +134,10 @@ export const REVISER_DESCRIPTION = [
   "Several go in one call, and one session answers them all — every pull request",
   "from each branch, in whichever repositories it is in.",
   "",
-  "Each branch must have an open pull request and no session working on it. A",
-  "call naming one that does not is refused with the reason, and nothing starts.",
+  "No session may be working on a branch you name. A call naming one that is, or",
+  "a name git would not take, is refused with the reason, and nothing starts.",
+  "Whether a pull request is still open is not checked here: name a branch whose",
+  "pull request is merged or gone and the session will tell you so.",
   "",
   "It already knows how to answer each of those — a review in one pass, every",
   "thread replied to and resolved, CI's logs read and fixed — so tell it what",

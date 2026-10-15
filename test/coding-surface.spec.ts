@@ -74,7 +74,6 @@ describe("the parent's tools", () => {
       "repo_issue_view",
       "repo_open_pr",
       "repo_pr_checks",
-      "repo_pr_review_status",
       "repo_pr_threads",
       "repo_pr_view",
       "repo_push",

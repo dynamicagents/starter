@@ -39,11 +39,6 @@ import {
   recordBranchRun
 } from "@/agents/claude-coordinator/branches";
 import {
-  gitmodulesOf,
-  pullsFrom,
-  type BranchPull
-} from "@/agents/claude-coordinator/github";
-import {
   createPlan,
   ownsPlan,
   PLAN_LABEL,
@@ -74,10 +69,12 @@ import { activeRepo } from "@/workspace/active-repo";
 import { SCRATCH_REPO } from "@/workspace/scratch";
 import { sqlPoolStore, worktreeRepo } from "@/workspace/worktree-pool";
 import { gitIdentity } from "@/workspace/git-identity";
-import type {
-  KeptWork,
-  SessionPlace,
-  SubtaskWorkspaces
+import {
+  gitmodulesOf,
+  submoduleRepos,
+  type KeptWork,
+  type SessionPlace,
+  type SubtaskWorkspaces
 } from "@/workspace/subtask-workspace";
 
 /**
@@ -152,7 +149,6 @@ describe("the parent's surface", () => {
       "repo_clone",
       "repo_issue_view",
       "repo_pr_checks",
-      "repo_pr_review_status",
       "repo_pr_threads",
       "repo_pr_view",
       "repo_worktree",
@@ -216,7 +212,8 @@ describe("the parent's surface", () => {
       tools: Object.keys(agent.getTools()),
       actions: Object.keys(agent.getActions())
     }));
-    expect(tools).toContain("repo_pr_review_status");
+    expect(tools).toContain("repo_pr_view");
+    expect(tools).toContain("repo_pr_threads");
     expect(tools).toContain("repo_pr_checks");
     for (const writer of ["repo_commit", "repo_push", "repo_open_pr"]) {
       expect(tools).not.toContain(writer);
@@ -1537,24 +1534,18 @@ describe("the warning round", () => {
 describe("the note on what a writing session kept", () => {
   const branch = "claude-coordinator/task-1/1";
 
-  it("says what reached each pull request a revision was checked against", () => {
+  /**
+   * Where a revising session was sent, and no count of what reached each pull
+   * request: that count cost a GitHub call per pull request, and what it
+   * pushed is in the session's own answer above this note.
+   */
+  it("names the branches a revision was sent back to", () => {
     const note = revisionNote(
-      [
-        {
-          branch: "feat/x",
-          pulls: [
-            { repo: "acme/api", number: 12, pushed: 2 },
-            { repo: "acme/core", number: 5, pushed: 0 },
-            { repo: "acme/web", number: 7 }
-          ]
-        }
-      ],
+      ["feat/x", "feat/y"],
       [{ path: ".", files: ["notes.md"] }]
     );
 
-    expect(note).toContain(
-      "- `feat/x`: acme/api#12 (2 commits pushed), acme/core#5 (nothing pushed), acme/web#7 (could not be read)"
-    );
+    expect(note).toContain("**Sent back to:** `feat/x`, `feat/y`.");
     expect(note).toContain(
       "**Deleted, uncommitted:** the repository: `notes.md`."
     );
@@ -1938,31 +1929,20 @@ describe("going back to a branch", () => {
 });
 
 /**
- * A revision names branches, and the host only checks them: each must have an
- * open pull request in the checkout's repositories and nobody working on it.
- * The session checks them out itself, so nothing here places it on one.
+ * A revision names branches, and the host checks only what it can answer from
+ * its own state: a name git would take, named once, with nobody working on it.
+ * The session checks the branches out itself, so nothing here places it on one.
+ *
+ * **Nothing asks GitHub whether a pull request is open.** That check cost a
+ * call per branch per repository on the path of every revision, to prevent a
+ * failure the session reports for itself in a sentence — so a branch whose pull
+ * request is merged, closed or absent is dispatched and says so.
  */
 describe("sending branches back to be revised", () => {
-  const pull = (
-    repo: string,
-    number: number,
-    state: BranchPull["state"] = "open"
-  ): BranchPull => ({
-    repo,
-    number,
-    url: `https://github.com/${repo}/pull/${number}`,
-    state,
-    head: `sha-${number}`
-  });
-
-  /**
-   * `revisions` sent back, with the parent on `POOL_REPO`, a superproject that
-   * carries `acme/core`. `pulls` is GitHub's answer, by `repo branch`.
-   */
+  /** `revisions` sent back, with the parent on `POOL_REPO`. */
   const revising = (
     agent: Parent,
     revisions: ReviseInput["revisions"],
-    pulls: Record<string, BranchPull[]>,
     working: string[] = []
   ) => {
     const active = activeRepo(agent.ctx.storage);
@@ -1976,7 +1956,13 @@ describe("sending branches back to be revised", () => {
       { repo: POOL_REPO, submodules: ["acme/core"] }
     );
     const placing = placingPool(worktree());
-    const asked: string[] = [];
+    const reached: string[] = [];
+    const watch = vi
+      .spyOn(globalThis, "fetch")
+      .mockImplementation(async (input: RequestInfo | URL) => {
+        reached.push(String(input));
+        return new Response("{}", { status: 200 });
+      });
     return prepareReviser(
       {
         input: { revisions },
@@ -1984,49 +1970,35 @@ describe("sending branches back to be revised", () => {
         runId: `detached:${crypto.randomUUID()}`,
         parent: agent.pluginContext()
       },
-      { ...placing.pool, working: (branch) => working.includes(branch) },
-      async (repo, branch) => {
-        asked.push(`${repo} ${branch}`);
-        return pulls[`${repo} ${branch}`] ?? [];
-      }
-    ).then(
-      (runtime) => ({ runtime, placed: placing.asked, asked, refused: "" }),
-      (err: unknown) => ({
-        runtime: undefined,
-        placed: placing.asked,
-        asked,
-        refused: String(err)
-      })
-    );
+      { ...placing.pool, working: (branch) => working.includes(branch) }
+    )
+      .then(
+        (runtime) => ({
+          runtime,
+          placed: placing.asked,
+          reached,
+          refused: ""
+        }),
+        (err: unknown) => ({
+          runtime: undefined,
+          placed: placing.asked,
+          reached,
+          refused: String(err)
+        })
+      )
+      .finally(() => watch.mockRestore());
   };
 
-  it("checks every branch across the checkout's repositories, then claims one fresh worktree for them all", async () => {
-    const { runtime, placed, asked } = await onParent((agent) =>
-      revising(
-        agent,
-        [
-          { branch: "feat/x", task: "Copilot has reviewed it." },
-          { branch: "feat/y", task: "The test check failed." }
-        ],
-        {
-          [`${POOL_REPO} feat/x`]: [pull(POOL_REPO, 12)],
-          "acme/core feat/x": [pull("acme/core", 5)],
-          [`${POOL_REPO} feat/y`]: [
-            pull(POOL_REPO, 13),
-            pull(POOL_REPO, 9, "closed")
-          ]
-        }
-      )
+  it("claims one fresh worktree for every branch, asking GitHub nothing", async () => {
+    const { runtime, placed, reached } = await onParent((agent) =>
+      revising(agent, [
+        { branch: "feat/x", task: "Copilot has reviewed it." },
+        { branch: "feat/y", task: "The test check failed." }
+      ])
     );
 
-    expect(asked.sort()).toEqual(
-      [
-        `${POOL_REPO} feat/x`,
-        "acme/core feat/x",
-        `${POOL_REPO} feat/y`,
-        "acme/core feat/y"
-      ].sort()
-    );
+    // The whole point of deleting the gate: dispatch costs no network at all.
+    expect(reached).toEqual([]);
     expect(placed).toEqual([
       {
         taskId: "task-1",
@@ -2035,22 +2007,24 @@ describe("sending branches back to be revised", () => {
       }
     ]);
     expect(runtime).toMatchObject({
-      revisions: [
-        {
-          branch: "feat/x",
-          pulls: [
-            { repo: POOL_REPO, number: 12, head: "sha-12" },
-            { repo: "acme/core", number: 5, head: "sha-5" }
-          ]
-        },
-        {
-          branch: "feat/y",
-          pulls: [{ repo: POOL_REPO, number: 13, head: "sha-13" }]
-        }
-      ]
+      revisions: [{ branch: "feat/x" }, { branch: "feat/y" }]
     });
     // A fresh session: its branches are not one conversation to carry on.
     expect(runtime).not.toHaveProperty("resume");
+  });
+
+  /**
+   * A merged pull request is no longer a refusal. The session is started and
+   * reports what it found, which is the trade the gate's deletion makes.
+   */
+  it("starts a session for a branch whose pull request is gone", async () => {
+    const { runtime, placed, refused } = await onParent((agent) =>
+      revising(agent, [{ branch: "feat/merged", task: "t" }])
+    );
+
+    expect(refused).toBe("");
+    expect(placed).toHaveLength(1);
+    expect(runtime).toMatchObject({ revisions: [{ branch: "feat/merged" }] });
   });
 
   it("refuses the whole call, saying why for each branch it cannot revise", async () => {
@@ -2059,34 +2033,19 @@ describe("sending branches back to be revised", () => {
         agent,
         [
           { branch: "feat/ok", task: "t" },
-          { branch: "feat/merged", task: "t" },
-          { branch: "feat/none", task: "t" },
           { branch: "not a branch", task: "t" },
           { branch: "feat/ok", task: "again" },
           { branch: "feat/busy", task: "t" }
         ],
-        {
-          [`${POOL_REPO} feat/ok`]: [pull(POOL_REPO, 1)],
-          [`${POOL_REPO} feat/merged`]: [pull(POOL_REPO, 2, "merged")],
-          [`${POOL_REPO} feat/busy`]: [pull(POOL_REPO, 3)]
-        },
         ["feat/busy"]
       )
     );
 
     expect(placed).toEqual([]);
     expect(refused).toContain("nothing was started");
-    expect(refused).toContain(
-      `\`feat/merged\`: its pull request ${POOL_REPO}#2 is merged.`
-    );
-    expect(refused).toContain(
-      `\`feat/none\`: no pull request is from it in ${POOL_REPO}, acme/core.`
-    );
     expect(refused).toContain("`not a branch`: not a branch name.");
     expect(refused).toContain("`feat/ok`: named more than once.");
     expect(refused).toContain("`feat/busy`: a session is working on it now");
-    // The branch that passed is not listed as a refusal.
-    expect(refused).not.toContain("`feat/ok`: its");
   });
 
   it("refuses with nothing checked out", async () => {
@@ -2098,8 +2057,7 @@ describe("sending branches back to be revised", () => {
           runId: "detached:call_1",
           parent: agent.pluginContext()
         },
-        placingPool(worktree()).pool,
-        async () => []
+        placingPool(worktree()).pool
       ).then(
         () => "",
         (err: unknown) => String(err)
@@ -2163,100 +2121,148 @@ describe("the checkouts a caller has recorded", () => {
   });
 });
 
-/** The pull requests a revision is checked against are GitHub's answer, never a model's. */
-describe("the pull requests from a branch", () => {
-  /** GitHub, answering each `state` with its own list. */
-  const github = (by: Record<string, unknown[]>, status = 200) =>
-    vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
-      const state = new URL(String(input)).searchParams.get("state") ?? "";
-      return new Response(JSON.stringify(by[state] ?? []), { status });
-    });
-
-  it("asks for the open ones from the repository's own branch, on their own", async () => {
-    const spy = github({
-      open: [{ number: 3, state: "open", html_url: "u3", head: { sha: "h3" } }]
-    });
-    try {
-      expect(await pullsFrom("t", "acme/api", "feat/x")).toEqual([
-        { repo: "acme/api", number: 3, url: "u3", state: "open", head: "h3" }
-      ]);
-      // `head` names the owner, so a fork's branch of the same name is not asked for.
-      expect(spy.mock.calls.map(([url]) => String(url))).toEqual([
-        "https://api.github.com/repos/acme/api/pulls?state=open&head=acme%3Afeat%2Fx&per_page=100"
-      ]);
-    } finally {
-      spy.mockRestore();
-    }
-  });
-
-  it("answers the latest closed one when none is open, saying whether it was merged", async () => {
-    const spy = github({
-      closed: [
-        {
-          number: 2,
-          state: "closed",
-          merged_at: "2026-10-01T00:00:00Z",
-          html_url: "u2",
-          head: { sha: "h2" }
-        }
-      ]
-    });
-    try {
-      expect(await pullsFrom("t", "acme/api", "feat/x")).toEqual([
-        { repo: "acme/api", number: 2, url: "u2", state: "merged", head: "h2" }
-      ]);
-      expect(String(spy.mock.calls[1]![0])).toContain(
-        "state=closed&head=acme%3Afeat%2Fx&per_page=1"
-      );
-    } finally {
-      spy.mockRestore();
-    }
-  });
-
-  it("throws when GitHub does not answer, so no branch passes on a guess", async () => {
-    const spy = github({}, 502);
-    try {
-      await expect(pullsFrom("t", "acme/api", "feat/x")).rejects.toThrow(
-        "GitHub answered 502"
-      );
-    } finally {
-      spy.mockRestore();
-    }
-  });
-});
-
-/** A superproject's submodules are read from GitHub, and only a real answer replaces the last one. */
+/**
+ * A superproject's submodules, read from the workspace object's filesystem.
+ *
+ * The property under test is as much *how* as *what*: this runs inside
+ * `afterCheckout`, immediately before the dependency install, so a read that
+ * started the container would cost that install the snapshot it restores from.
+ * `openWorkspaceFs` is the half of the workspace that serves a file without
+ * one.
+ */
 describe("a checkout's .gitmodules", () => {
-  const answering = (status: number, body = "") =>
-    vi
-      .spyOn(globalThis, "fetch")
-      .mockResolvedValue(new Response(body, { status }));
+  /**
+   * A workspace object as the filesystem half of it: `__getWorkspaceFsStub` is
+   * the method that must be reached, and `__getWorkspaceStub` the one that
+   * must not — asking for it is what starts a container.
+   */
+  const workspaceHolding = (
+    files: Record<string, string | { throws: unknown }>
+  ) => {
+    const reached: string[] = [];
+    const fs = {
+      exists: async (path: string) => {
+        reached.push(`exists ${path}`);
+        return path in files;
+      },
+      readFile: async (path: string) => {
+        reached.push(`readFile ${path}`);
+        const held = files[path];
+        if (held === undefined) throw new Error("ENOENT");
+        if (typeof held !== "string") throw held.throws;
+        return held;
+      }
+    };
+    // What `getWorkspace` reads off a stub besides `fs`. Spelled out because
+    // an incomplete one fails inside the client rather than at the call, which
+    // would read here as "the file was unreadable".
+    const stub = {
+      fs,
+      useThink: false,
+      hasAssets: false,
+      runtime: { backends: async () => [] },
+      // What the client's own `Symbol.dispose` reaches, and the reason the
+      // caller binds it with `using`: these are RPC handles into the object,
+      // and `afterCheckout` runs on every checkout of every session.
+      [Symbol.dispose]: () => {
+        reached.push("disposed");
+      }
+    };
+    const host = {
+      __getWorkspaceFsStub: async () => {
+        reached.push("fs stub");
+        return stub as never;
+      },
+      __getWorkspaceStub: async () => {
+        reached.push("container stub");
+        return stub as never;
+      }
+    };
+    return { host, reached };
+  };
 
-  it.each([
-    ["is the file", 200, "[submodule]", "[submodule]"],
-    ["is empty when there is none", 404, "", ""],
-    ["is unknown when GitHub cannot say", 503, "", undefined]
-  ])("%s", async (_label, status, body, expected) => {
-    const spy = answering(status, body);
-    try {
-      expect(
-        await gitmodulesOf("t", "https://github.com/acme/super", "main")
-      ).toBe(expected);
-    } finally {
-      spy.mockRestore();
-    }
+  const read = async (files: Record<string, string | { throws: unknown }>) => {
+    const { host, reached } = workspaceHolding(files);
+    const text = await gitmodulesOf(
+      host as unknown as Parameters<typeof gitmodulesOf>[0],
+      "/workspace/super"
+    );
+    return { text, reached };
+  };
+
+  it("is the file, read without starting a container", async () => {
+    const { text, reached } = await read({
+      "/workspace/super/.gitmodules": "[submodule]"
+    });
+    expect(text).toBe("[submodule]");
+    expect(reached).toContain("fs stub");
+    expect(reached).not.toContain("container stub");
   });
 
-  it("is unknown for a repository not on github.com, without asking", async () => {
-    const spy = answering(200, "[submodule]");
-    try {
-      expect(
-        await gitmodulesOf("t", "https://gitlab.com/acme/super", "main")
-      ).toBeUndefined();
-      expect(spy).not.toHaveBeenCalled();
-    } finally {
-      spy.mockRestore();
-    }
+  /**
+   * The two nothings, which must not collapse into one. "No submodules" is
+   * recorded; "could not read" is not, or a transient fault would erase a
+   * superproject's submodules from the selection and send the next session to
+   * clone the root alone.
+   */
+  it("is empty when the repository has no submodules", async () => {
+    const { text } = await read({});
+    expect(text).toBe("");
+  });
+
+  it("is unknown when the file is there and will not read", async () => {
+    const { text } = await read({
+      "/workspace/super/.gitmodules": { throws: new Error("EIO") }
+    });
+    expect(text).toBeUndefined();
+  });
+
+  /**
+   * Every exit releases the client, the two that answer nothing included. This
+   * runs once per checkout per session, so a handle left behind here leaks for
+   * as long as the object lives.
+   */
+  it.each([
+    ["the file read", { "/workspace/super/.gitmodules": "[submodule]" }],
+    ["no file at all", {}],
+    [
+      "a read that threw",
+      { "/workspace/super/.gitmodules": { throws: new Error("EIO") } }
+    ]
+  ])("releases the workspace client after %s", async (_what, files) => {
+    const { reached } = await read(
+      files as Record<string, string | { throws: unknown }>
+    );
+    expect(reached.at(-1)).toBe("disposed");
+  });
+
+  it("is unknown when the workspace cannot be reached at all", async () => {
+    const text = await gitmodulesOf(
+      {
+        __getWorkspaceFsStub: async () => {
+          throw new Error("no such object");
+        }
+      } as unknown as Parameters<typeof gitmodulesOf>[0],
+      "/workspace/super"
+    );
+    expect(text).toBeUndefined();
+  });
+
+  /** The parse that turns the file into the repositories a session may work in. */
+  it("names the repositories a superproject carries", () => {
+    expect(
+      submoduleRepos(
+        [
+          '[submodule "core"]',
+          "\tpath = core",
+          "\turl = https://github.com/acme/core.git",
+          '[submodule "web"]',
+          "\tpath = web",
+          "\turl = ../web.git"
+        ].join("\n"),
+        "https://github.com/acme/super"
+      )
+    ).toEqual(["acme/core", "acme/web"]);
   });
 });
 

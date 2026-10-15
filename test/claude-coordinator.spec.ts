@@ -1245,7 +1245,7 @@ describe("a writing session's worktree", () => {
 describe("the credential pool", () => {
   it("reports a fresh pool as usable", async () => {
     const workspace = freshWorkspace("fresh-pool");
-    const lead = await workspace.claudeCredentials();
+    const lead = await workspace.claudeAdmit();
 
     expect(lead.ok).toBe(true);
     if (lead.ok) {
@@ -1262,30 +1262,38 @@ describe("the credential pool", () => {
     ).resolves.toBeUndefined();
   });
 
-  it("refuses a session once every credential is spent, saying when one resets", async () => {
+  /**
+   * A stored reset is Anthropic's answer at the time, and a plan upgrade makes
+   * it wrong. The session is admitted and asks again.
+   */
+  it("admits a session once every credential is spent, clearing the marks", async () => {
     const name = `admit-spent:${crypto.randomUUID()}`;
     const resetAt = Date.now() + 60 * 60_000;
     const binding = env.CLAUDE_COORDINATOR_WORKSPACE;
+    const poolIn = (storage: DurableObjectStorage) =>
+      credentialPool({
+        credentials: claudeCodeConfig(env).credentials,
+        store: {
+          read: async () =>
+            (await storage.get<CredentialState[]>(CREDENTIALS_KEY)) ?? [],
+          write: (states) => storage.put(CREDENTIALS_KEY, states)
+        }
+      });
     await runInDurableObject(
       binding.get(binding.idFromName(name)),
       async (_, state) => {
-        const pool = credentialPool({
-          credentials: claudeCodeConfig(env).credentials,
-          store: {
-            read: async () =>
-              (await state.storage.get<CredentialState[]>(CREDENTIALS_KEY)) ??
-              [],
-            write: (states) => state.storage.put(CREDENTIALS_KEY, states)
-          }
-        });
+        const pool = poolIn(state.storage);
         let lead = await pool.lead();
         while (lead.ok) lead = await pool.spend(lead.id, resetAt);
       }
     );
 
-    await expect(admitSession(env, name)).rejects.toThrow(
-      new Date(resetAt).toISOString()
+    await expect(admitSession(env, name)).resolves.toBeUndefined();
+    const lead = await runInDurableObject(
+      binding.get(binding.idFromName(name)),
+      async (_, state) => await poolIn(state.storage).lead()
     );
+    expect(lead).toMatchObject({ ok: true, index: 0 });
   });
 });
 

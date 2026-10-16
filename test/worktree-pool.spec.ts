@@ -521,10 +521,9 @@ describe("the pool in the parent's SQLite", () => {
 });
 
 /**
- * A worktree's own idle alarm beats the weekly sweep to almost every reclaim, so
- * the sweep's `onReclaimed` never fires for it and the row outlives the checkout
- * it describes. A row holding unpushed commits is never free, so nothing else
- * would ever reuse that slot.
+ * A reclaim whose answer the sweep never got leaves `onReclaimed` unfired, and
+ * the row outlives the checkout it describes. A row holding unpushed commits is
+ * never free, so nothing else would ever reuse that slot.
  */
 describe("reconciling the pool against the worktrees that are left", () => {
   const held = (slot: number): Worktree => ({

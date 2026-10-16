@@ -65,6 +65,10 @@ import {
 } from "@/agents/claude-coordinator/claude-code";
 import { admitSession } from "@/agents/claude-coordinator/plugins";
 import { activeRepo } from "@/workspace/active-repo";
+import {
+  sweepIdleWorkspaces,
+  type SweptNamespace
+} from "@/workspace/lifecycle";
 import { SCRATCH_REPO } from "@/workspace/scratch";
 import { sqlPoolStore, worktreeRepo } from "@/workspace/worktree-pool";
 import { gitIdentity } from "@/workspace/git-identity";
@@ -187,6 +191,36 @@ describe("the parent's surface", () => {
     expect(remind).toBe("remind");
     expect(before).toMatch(/your own checkout of acme\/api/);
     expect(after).toMatch(/worktree holding `claude-coordinator\/t\/1`/);
+  });
+
+  /**
+   * The sweep is a sandbox's only reclaim, and it walks `seen()`: a repository
+   * whose sandbox it reclaimed, cloned again while still selected, has to be
+   * walked again.
+   */
+  it("enrols a repository for the sweep again when it is cloned after a reclaim", async () => {
+    const { swept, again } = await onParent(async (agent) => {
+      const active = activeRepo(agent.ctx.storage);
+      active.set("acme/api");
+      const reclaimed = {
+        getByName: () => ({
+          reclaimIfIdle: async () => ({ reclaimed: true, idleMs: 0 })
+        })
+      } as unknown as SweptNamespace;
+      const info = vi.spyOn(console, "info").mockImplementation(() => {});
+      await sweepIdleWorkspaces({
+        storage: agent.ctx.storage,
+        callerKey: "spec",
+        binding: reclaimed,
+        label: "spec"
+      });
+      info.mockRestore();
+      const swept = active.seen();
+      active.set("acme/api");
+      return { swept, again: active.seen() };
+    });
+    expect(swept).not.toContain("acme/api");
+    expect(again).toContain("acme/api");
   });
 
   it("keeps its reads in a worktree when a task settles", async () => {

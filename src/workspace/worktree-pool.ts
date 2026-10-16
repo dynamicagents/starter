@@ -281,12 +281,11 @@ export function forgetWorktree(store: PoolStore, sentinel: string): void {
 /**
  * Empty the rows of worktrees whose checkout is gone, whoever reclaimed it.
  *
- * **The sweep's `onReclaimed` does not cover this, and mostly never fires.** A
- * workspace reclaims itself on its own alarm, armed for a week past its last
- * use; the sweep that would have reclaimed it runs weekly and asks the same
- * question with the same threshold, so the alarm gets there first almost every
- * time. `reclaimIfIdle` then answers nothing-to-do — see `./active-repo.ts`,
- * `forget` — and the row outlives the checkout it describes.
+ * **The sweep's `onReclaimed` does not cover this.** It fires only on the
+ * answer to that sweep's own `reclaimIfIdle`, and an answer lost after the
+ * sandbox emptied itself is a failure to the sweep: the next one finds nothing
+ * to reclaim — see `./active-repo.ts`, `forget` — and the row outlives the
+ * checkout it describes.
  *
  * What that costs is not a stale entry. A row holding unpushed commits is never
  * free ({@link isFree}), and nothing here would ever make it free again, so
@@ -294,9 +293,9 @@ export function forgetWorktree(store: PoolStore, sentinel: string): void {
  * later session — each a full clone of a checkout the pool exists to reuse.
  *
  * So the checkout is asked about directly. `hasCheckout` answers for one
- * worktree, and a workspace that was reclaimed has no record of one — reading
- * that is a local storage read that neither starts a container nor marks the
- * workspace used, so this does not keep alive what it is checking on.
+ * worktree, and a sandbox that was reclaimed has no record of one — reading
+ * that neither starts a container nor marks the sandbox used, so this does not
+ * keep alive what it is checking on.
  */
 export async function reconcileWorktrees(
   store: PoolStore,

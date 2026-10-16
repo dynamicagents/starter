@@ -956,6 +956,11 @@ export function subtaskWorkspaces(config: {
         now()
       );
       const name = nameOf(claimed);
+      // `note`, not `set`: this enrols the worktree in the sweep's candidate list
+      // without routing the parent's own tools to it. Before anything can throw:
+      // a sandbox the sweep cannot see is never reclaimed, and a preparation that
+      // failed part-way can already have left a checkout in it.
+      config.active.note(worktreeRepo(claimed.repo, claimed.slot));
       await config.admit(name);
       const ready = claimed.ready
         ? claimed
@@ -965,10 +970,6 @@ export function subtaskWorkspaces(config: {
             name,
             sandboxName(config.callerKey(), repo)
           );
-      // `note`, not `set`: this enrols the worktree in the sweep's candidate list
-      // without routing the parent's own tools to it. A sandbox the sweep cannot
-      // see is never reclaimed.
-      config.active.note(worktreeRepo(ready.repo, ready.slot));
       return {
         workspaceName: name,
         dir: ready.dir ?? checkout.dir,

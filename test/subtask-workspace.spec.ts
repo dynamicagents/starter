@@ -419,7 +419,7 @@ describe("preparing a worktree for a writing session", () => {
   });
 
   it("asks the worktree it claimed before cloning into it", async () => {
-    const { subtasks, calls, admitted } = harness({
+    const { subtasks, calls, admitted, active } = harness({
       selected: "acme/api",
       checkout: CHECKOUT,
       refuse: true
@@ -428,6 +428,8 @@ describe("preparing a worktree for a writing session", () => {
     await expect(subtasks.resolve(ctx)).rejects.toThrow(/no credential/);
     expect(admitted).toEqual([SLOT0]);
     expect(calls).toEqual([]);
+    // Enrolled for the sweep all the same: the sweep is a sandbox's only reclaim.
+    expect(active.noted).toEqual([worktreeRepo("acme/api", 0)]);
   });
 
   /** A repeated `prepare` for one run must not redo anything. */
@@ -467,6 +469,8 @@ describe("preparing a worktree for a writing session", () => {
       /could not clone the submodule at core: network/
     );
     expect(first.pool.rows()[0]?.ready).toBe(false);
+    // The superproject is on disk, so the worktree is swept even if never retried.
+    expect(first.active.noted).toEqual([worktreeRepo("acme/api", 0)]);
 
     first.heal();
     first.calls.length = 0;

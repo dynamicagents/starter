@@ -51,9 +51,11 @@ is gitignored.
 > one is live.
 
 To ship, set the same secrets with `wrangler secret put` (or push the whole file with
-`npx wrangler deploy --secrets-file .env`) and:
+`npx wrangler deploy --secrets-file .env`), create the bucket the sandboxes back their
+checkouts up to — once, since a deploy binds it but does not make it — and:
 
 ```bash
+npx wrangler r2 bucket create da-sandbox-backups
 npm run deploy
 ```
 
@@ -259,7 +261,8 @@ across tasks until it moves them with `repo_worktree`. Where they run is a conte
 block re-read every turn, so a move never goes unannounced.
 
 GitHub is reached as the deployment's account: a session's `gh` and git present a
-placeholder, and the egress gateway swaps in `GITHUB_TOKEN` for GitHub's hosts only.
+placeholder, and the egress swaps in `GITHUB_TOKEN` for GitHub's hosts only — and never
+lets a push update a repository's default branch.
 [`.env.example`](.env.example) says how to scope that token.
 
 ### The two coders need one thing the others do not
@@ -271,19 +274,21 @@ The two differ in exactly one place, and it is one level below the agent: what a
 sub-agent _is_. `coding`'s `code` is a Think sub-agent on Workers AI, working in
 the container. A `claude-coordinator` session is one `claude -p` process — its own loop,
 its own tools, its own context management — so its sub-agent's model is
-`claudeCodeModel`, which runs the session, rather than a model call. Their
-workspace Durable Objects are two thin subclasses of `WorkspaceObjectBase` from
-`@dynamicagents/plugins/workspace`, differing only in a `WorkspaceObjectConfig`.
+`claudeCodeHarnessModel`, which runs the session, rather than a model call. Their
+sandboxes are two thin subclasses of `SandboxObjectBase` from
+`@dynamicagents/plugins/sandbox`, differing in their config and in what their egress
+lets through.
 
-That egress policy is the whole reason `claude-coordinator` exists. An Anthropic
+That egress is the whole reason `claude-coordinator` exists. An Anthropic
 **subscription** credential is refused for raw Messages API calls on every
 frontier model and accepted from the sanctioned client — so reaching Opus on one
 means running that client, and the client runs in a container that also runs a
 cloned repository's `postinstall`. The credential never goes there: the session
-launches with a placeholder, and `{ mode: "http-gateway" }` routes every outbound
-request through a `Fetcher` on the Worker side which swaps the real one in. That
-egress gateway also holds an ordered **pool** of credentials and rotates when
-Anthropic says one's 5-hour or weekly bucket is spent.
+launches with a placeholder pointed at a host the container's runtime intercepts,
+and an entrypoint on the Worker side swaps the real one in. That egress leases from
+an ordered **pool** of credentials the sandbox keeps, and rotates when Anthropic says
+one's 5-hour or weekly bucket is spent. Each host an agent's containers may reach is
+declared by the plugin that needs it, in the agent's `egress.ts`.
 
 Every agent's own model, both coders included, runs through the `AI` binding —
 Workers AI for all of them but `claude-coordinator`, whose calls name an AI
@@ -298,7 +303,8 @@ does not send a token.
 
 The container needs the **Workers Paid** plan and a running Docker daemon on the
 machine that runs `wrangler deploy` — wrangler builds `./Dockerfile` locally and
-pushes the image, so that is your laptop or your CI runner, never Cloudflare:
+pushes each image — `./Dockerfile.sandbox` for the sandboxes, and `./Dockerfile` for the
+workspaces they replace — so that is your laptop or your CI runner, never Cloudflare:
 
 - **macOS and Windows** — install **Docker Desktop** and have it running. The
   `docker` CLI on its own is not enough: the build needs a Linux kernel, which is
@@ -309,49 +315,35 @@ pushes the image, so that is your laptop or your CI runner, never Cloudflare:
 With no daemon reachable, `npx wrangler deploy --containers-rollout=none` deploys
 the Worker and leaves the container alone.
 
-> **The image and the Worker are one release.** The library in the Worker speaks
-> to `computerd` in the image, and it authenticates: a host refuses a container
-> that does not enforce the shared secret it was launched with, and a container
-> already running when a Worker with different launch settings arrives is
-> relaunched rather than adopted. So a Worker deployed without its image has
-> workspaces that cannot open, and the first deploy after an image change takes
-> any session running in an old container with it. Roll them together, and expect
-> in-flight sessions to end — `--containers-rollout=none` is for a Worker-only
-> change, not for skipping a container build you also made.
-
-There is no staged rollout to schedule around it. The workspace puts the image in
-what a running container is matched against, so a deploy with a new image replaces
-each container when its workspace next connects — the containers block in
-[`wrangler.jsonc`](wrangler.jsonc) points at why.
+> **The image and the Worker are one release.** The sandbox image's daemon is
+> bundled from this repository's own `node_modules` before every deploy
+> (`scripts/build-daemon.mjs`), so the object and the daemon it drives speak one
+> `agents` version. A running container keeps the image it started with, and a deploy
+> does not interrupt it: a sandbox takes a new image at its next start, and brings its
+> checkouts back from R2 when the new image dropped the snapshot.
 
 > **Deleting a container application does not rebuild it.** In the dashboard it
 > reads like turning something off and on again, and it is not: the application
 > is created by `wrangler deploy`, and the Durable Object can only start
-> instances of one that already exists. Delete it and every workspace fails —
+> instances of one that already exists. Delete it and every sandbox fails —
 > `There is no container application assigned to this Durable Object namespace`
 > — until the next deploy, which turns a bounded problem into an open-ended one.
-> To replace every container, deploy. To replace one workspace's, let it go idle.
-> The one deliberate delete is moving an application to another scheduling policy,
-> which `@dynamicagents/plugins/workspace` describes.
+> To replace one sandbox's container, let it go idle.
 
-#### The checkout outlives the container, and the container outlives the task
+#### The checkout is the container's disk, and it outlives the task
 
-The **workspace** is a Durable Object, one per caller per repository, and the
-checkout lives in its SQLite. `@cloudflare/computer` mounts that filesystem into
-the container over FUSE at `/workspace`, so commands run against the same tree the
-Worker reads over RPC — and the tree survives the container being replaced.
+The **sandbox** is a Durable Object, one per caller per repository, driving one
+container through `agents`' `ContainerHarness`, and the checkout is that container's own
+disk — `node_modules` beside it. The object keeps the durable record: each session, its
+transcript, the CLI's own files to resume it from. Nothing the container does passes
+through the object, so a reset of the object leaves the container running.
 
-`node_modules` does not. It is a bind mount of the container's own disk, so an
-install runs at disk speed and never crosses the wire. A finished install is
-snapshotted with the container, and a new container starts from that snapshot when
-it fits the checkout; otherwise it reinstalls, which the workspace arms as soon as a
-container comes up or a command is about to start one — see
-`src/workspace/install-plan.ts`. A writing session's worktree starts from the
-parent's snapshot, at the same path.
-
-**There is deliberately no R2 bucket** — the checkout is already durable.
-[`wrangler.jsonc`](wrangler.jsonc) records why the snapshot approach it replaces
-could not work.
+A container nobody uses is backed up to R2 and stopped five minutes after its last use,
+and its next start is a snapshot of its disk: the checkout, the dependencies, and any
+commit nobody pushed. A start on a new image, which drops that snapshot, restores each
+checkout from its backup. An install runs once per checkout and again only when what it
+depends on changed — see `src/workspace/install-plan.ts`. A writing session's worktree
+starts from the parent's checkpoint, its checkout and dependencies at the same path.
 
 Two consequences worth knowing before you debug something surprising:
 
@@ -366,11 +358,11 @@ Two consequences worth knowing before you debug something surprising:
   checkout keeps its changes. Whether to continue, commit or discard is the
   agent's call, on the next task.
 
-A sub-agent reaches its workspace through its spec's `prepare`, which runs on the
+A sub-agent reaches its sandbox through its spec's `prepare`, which runs on the
 **parent**, where the caller and the repository are known, and hands the
-workspace name to the sub-agent as `runtime()`. It is deliberately not the
+sandbox name to the sub-agent as `runtime()`. It is deliberately not the
 sub-agent's input: the parent's model writes that, and a model could then name
-somebody else's workspace. A `claude-coordinator` writing session gets a worktree of its
+somebody else's sandbox. A `claude-coordinator` writing session gets a worktree of its
 own that way, and its `settle` records and frees it when the run ends.
 
 ---
@@ -392,7 +384,7 @@ them. An agent whose files live in a container says so itself, next to its plugi
 
 ```ts
 // src/agents/coding/agent.ts
-override workspace = computerWorkspace(this.#container);
+override workspace = sandboxWorkspace(this.#place);
 ```
 
 Nothing in core imports a plugin, and `@dynamicagents/plugins` has no root barrel — the bare
@@ -570,11 +562,12 @@ src/
   config.ts             ← model ids and compaction (values; core ships no numbers)
   copy.ts               ← user-facing copy + guidance every soul shares (core ships none)
   model.ts              ← the one model each class runs (Workers AI or a catalog slug), tagged for AI Gateway
-  workspace/            ← the container-backed workspace both coders share
+  sandbox-daemon.ts     ← the sandbox image's entrypoint, bundled for Node before every deploy
+  workspace/            ← where both coders' sandboxes are, and how their tools reach them
   agents/
     generic/           ← agent, children (the `general` sub-agent), definition, plugins, soul, manifest
-    coding/           ← the same set, plus the `code` spec and the workspace object
-    claude-coordinator/       ← the same set, plus the Claude Code sessions' report and the workspace object
+    coding/           ← the same set, plus the `code` spec, the sandbox and its egress
+    claude-coordinator/       ← the same set, plus the Claude Code sessions' report, the sandbox and its egress
 test/
 scripts/
 ```

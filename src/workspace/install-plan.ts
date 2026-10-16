@@ -1,7 +1,7 @@
 import {
   DEFAULT_INSTALL_PLAN,
   type InstallPlan
-} from "@dynamicagents/plugins/workspace";
+} from "@dynamicagents/plugins/sandbox";
 
 /**
  * How **this deployment** installs dependencies — the one file to edit when a

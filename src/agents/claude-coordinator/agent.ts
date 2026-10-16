@@ -8,8 +8,8 @@ import type { AgentPlugin } from "@dynamicagents/core";
 import { StepAgent } from "@dynamicagents/core/agent";
 import type { SubAgentClass } from "@dynamicagents/core/subagent";
 import type { StepJob } from "@dynamicagents/core/workflow";
-import { computerWorkspace } from "@dynamicagents/plugins/computer";
-import { workspaceName } from "@dynamicagents/plugins/workspace";
+import { sandboxWorkspace } from "@dynamicagents/plugins/computer";
+import { sandboxName } from "@dynamicagents/plugins/sandbox";
 import type { AgentToolLifecycleResult, AgentToolRunInfo } from "agents";
 import type { ContextConfig } from "agents/context";
 import type { LanguageModel, ToolSet } from "ai";
@@ -35,7 +35,7 @@ import {
   keptNote
 } from "./children";
 import { claudeCoordinator } from "./definition";
-import { container, parentPlugins, sessionWorkspaces } from "./plugins";
+import { parentPlugins, place, sessionWorkspaces } from "./plugins";
 import { ownsPlan } from "./plans";
 import { MEMORY, RETRY_WORK, SOUL } from "./soul";
 
@@ -52,7 +52,7 @@ const LABEL = "claude-coordinator";
  * checks, the push, the pull request and the answer to its review — is a
  * session's. `./soul.ts` draws that split and `./plugins.ts` is where the
  * parent's tools stop. What is different is one level down: each sub-agent is
- * a Claude Code session inside a workspace container. See `./children.ts`.
+ * a Claude Code session inside a sandbox's container. See `./children.ts`.
  *
  * That exists because a Claude **subscription** credential 429s at zero tokens
  * against the raw Messages API on every frontier model, and the same credential
@@ -70,12 +70,12 @@ export class ClaudeCoordinatorAgent extends StepAgent<Env> {
    * and the plugins and the workspace below must agree on it.
    */
   readonly #active = activeRepo(this.ctx.storage);
-  readonly #container = container(this.env, () =>
-    workspaceName(this.callerKey(), this.#active.get())
+  readonly #place = place(this.env, () =>
+    sandboxName(this.callerKey(), this.#active.get())
   );
 
   /** Think's file tools, over the checkout rather than this object's SQLite. */
-  override workspace = computerWorkspace(this.#container);
+  override workspace = sandboxWorkspace(this.#place);
   /**
    * Off, because the parent has no shell: Think's own `bash` would run over the
    * same workspace and could write anything the file tools are kept from.
@@ -116,7 +116,7 @@ export class ClaudeCoordinatorAgent extends StepAgent<Env> {
       this.env,
       { storage: this.ctx.storage, callerKey: () => this.callerKey() },
       this.#active,
-      this.#container
+      this.#place
     );
   }
 
@@ -185,14 +185,14 @@ export class ClaudeCoordinatorAgent extends StepAgent<Env> {
   }
 
   /**
-   * The workspace reclaim sweep — an hour after `coding`'s, which is an hour
+   * The sandbox reclaim sweep — an hour after `coding`'s, which is an hour
    * after core's, so no two sweeps contend for the same instance — and then the
    * pool reconciled against what is actually still there.
    *
    * The second half is not a tidy-up of the first. `onReclaimed` fires only for
-   * a workspace *this sweep* retired, and a worktree's own idle alarm beats the
-   * weekly sweep to almost all of them; `reconcileWorktrees` carries what that
-   * leaves behind and why it matters.
+   * a sandbox *this sweep* retired, and a slot can lose its sandbox some other
+   * way; `reconcileWorktrees` carries what that leaves behind and why it
+   * matters.
    */
   override getScheduledTasks(): ThinkScheduledTasks {
     return {
@@ -206,7 +206,7 @@ export class ClaudeCoordinatorAgent extends StepAgent<Env> {
 
   async #reclaim(): Promise<void> {
     const pool = sqlPoolStore(this.ctx.storage);
-    const binding = this.env.CLAUDE_COORDINATOR_WORKSPACE;
+    const binding = this.env.CLAUDE_COORDINATOR_SANDBOX;
     const key = this.callerKey();
     await sweepIdleWorkspaces({
       storage: this.ctx.storage,
@@ -218,11 +218,11 @@ export class ClaudeCoordinatorAgent extends StepAgent<Env> {
       onReclaimed: (repo) => forgetWorktree(pool, repo)
     });
     await reconcileWorktrees(pool, async (sentinel) => {
-      const name = workspaceName(key, sentinel);
+      const name = sandboxName(key, sentinel);
       try {
-        return Boolean(
-          await binding.get(binding.idFromName(name)).checkoutDir()
-        );
+        // Starts no container and marks no use, so asking does not keep alive
+        // what it is checking on.
+        return Boolean(await binding.getByName(name).checkoutDir());
       } catch (err) {
         // Unreadable is not gone: a row is emptied on an answer, never on a
         // failure to get one, so an unreachable object keeps its slot.
@@ -251,8 +251,7 @@ export class ClaudeCoordinatorAgent extends StepAgent<Env> {
    *
    * **Released, not reclaimed**, and the difference is the point: the checkout
    * and the dependency tree stay, so the next task on this repository skips a
-   * clone and a full install. The idle deadline cannot be tuned down to meet the
-   * cost instead: it has to exceed a session's whole forty minutes.
+   * clone and a full install.
    *
    * **Reads left in a worktree stay there**: a person's follow-up is usually
    * about the same work, and moving them here would leave the model's last
@@ -277,20 +276,22 @@ export class ClaudeCoordinatorAgent extends StepAgent<Env> {
 
     const repo = this.#active.get();
     const worktree = repo === undefined ? undefined : parseWorktreeRepo(repo);
-    const binding = this.env.CLAUDE_COORDINATOR_WORKSPACE;
+    const binding = this.env.CLAUDE_COORDINATOR_SANDBOX;
     const key = this.callerKey();
     const names = new Set([
-      workspaceName(key, repo),
-      ...(worktree ? [workspaceName(key, worktree.repo)] : []),
+      sandboxName(key, repo),
+      ...(worktree ? [sandboxName(key, worktree.repo)] : []),
       ...idleWorktrees(sqlPoolStore(this.ctx.storage)).map((sentinel) =>
-        workspaceName(key, sentinel)
+        sandboxName(key, sentinel)
       )
     ]);
     for (const name of names) {
       try {
-        await binding.get(binding.idFromName(name)).releaseContainer();
+        // Backed up and stopped, never emptied: refused while anything still
+        // works in it, which the idle stop then catches.
+        await binding.getByName(name).release();
       } catch (err) {
-        console.warn(`[${LABEL}] could not release the workspace container`, {
+        console.warn(`[${LABEL}] could not release a sandbox's container`, {
           name,
           err: String(err)
         });

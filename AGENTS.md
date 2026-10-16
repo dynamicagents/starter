@@ -23,8 +23,8 @@ If you find yourself writing durable-execution logic in this repo, that is the
 signal it belongs in core instead. If you find yourself writing the Durable
 Object a capability lives in — a container, its alarm, its install — that is the
 signal it belongs in plugins. `src/workspace/` holds only config, addresses and
-adapters for the workspace this Worker deploys; the object itself is
-`@dynamicagents/plugins/workspace`.
+adapters for the sandboxes this Worker deploys; the object itself is
+`@dynamicagents/plugins/sandbox`.
 
 ---
 
@@ -59,13 +59,14 @@ Deleting one never edits a deployed migration tag: its Durable Object class goes
 specialty is named for its purpose instead: `generic`. Every tenant's classes then take
 one shape, each in the file named for it:
 
-| class               | file           |
-| ------------------- | -------------- |
-| `<Tenant>Host`      | `host.ts`      |
-| `<Tenant>Workflow`  | `workflow.ts`  |
-| `<Tenant>Agent`     | `agent.ts`     |
-| `<Tenant>Child`     | `children.ts`  |
-| `<Tenant>Workspace` | `workspace.ts` |
+| class              | file          |
+| ------------------ | ------------- |
+| `<Tenant>Host`     | `host.ts`     |
+| `<Tenant>Workflow` | `workflow.ts` |
+| `<Tenant>Agent`    | `agent.ts`    |
+| `<Tenant>Child`    | `children.ts` |
+| `<Tenant>Sandbox`  | `sandbox.ts`  |
+| `<Tenant>Egress`   | `egress.ts`   |
 
 An agent with more than one child names each by what it does: `ClaudeCoordinatorWriterChild`,
 `ClaudeCoordinatorPlannerChild`.

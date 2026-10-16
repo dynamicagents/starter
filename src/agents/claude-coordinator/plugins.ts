@@ -4,11 +4,9 @@ import {
   type PluginContext
 } from "@dynamicagents/core";
 import {
-  claudeCodeSession,
-  type SessionRuntime
-} from "@dynamicagents/plugins/claude-code";
-import { computer, type ComputerConfig } from "@dynamicagents/plugins/computer";
-import { openWorkspace, workspaceExec } from "@dynamicagents/plugins/workspace";
+  sandboxComputer,
+  type SandboxComputerConfig
+} from "@dynamicagents/plugins/computer";
 import { repo } from "@dynamicagents/plugins/repo-github";
 import { browser } from "@dynamicagents/plugins/browser";
 import { activeRepo, type ActiveRepo } from "@/workspace/active-repo";
@@ -22,12 +20,12 @@ import { sqlPoolStore } from "@/workspace/worktree-pool";
 import { worktreeSwitch } from "@/workspace/worktrees";
 import {
   parentWorkspaceContext,
-  workspaceContainer
+  SANDBOX_TOOLS,
+  sandboxShell
 } from "@/workspace/container";
-import { workspaceGit } from "@/workspace/git";
+import { sandboxGit } from "@/workspace/git";
 import { gitIdentity } from "@/workspace/git-identity";
 import { hostScratch } from "@/workspace/scratch";
-import { claudeCodeConfig } from "./claude-code";
 import { claudeCoordinator } from "./definition";
 
 /**
@@ -45,27 +43,28 @@ import { claudeCoordinator } from "./definition";
  */
 
 /**
- * This agent's container settings — the shared ones, pointed at its namespace.
- * See the outage comment on `@/workspace/container.ts`.
+ * Where this agent's tools reach: the sandbox `sandboxName` names, in this
+ * agent's namespace. The tools' own settings are shared — see the outage
+ * comment on `SANDBOX_TOOLS` in `@/workspace/container.ts`.
  */
-export function container(env: Env, name: () => string): ComputerConfig {
-  return workspaceContainer(env.CLAUDE_COORDINATOR_WORKSPACE, name);
+export function place(
+  env: Env,
+  sandboxName: () => string
+): SandboxComputerConfig {
+  return { binding: env.CLAUDE_COORDINATOR_SANDBOX, sandboxName };
 }
 
-/** Stop a run's session in a workspace: both execs. */
+/**
+ * Stop a run's session in a sandbox. Returns once its CLI has left and its
+ * last files are synced — `stopRun` in `@dynamicagents/plugins/sandbox` — so
+ * what keeps its work commits nothing it is still writing.
+ */
 export async function stopSession(
   env: Env,
-  workspace: string,
+  sandbox: string,
   runId: string
 ): Promise<void> {
-  const binding = env.CLAUDE_COORDINATOR_WORKSPACE;
-  using opened = await openWorkspace(
-    binding.get(binding.idFromName(workspace))
-  );
-  await claudeCodeSession(claudeCodeConfig(env)).stop(
-    opened.runtime as SessionRuntime,
-    runId
-  );
+  await env.CLAUDE_COORDINATOR_SANDBOX.getByName(sandbox).stopRun(runId);
 }
 
 /** What to say when the deployment has no Anthropic credential to try. */
@@ -81,12 +80,12 @@ const NO_CREDENTIAL =
  * session ends on the egress gateway's `429` naming the earliest reset. Only a
  * deployment with no credential is refused here, before anything is dispatched.
  *
- * Asked of the workspace the session runs in, because each keeps its own pool:
- * see `./workspace.ts`.
+ * Asked of the sandbox the session runs in, because each keeps its own pool:
+ * see `./sandbox.ts`.
  */
-export async function admitSession(env: Env, workspace: string): Promise<void> {
-  const binding = env.CLAUDE_COORDINATOR_WORKSPACE;
-  const lead = await binding.get(binding.idFromName(workspace)).claudeAdmit();
+export async function admitSession(env: Env, sandbox: string): Promise<void> {
+  const lead =
+    await env.CLAUDE_COORDINATOR_SANDBOX.getByName(sandbox).claudeAdmit();
   if (!lead.ok) throw new Error(NO_CREDENTIAL);
 }
 
@@ -100,16 +99,17 @@ export async function admitSession(env: Env, workspace: string): Promise<void> {
 export function sessionWorkspaces(ctx: PluginContext<Env>): SubtaskWorkspaces {
   const env = ctx.env;
   return subtaskWorkspaces({
-    binding: env.CLAUDE_COORDINATOR_WORKSPACE,
+    binding: env.CLAUDE_COORDINATOR_SANDBOX,
     callerKey: () => ctx.callerKey(),
-    // The same settings the parent's own tools run under — `shell: "bash"`
-    // above all — pointed at whichever worktree is being prepared. A partial
-    // copy of this config has already cost an outage; see
-    // `@/workspace/container.ts`.
-    exec: (command, options, workspace) =>
-      workspaceExec(container(env, () => workspace))(command, options),
-    stopSession: (workspace, runId) => stopSession(env, workspace, runId),
-    admit: (workspace) => admitSession(env, workspace),
+    // The same shell the parent's own commands run in, pointed at whichever
+    // worktree is being prepared.
+    exec: (command, options, sandbox) =>
+      sandboxShell(env.CLAUDE_COORDINATOR_SANDBOX, () => sandbox)(
+        command,
+        options
+      ),
+    stopSession: (sandbox, runId) => stopSession(env, sandbox, runId),
+    admit: (sandbox) => admitSession(env, sandbox),
     active: activeRepo(ctx.storage),
     pool: sqlPoolStore(ctx.storage),
     // The tenant id is where this name lives; `./agent.ts` spells its own log
@@ -129,9 +129,9 @@ export const parentPlugins = (
   env: Env,
   ctx: { storage: DurableObjectStorage; callerKey: () => string },
   active: ActiveRepo,
-  config: ComputerConfig
+  at: SandboxComputerConfig
 ): AgentPlugin<Env>[] => {
-  const binding = env.CLAUDE_COORDINATOR_WORKSPACE;
+  const binding = env.CLAUDE_COORDINATOR_SANDBOX;
   /** The writing sessions' worktrees — see `@/workspace/worktrees`. */
   const worktrees = worktreeSwitch({
     active,
@@ -139,9 +139,9 @@ export const parentPlugins = (
     binding,
     callerKey: ctx.callerKey
   });
-  const workspace = () =>
-    binding.get(binding.idFromName(config.workspaceName()));
-  /** Shared with the workspace object — see `@/workspace/git-identity`. */
+  const sandbox = () => binding.getByName(at.sandboxName());
+  const shell = sandboxShell(binding, at.sandboxName);
+  /** Shared with every command the sandbox runs — see `@/workspace/git-identity`. */
   const author = gitIdentity(env);
 
   return [
@@ -149,13 +149,12 @@ export const parentPlugins = (
       // Composed rather than imported: the repo plugin needs a shell, not a
       // container, so it takes one instead of depending on the computer module.
       // This is also what lets the parent keep git while having no shell of its
-      // own — `workspaceExec` is a function, not a tool.
-      exec: workspaceExec(config),
-      // The other half of the same seam, and the reason `exec` above is safe to
-      // hand a model with a shell: clone, fetch and push do not go through it.
-      // They go to the workspace object, which reads `GITHUB_TOKEN` from its own
-      // environment — so the container never holds the credential at all.
-      git: workspaceGit({ binding, workspaceName: config.workspaceName }),
+      // own — a shell here is a function, not a tool.
+      exec: shell,
+      // Clone, fetch and push: the container's git, with a placeholder the
+      // egress swaps for `GITHUB_TOKEN` on the Worker side, so the container
+      // never holds the credential — see `@/workspace/git.ts`.
+      git: sandboxGit({ binding, sandboxName: at.sandboxName }),
       // For the GitHub reads the coordinator watches a pull request with.
       token: () => env.GITHUB_TOKEN,
       author,
@@ -174,7 +173,7 @@ export const parentPlugins = (
       beforeCheckout: ({ owner, repo: repoName }) =>
         active.set(`${owner}/${repoName}`),
       afterCheckout: async ({ dir, repo: repoName, url, branch }) => {
-        const ws = workspace();
+        const ws = sandbox();
         // Recorded so a writing session can clone the same thing into a
         // container of its own. The url has already been through this plugin's
         // host allowlist, which is why it is the one worth keeping. With the
@@ -192,16 +191,16 @@ export const parentPlugins = (
         );
         // Before the install, and never inside it: an install is conditional
         // where a checkout is not, so no install outcome may decide whether the
-        // path is recorded. The reasoning is on `noteCheckout` in the
-        // workspace object, in `@dynamicagents/plugins/workspace`.
+        // path is recorded — and a recorded checkout is what the sandbox backs
+        // up and brings back.
         await ws.noteCheckout({
           dir,
           kind: "repo",
           ...(repoName ? { repo: repoName } : {})
         });
-        // Returns as soon as the command is spawned — the workspace object
-        // drains it. Blocking here would put a 225-second install inside a model
-        // turn, which is the failure this whole arrangement avoids.
+        // Returns as soon as the command is spawned — the sandbox drains it.
+        // Blocking here would put a 225-second install inside a model turn,
+        // which is the failure this whole arrangement avoids.
         await ws.startInstall({
           dir,
           ...(repoName ? { repo: repoName } : {})
@@ -220,8 +219,8 @@ export const parentPlugins = (
      * identity and its workspace thunk, so there is one answer to each of those
      * rather than a second one drifting alongside.
      */
-    hostScratch({ exec: workspaceExec(config), workspace, active, author }),
-    restrictTools(computer(config), {
+    hostScratch({ exec: shell, workspace: sandbox, active, author }),
+    restrictTools(sandboxComputer(SANDBOX_TOOLS), {
       allow: ["grep"],
       context: [
         {

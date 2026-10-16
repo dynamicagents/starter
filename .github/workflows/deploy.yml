@@ -59,8 +59,9 @@ jobs:
       group: deploy
       cancel-in-progress: false
     # Test installs and builds the images in about a minute; a real deploy adds
-    # pushing them.
-    timeout-minutes: 15
+    # pushing them, and an image's first push was measured at 640 s — every
+    # layer is new — so a deploy that changes several images needs room.
+    timeout-minutes: 30
     runs-on: ubuntu-24.04
     environment:
       name: deployment

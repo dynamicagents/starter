@@ -6,37 +6,33 @@ import { gitIdentity } from "@/workspace/git-identity";
 export const CREDENTIALS_KEY = "claude-credentials";
 
 /**
- * One `ClaudeCodeConfig`, built the same way by everything that needs it.
- *
- * Two places hold this config and they must hold the *same* one: the workspace
- * Durable Object, which turns it into the egress gateway, and each Claude Code
- * sub-agent, which drives the session. A partial copy of a config like this has
- * already cost an outage — see `@/workspace/container.ts`.
- *
- * ## The credentials never enter the container, and barely leave this file
- *
- * `credentials` and `githubToken` are read by **`.egress()`**, which runs inside the workspace
- * object. A sub-agent holds this same config and reads the thunk only to check
- * one is configured at all — it needs the model name and the timeouts, none of
- * which is secret. The container is launched with placeholders and the swap
- * happens on the Worker side of the boundary.
- *
- * ## The pool
+ * The credential pool, read by the sandbox the egress leases it from
+ * (`./sandbox.ts`), on the Worker side: the container is started with
+ * placeholders, so no credential ever reaches it.
  *
  * Order is priority: entry 0 is used until Anthropic says its bucket is spent,
- * then the egress gateway advances. `.filter(Boolean)` is what lets a deployment set
+ * then the egress advances. `.filter(Boolean)` is what lets a deployment set
  * only `_1` — an unset secret is an empty string, and an empty entry is skipped
  * rather than sent as a bare `Bearer `. A pool of one is a perfectly ordinary
  * deployment; it simply gives up when its bucket empties instead of rotating.
  */
+export function claudeCredentials(env: Env): string[] {
+  return [
+    env.CLAUDE_CODE_OAUTH_TOKEN_1,
+    env.CLAUDE_CODE_OAUTH_TOKEN_2,
+    env.CLAUDE_CODE_OAUTH_TOKEN_3
+  ].filter(Boolean);
+}
+
+/**
+ * The config `ClaudeCoordinatorWorkspace` turns into its egress gateway, in
+ * `./workspace.ts` — the class kept bound until its storage is deleted. The
+ * sessions themselves run in sandboxes, which take the pool from
+ * {@link claudeCredentials} and everything else from `CLAUDE_CODE_SESSION`.
+ */
 export function claudeCodeConfig(env: Env): ClaudeCodeConfig {
   return {
-    credentials: () =>
-      [
-        env.CLAUDE_CODE_OAUTH_TOKEN_1,
-        env.CLAUDE_CODE_OAUTH_TOKEN_2,
-        env.CLAUDE_CODE_OAUTH_TOKEN_3
-      ].filter(Boolean),
+    credentials: () => claudeCredentials(env),
     ...CLAUDE_CODE_SESSION,
     /**
      * GitHub as the deployment's account: the session pushes its branch, opens

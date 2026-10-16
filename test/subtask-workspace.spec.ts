@@ -108,10 +108,12 @@ function harness(opts: {
   /** Throw from stopping the session. */
   stopThrows?: boolean;
   /**
-   * The parent has a dependency snapshot, and whether a worktree takes it — per
-   * offer, in order, the last answer repeating.
+   * The parent has a checkpoint, and whether a worktree takes it — per offer,
+   * in order.
    */
   snapshot?: { seeded: boolean[] };
+  /** A checkpoint the worktree took that holds no checkout at its path. */
+  seedLacksCheckout?: boolean;
   /** Refuse to release a container, as one with an install running does. */
   releaseRefused?: boolean;
   /** Each repository's own checkout, and what it carries. */
@@ -131,32 +133,43 @@ function harness(opts: {
   const events: string[] = [];
   let current = "";
   const stub = {
-    releaseContainer: async () => {
+    release: async () => {
       released.push(current);
       events.push(`release ${current}`);
       return { released: !opts.releaseRefused };
     },
-    depsSnapshot: async () =>
-      opts.snapshot ? { id: "snap-1", from: current } : undefined,
-    seedDepsSnapshot: async (record: { from: string }) => {
+    snapshotRecord: async () =>
+      opts.snapshot
+        ? { key: "image:test", snapshot: { id: "snap-1" }, from: current }
+        : undefined,
+    seedFrom: async (record: { from?: string }) => {
       events.push(`seed ${current} from ${record.from}`);
       const answers = opts.snapshot?.seeded ?? [];
       return { seeded: answers.shift() ?? false };
     },
     checkoutDir: async () => dirs[current],
     advisories: async () => [],
-    gitClone: async (req: { dir: string; branch?: string }) => {
-      calls.push(`clone ${req.dir}@${req.branch ?? ""}`);
-      if (cloneFails && req.dir.endsWith(cloneFails.dir)) {
-        return { ok: false as const, message: cloneFails.message };
+    /** The container's git, as `sandboxRepoGit` runs it. */
+    exec: async (argv: string[], options: { cwd?: string } = {}) => {
+      const git = argv.slice(argv.indexOf("git") + 1);
+      const ok = { exitCode: 0, stdout: "", stderr: "" };
+      if (git[0] === "clone") {
+        const [, dir = ""] = git.slice(git.indexOf("--") + 1);
+        const at = git.indexOf("--branch");
+        calls.push(`clone ${dir}@${at >= 0 ? git[at + 1] : ""}`);
+        if (cloneFails && dir.endsWith(cloneFails.dir)) {
+          return { exitCode: 128, stdout: "", stderr: cloneFails.message };
+        }
+        if (dir === (opts.checkout ?? CHECKOUT).dir) dirs[current] = dir;
+        return ok;
       }
-      if (req.dir === (opts.checkout ?? CHECKOUT).dir) dirs[current] = req.dir;
-      return { ok: true as const, detail: "cloned" };
-    },
-    gitFetch: async (req: { dir: string }) => {
-      calls.push(`fetch ${req.dir}`);
-      events.push(`fetch ${current}`);
-      return { ok: true as const, detail: "fetched" };
+      if (git[0] === "fetch") {
+        calls.push(`fetch ${options.cwd}`);
+        events.push(`fetch ${current}`);
+        return ok;
+      }
+      if (git[0] === "symbolic-ref") return { ...ok, stdout: "main\n" };
+      return ok;
     },
     noteCheckout: async () => {
       calls.push("noteCheckout");
@@ -165,12 +178,11 @@ function harness(opts: {
     startInstall: async () => {
       calls.push("startInstall");
       events.push(`install ${current}`);
-      return {};
+      return { state: "running" };
     }
   };
   const binding = {
-    idFromName: (name: string) => name,
-    get: (name: string) => {
+    getByName: (name: string) => {
       current = name;
       return stub;
     }
@@ -186,6 +198,9 @@ function harness(opts: {
       // the point: cleared before a clone, never after one.
       if (command.includes('rm -rf "$CHECKOUT_DIR"')) {
         calls.push(`clear ${env.CHECKOUT_DIR}`);
+      }
+      if (command.includes('test -d "$CHECKOUT_DIR/.git"')) {
+        return { success: !opts.seedLacksCheckout, stdout: "", stderr: "" };
       }
       if (command.includes(".gitmodules")) {
         // No match exits 1 with nothing said, which is how git reports a
@@ -287,8 +302,8 @@ const SLOT0 = `caller|${worktreeRepo("acme/api", 0)}`;
 const SLOT1 = `caller|${worktreeRepo("acme/api", 1)}`;
 
 describe("preparing a worktree for a writing session", () => {
-  it("starts from the parent's dependency snapshot when the worktree takes it", async () => {
-    const { subtasks, events } = harness({
+  it("starts a fresh worktree from the parent's checkpoint, cloning nothing", async () => {
+    const { subtasks, events, calls } = harness({
       selected: "acme/api",
       checkout: CHECKOUT,
       snapshot: { seeded: [true] }
@@ -296,55 +311,48 @@ describe("preparing a worktree for a writing session", () => {
 
     await subtasks.resolve(ctx);
 
-    // Offered once the checkout is there to check it against, and released
-    // before the install, whose start is the cold one a snapshot restores into.
+    // Seeded before anything starts the container, whose start reads it.
     expect(events).toEqual([
-      `fetch ${SLOT0}`,
       `seed ${SLOT0} from caller|acme/api`,
-      `release ${SLOT0}`,
+      `fetch ${SLOT0}`,
       `install ${SLOT0}`
     ]);
+    expect(calls.filter((call) => /^(clear|clone) /.test(call))).toEqual([]);
+    expect(calls).toContain("noteCheckout");
   });
 
-  it("offers a reused worktree the snapshot before its fetch starts the container", async () => {
+  it("never seeds a worktree that holds its own checkout", async () => {
     const { subtasks, events } = harness({
       selected: "acme/api",
       checkout: CHECKOUT,
       dirs: { [SLOT0]: CHECKOUT.dir },
-      // Taken before the fetch; the later offer finds its own snapshot fits.
-      snapshot: { seeded: [true, false] }
+      snapshot: { seeded: [true] }
     });
 
     await subtasks.resolve(ctx);
 
-    expect(events).toEqual([
-      `seed ${SLOT0} from caller|acme/api`,
-      `fetch ${SLOT0}`,
-      `seed ${SLOT0} from caller|acme/api`,
-      `install ${SLOT0}`
-    ]);
+    expect(events).toEqual([`fetch ${SLOT0}`, `install ${SLOT0}`]);
   });
 
-  it("installs in the container it has when the release is refused", async () => {
-    const { subtasks, events } = harness({
+  it("clones when the parent's checkpoint holds no checkout at its path", async () => {
+    const { subtasks, events, calls } = harness({
       selected: "acme/api",
       checkout: CHECKOUT,
       snapshot: { seeded: [true] },
-      releaseRefused: true
+      seedLacksCheckout: true
     });
 
     await subtasks.resolve(ctx);
 
-    expect(events).toEqual([
-      `fetch ${SLOT0}`,
-      `seed ${SLOT0} from caller|acme/api`,
-      `release ${SLOT0}`,
-      `install ${SLOT0}`
+    expect(events[0]).toBe(`seed ${SLOT0} from caller|acme/api`);
+    expect(calls.slice(0, 2)).toEqual([
+      `clear ${CHECKOUT.dir}`,
+      `clone ${CHECKOUT.dir}@main`
     ]);
   });
 
-  it("keeps the container it started when the worktree does not take it", async () => {
-    const { subtasks, events } = harness({
+  it("clones when the worktree does not take the checkpoint", async () => {
+    const { subtasks, events, calls } = harness({
       selected: "acme/api",
       checkout: CHECKOUT,
       snapshot: { seeded: [false] }
@@ -353,10 +361,11 @@ describe("preparing a worktree for a writing session", () => {
     await subtasks.resolve(ctx);
 
     expect(events).toEqual([
-      `fetch ${SLOT0}`,
       `seed ${SLOT0} from caller|acme/api`,
+      `fetch ${SLOT0}`,
       `install ${SLOT0}`
     ]);
+    expect(calls).toContain(`clone ${CHECKOUT.dir}@main`);
   });
 
   it("clones, fetches, puts it on the branch and installs", async () => {
@@ -410,7 +419,7 @@ describe("preparing a worktree for a writing session", () => {
   });
 
   it("asks the worktree it claimed before cloning into it", async () => {
-    const { subtasks, calls, admitted } = harness({
+    const { subtasks, calls, admitted, active } = harness({
       selected: "acme/api",
       checkout: CHECKOUT,
       refuse: true
@@ -419,6 +428,8 @@ describe("preparing a worktree for a writing session", () => {
     await expect(subtasks.resolve(ctx)).rejects.toThrow(/no credential/);
     expect(admitted).toEqual([SLOT0]);
     expect(calls).toEqual([]);
+    // Enrolled for the sweep all the same: the sweep is a sandbox's only reclaim.
+    expect(active.noted).toEqual([worktreeRepo("acme/api", 0)]);
   });
 
   /** A repeated `prepare` for one run must not redo anything. */
@@ -458,6 +469,8 @@ describe("preparing a worktree for a writing session", () => {
       /could not clone the submodule at core: network/
     );
     expect(first.pool.rows()[0]?.ready).toBe(false);
+    // The superproject is on disk, so the worktree is swept even if never retried.
+    expect(first.active.noted).toEqual([worktreeRepo("acme/api", 0)]);
 
     first.heal();
     first.calls.length = 0;

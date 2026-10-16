@@ -1,8 +1,8 @@
 import type { SubAgentSpec } from "@dynamicagents/core";
 import {
-  WORKSPACE_RUNTIME_KEY,
-  workspaceName
-} from "@dynamicagents/plugins/workspace";
+  SANDBOX_RUNTIME_KEY,
+  sandboxName
+} from "@dynamicagents/plugins/sandbox";
 import { z } from "zod";
 import { activeRepo } from "@/workspace/active-repo";
 
@@ -30,7 +30,7 @@ import { activeRepo } from "@/workspace/active-repo";
 export const CODE_SOUL = [
   "You are a sub-agent working inside a shared workspace. You are given a single, self-contained engineering task with all necessary context supplied inline.",
   "The directory you are given already exists — a repository checkout, or a scratchpad for work that needs no repository. Do not clone or create it. Work in the directory your task names. It is durable and may hold work from an earlier task.",
-  "`node_modules` is not: it lives on the container's disk, so a new container reinstalls it, and the file tools cannot see inside it. Use `bash` to read or search there. It is a mount point, so `rm -rf node_modules` fails; `npm ci` clears it itself.",
+  "`node_modules` is on that disk beside it, and kept with it. The file tools leave it out: use `bash` to read or search there.",
 
   // The verification rule, held between two failures that pull opposite ways.
   //
@@ -100,7 +100,7 @@ export const CODE: SubAgentSpec<{ task: string }> = {
    * Hand the run the container its parent is working in.
    *
    * On the parent, where the caller and the active repository are known, and
-   * never in the run's input: the parent's model writes that, and a workspace
+   * never in the run's input: the parent's model writes that, and a sandbox
    * name there would let it name another caller's container.
    *
    * There is deliberately **no `settle`**. Every run shares one container with
@@ -109,7 +109,7 @@ export const CODE: SubAgentSpec<{ task: string }> = {
    * there, for the parent to judge.
    */
   prepare: async ({ parent }) => ({
-    [WORKSPACE_RUNTIME_KEY]: workspaceName(
+    [SANDBOX_RUNTIME_KEY]: sandboxName(
       parent.callerKey(),
       activeRepo(parent.storage).get()
     )

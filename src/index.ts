@@ -22,7 +22,25 @@ export { CodingWorkflow } from "./agents/coding/workflow";
 export { CodingAgent } from "./agents/coding/agent";
 export { CodingChild } from "./agents/coding/children";
 
-// The workspaces: a Durable Object holding one repository's filesystem in
+// The sandboxes: a Durable Object driving one container whose disk is the
+// checkout, through `@dynamicagents/plugins/sandbox`. One class per agent that
+// has one — a namespace is keyed by class name, so a shared class would put
+// both agents' checkouts in one namespace.
+export { CodingSandbox } from "./agents/coding/sandbox";
+export { ClaudeCoordinatorSandbox } from "./agents/claude-coordinator/sandbox";
+
+// Where each class's container egress is intercepted to, on `ctx.exports`: a
+// stateless entrypoint per class, reading the same rules its sandbox does.
+export { CodingEgress } from "./agents/coding/egress";
+export { ClaudeCoordinatorEgress } from "./agents/claude-coordinator/egress";
+
+// `@cloudflare/sandbox`'s, and not optional: a sandbox backs its checkouts up to
+// R2 through `ctx.exports.DirectoryBackupGateway`, so nothing names it and
+// every image change would lose unpushed work without it.
+export { DirectoryBackupGateway } from "@dynamicagents/plugins/sandbox";
+
+// The workspaces the sandboxes replaced, kept bound until their storage is
+// deleted: a Durable Object holding one repository's filesystem in
 // SQLite, paired with the container that mounts it. One class per agent that has
 // one — a namespace is keyed by class name, so a shared class would put both
 // agents' checkouts in one namespace. Both are thin subclasses of the base in

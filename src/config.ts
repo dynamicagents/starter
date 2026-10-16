@@ -4,7 +4,7 @@
 // checked with `as const satisfies`, which checks the shape while keeping the
 // literal types.
 import type { ClaudeCodeConfig } from "@dynamicagents/plugins/claude-code";
-import type { WorkspaceObjectConfig } from "@dynamicagents/plugins/workspace";
+import type { SandboxObjectConfig } from "@dynamicagents/plugins/sandbox";
 
 /**
  * Every value this Worker tunes, in one file.
@@ -118,10 +118,9 @@ export const CLAUDE_COORDINATOR: AgentTuning = {
 };
 
 /**
- * The size a `coding` workspace's container starts at — 2 vCPU, 6 GiB, 8 GB
- * disk — and the base of {@link CLAUDE_COORDINATOR_WORKSPACE_INSTANCE}. Asked for
- * on every start, so changing it replaces each running container when its
- * workspace next connects.
+ * The size a `coding` sandbox's container starts at — 2 vCPU, 6 GiB, 8 GB
+ * disk — and the base of {@link CLAUDE_COORDINATOR_SANDBOX_INSTANCE}. Asked for
+ * on every start, so a change reaches each sandbox at its next start.
  *
  * Deliberately not `lite`, the runtime's default: that is a size for trying
  * containers and cannot build a real project.
@@ -144,18 +143,18 @@ export const CLAUDE_COORDINATOR: AgentTuning = {
  * Verify that against `npm run cf -- containers` rather than trusting it.
  *
  * Memory is what to trim, because it bills for the whole run. Observed peaks
- * are ~5 GiB and ~4 GB of disk, so 6 GiB is thin headroom: a workspace killed
+ * are ~5 GiB and ~4 GB of disk, so 6 GiB is thin headroom: a sandbox killed
  * for memory means raise `memoryMib` first. More cores are not free either —
  * a custom size needs at least 3 GiB per vCPU.
  */
-export const WORKSPACE_INSTANCE: WorkspaceObjectConfig["instance"] = {
+export const SANDBOX_INSTANCE: SandboxObjectConfig["instance"] = {
   vcpu: 2,
   memoryMib: 6144,
   diskMb: 8000
 };
 
 /**
- * `claude-coordinator`'s size, which is {@link WORKSPACE_INSTANCE}'s. It keeps a
+ * `claude-coordinator`'s size, which is {@link SANDBOX_INSTANCE}'s. It keeps a
  * constant of its own because its workload differs, so this is where it diverges
  * if it has to.
  *
@@ -167,8 +166,18 @@ export const WORKSPACE_INSTANCE: WorkspaceObjectConfig["instance"] = {
  * 3 GiB-per-vCPU floor above, and the fan-out multiplies it — the containers
  * block in `wrangler.jsonc` carries that arithmetic.
  */
-export const CLAUDE_COORDINATOR_WORKSPACE_INSTANCE: WorkspaceObjectConfig["instance"] =
-  { ...WORKSPACE_INSTANCE };
+export const CLAUDE_COORDINATOR_SANDBOX_INSTANCE: SandboxObjectConfig["instance"] =
+  SANDBOX_INSTANCE;
+
+/** The CLI adapter the sandbox image's daemon serves (`src/sandbox-daemon.ts`), which each sandbox names. */
+export const SANDBOX_ADAPTER = "da-claude";
+
+/**
+ * How long a sandbox nobody uses is kept: then the weekly sweep empties it,
+ * its backups and any commits in it that were never pushed with it. The parent
+ * is told this number, so a worktree's work is pushed or let go knowingly.
+ */
+export const SANDBOX_RECLAIM_MS = 7 * 24 * 60 * 60 * 1000;
 
 /**
  * What bounds one Claude Code session, and **this is the whole list**.
@@ -177,7 +186,7 @@ export const CLAUDE_COORDINATOR_WORKSPACE_INSTANCE: WorkspaceObjectConfig["insta
  * a subscription bucket nobody can read, and the egress gateway reads the
  * bucket directly, rotating credentials when Anthropic says one is spent. That
  * bounds the deployment, not a session. So `timeoutMs` is the ceiling, and the
- * container runtime enforces it.
+ * sub-agent stops the session at it.
  */
 export const CLAUDE_CODE_SESSION = {
   /**
@@ -209,14 +218,11 @@ export const CLAUDE_CODE_SESSION = {
   effort: "xhigh",
 
   /**
-   * Forty minutes, and **this is the ceiling on a session**.
-   *
-   * Longer than the workspace base's twenty-minute container-idle window, so
-   * `ClaudeCoordinatorWorkspace` derives its own from this constant rather than
-   * restating it: a session stays detached for its whole timeout, and nothing
-   * touches the workspace object while it runs.
+   * Three hours, and **this is the ceiling on a session**: one that has
+   * stopped making progress, not a budget for one that is. The sandbox keeps
+   * its container up while a run is open, so nothing else stops a long one.
    */
-  timeoutMs: 40 * 60_000,
+  timeoutMs: 3 * 60 * 60_000,
 
   /**
    * Caps on Claude Code's own subagent tree, and advisory rather than enforced:

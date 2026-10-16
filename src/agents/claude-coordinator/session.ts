@@ -191,64 +191,9 @@ each repository the branch is in.
 Before you finish, look once at each pull request's review and checks, and answer whatever
 landed while you worked. Then stop: do not wait for anything still running.`;
 
-/**
- * What a writing session must answer, as \`--json-schema\`, so the coordinator
- * reads fields rather than prose. The descriptions are the session's
- * instructions for each one.
- */
-export const WRITE_OUTPUT = {
-  type: "object",
-  properties: {
-    status: {
-      type: "string",
-      enum: ["done", "needs_input", "blocked"],
-      description:
-        "`done`: the work is finished, or there was nothing to change. `needs_input`: you stopped on a question for the person — a decision only they can make, or a deviation of design, shape or scope that is theirs to approve. `blocked`: you could not finish, and `summary` says where you stopped and why."
-    },
-    summary: {
-      type: "string",
-      description:
-        "For the agent that briefed you, which relays it to the person: what you changed and why, or what you found. On a pull request, say whether you answered its review and how its checks stand. Say where you departed from the brief or the plan, including what you judged too small to stop for. Plain and short."
-    },
-    pullRequests: {
-      type: "array",
-      items: {
-        type: "object",
-        properties: {
-          number: { type: "integer" },
-          url: { type: "string" }
-        },
-        required: ["number", "url"],
-        additionalProperties: false
-      },
-      description:
-        "Every pull request you opened or pushed to, one per repository the work changed. Leave it out when you pushed nothing."
-    },
-    checks: {
-      type: "array",
-      items: {
-        type: "object",
-        properties: {
-          command: { type: "string" },
-          passed: { type: "boolean" }
-        },
-        required: ["command", "passed"],
-        additionalProperties: false
-      },
-      description:
-        "What you ran to check the work, each with whether it passed. Only what you ran."
-    },
-    question: {
-      type: "string",
-      description:
-        "Required with `needs_input`: the one question for the person, with the options you see. For a deviation, say what you were going to do, what you would do instead, and what each costs."
-    }
-  },
-  required: ["status", "summary"],
-  additionalProperties: false
-} as const;
+export { WRITE_OUTPUT } from "./schemas";
 
-/** A writing session's answer, as {@link WRITE_OUTPUT} describes it. */
+/** A writing session's answer, as `WRITE_OUTPUT` in `./schemas.ts` describes it. */
 export const WriteAnswer = z.object({
   status: z.enum(["done", "needs_input", "blocked"]),
   summary: z.string(),
@@ -611,7 +556,7 @@ ${plan}`;
  * What a **planning** session is told about its answer and, for an edit, about
  * the plan it changes. What each field of the answer is for is in the schema
  * the CLI hands it, so it is not said twice here: how to plan is this brief's,
- * what the plan has to contain is `PLAN_OUTPUT`'s in `./plans.ts`.
+ * what the plan has to contain is `PLAN_OUTPUT`'s in `./schemas.ts`.
  *
  * An edit that carries on from the conversation that wrote the plan is told
  * only what is new — what the person said — since the plan, the code it read
@@ -762,7 +707,8 @@ EOF`;
 /**
  * Delete what each listed repository holds uncommitted, ignored files included —
  * the parent reviews this tree, and a half-built `dist/` in it is not the
- * branch. `node_modules` is spared: a mount point `clean` cannot remove.
+ * branch. `node_modules` is spared: the installed dependencies are the
+ * checkout's, and the next session would otherwise wait on a full install.
  *
  * **The status is accumulated, not inherited.** A loop exits with its last
  * command's status, so a failed `reset` would be reported as a success by the

@@ -90,19 +90,19 @@ const AGENTS = [
       "src/agents/coding/workflow.ts",
       "src/agents/coding/agent.ts",
       "src/agents/coding/children.ts",
-      // The workspace object is a deployed class of this agent's too, and
-      // omitting it left the one assertion below that names `/claude-code`
-      // unable to fail: the shared base arrives in this graph anyway (via
-      // `workspaceName` in `agent.ts`), but the *subclass* did not, so an import
-      // added only there was neither leak-checked nor size-counted.
+      // The sandbox and its egress are deployed classes of this agent's too,
+      // and leaving one out leaves the assertion below that names
+      // `/claude-code` unable to fail for an import added only there.
+      "src/agents/coding/sandbox.ts",
+      "src/agents/coding/egress.ts",
       "src/agents/coding/workspace.ts"
     ],
-    // Both coders share one workspace base, from
-    // `@dynamicagents/plugins/workspace`, and the whole point of that base is
-    // that it knows nothing about Claude Code: the egress policy arrives through
-    // a config seam, and only `claude-coordinator`'s subclass fills it in. If this ever
-    // fails, the shared base has grown an import that belongs in a subclass —
-    // which would also put an Anthropic credential path in an agent that has no
+    // Both coders share one sandbox base, from `@dynamicagents/plugins/sandbox`,
+    // and the whole point of that base is that it knows nothing about Claude
+    // Code: each host's egress is a rule the plugin that needs it exports, and
+    // only `claude-coordinator`'s list names Claude Code's. If this ever fails,
+    // the shared base has grown an import that belongs in a plugin — which
+    // would also put an Anthropic credential path in an agent that has no
     // business with one.
     forbidden: [plugin("claude-code")],
     // Measured 13474 KiB. Over generic's by the container client and
@@ -119,9 +119,11 @@ const AGENTS = [
       "src/agents/claude-coordinator/workflow.ts",
       "src/agents/claude-coordinator/agent.ts",
       "src/agents/claude-coordinator/children.ts",
-      // Included for the reason `coding`'s is, and more sharply: this subclass
-      // is where the credential-egress gateway is wired, so it is the single
-      // file this check most needs to be watching.
+      // Included for the reason `coding`'s are, and more sharply: these are
+      // where the credential pool and the Anthropic egress are wired, so they
+      // are the files this check most needs to be watching.
+      "src/agents/claude-coordinator/sandbox.ts",
+      "src/agents/claude-coordinator/egress.ts",
       "src/agents/claude-coordinator/workspace.ts"
     ],
     // Nothing to forbid: this agent installs every plugin in this repo, and
@@ -147,7 +149,8 @@ const EXTERNAL = ["cloudflare:*", "node:*", ...builtinModules];
  * name: one that imported a class would carry that agent's plugins into every
  * graph it is part of, another tenant's included.
  */
-const AGENT_CLASS = /^src\/agents\/[^/]+\/(agent|children|workspace)\.ts$/;
+const AGENT_CLASS =
+  /^src\/agents\/[^/]+\/(agent|children|sandbox|egress|workspace)\.ts$/;
 
 let leakFailed = false;
 let sizeFailed = false;

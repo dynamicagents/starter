@@ -4,11 +4,11 @@
  *
  * ## The ordering problem this solves
  *
- * A workspace is one Durable Object, one container and **one repository**, which
- * is structural rather than conventional — `@cloudflare/computer` pairs an object
- * with exactly one container. But the repository is not known when the plugin
+ * A sandbox is one Durable Object, one container and **one repository**, which
+ * is structural rather than conventional — a container belongs to exactly one
+ * object. But the repository is not known when the plugin
  * list is built, or even at the start of the task: the model chooses it by
- * calling `repo_clone` with a URL, and `repo_clone` needs a workspace to run
+ * calling `repo_clone` with a URL, and `repo_clone` needs a sandbox to run
  * `git clone` in. The repo plugin's `beforeCheckout` hook breaks the cycle — it
  * fires with the parsed `owner/repo` after the host allowlist passes and before
  * any git runs.
@@ -110,19 +110,19 @@ export interface ActiveRepo {
    * Not for routing — `get()` is what routes. This is the **candidate list** the
    * weekly reclaim sweep walks, and it exists because a Durable Object namespace
    * cannot be enumerated from a Worker: without a record of the names we handed
-   * out, there is no way to ask a workspace whether it has gone stale.
+   * out, there is no way to ask a sandbox whether it has gone stale.
    *
-   * It is deliberately only a list of candidates. Whether a workspace is
-   * actually idle is decided by the workspace, from its own `lastUsedAt` — and
-   * an entry that goes missing only means that workspace falls back to its own
-   * alarm.
+   * It is deliberately only a list of candidates. Whether a sandbox is actually
+   * idle is decided by the sandbox, from its own last use. **An entry that goes
+   * missing is a sandbox never reclaimed:** a sandbox has no reclaim alarm, so
+   * this sweep is the only thing that ever empties one.
    *
-   * A stale entry is not free, though it looks it. A reclaimed workspace has had
+   * A stale entry is not free, though it looks it. A reclaimed sandbox has had
    * its storage deleted, so `lastUsedAt` reads as `0` — maximally idle — and a
    * sweep that trusted that would report a reclaim it never made, every week,
    * forever, recreating storage to empty it again. `reclaimIfIdle` reports
    * nothing to do when there is nothing there, which stops the false report, and
-   * {@link forget} trims the list — but only for the workspaces a sweep reclaimed
+   * {@link forget} trims the list — but only for the sandboxes a sweep reclaimed
    * itself, so growth is slowed rather than stopped.
    */
   seen(): string[];
@@ -130,13 +130,13 @@ export interface ActiveRepo {
    * Drop a repository from the candidate list.
    *
    * Called only when the sweep's own `reclaimIfIdle` answered `reclaimed: true`,
-   * so it trims the workspaces that sweep retired and no others. A workspace its
-   * own alarm already removed answers nothing-to-do, so its candidate is never
+   * so it trims the sandboxes that sweep retired and no others. One whose answer
+   * was lost answers nothing-to-do on the next sweep, so its candidate is never
    * forgotten and costs an RPC on every future weekly check.
    *
-   * `set()` puts an entry back on the next clone, which is the whole reason
-   * dropping one is safe: forgetting a candidate loses nothing that the next
-   * checkout does not restore.
+   * `set()` puts an entry back on the next clone, even of the repository still
+   * selected, which is the whole reason dropping one is safe: forgetting a
+   * candidate loses nothing that the next checkout does not restore.
    */
   forget(repo: string): void;
 }
@@ -262,18 +262,21 @@ function createActiveRepo(storage: DurableObjectStorage): ActiveRepo {
     },
 
     set(repo: string): void {
-      if (cached === repo) return;
       ensure();
-      storage.sql.exec(
-        `INSERT INTO ${TABLE} (id, repo) VALUES (1, ?)
-           ON CONFLICT(id) DO UPDATE SET repo = excluded.repo`,
-        repo
-      );
+      // Enrolled on every call, not only on a change: the sweep forgets a
+      // repository whose sandbox it reclaimed while the selection can still
+      // name it, and the next clone of it has to put it back.
       storage.sql.exec(
         `INSERT INTO ${SEEN_TABLE} (repo, at) VALUES (?, ?)
            ON CONFLICT(repo) DO UPDATE SET at = excluded.at`,
         repo,
         Date.now()
+      );
+      if (cached === repo) return;
+      storage.sql.exec(
+        `INSERT INTO ${TABLE} (id, repo) VALUES (1, ?)
+           ON CONFLICT(id) DO UPDATE SET repo = excluded.repo`,
+        repo
       );
       cached = repo;
     },

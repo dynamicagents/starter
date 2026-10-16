@@ -181,35 +181,9 @@ export const PLANNER_DESCRIPTION = [
   "It runs in the background, and cannot ask you anything mid-run."
 ].join("\n");
 
-/**
- * What a planning session must answer, as `--json-schema`. The descriptions are
- * the session's instructions for each field — the CLI puts them in front of the
- * model as the `StructuredOutput` tool's schema.
- */
-export const PLAN_OUTPUT = {
-  type: "object",
-  properties: {
-    title: {
-      type: "string",
-      description:
-        "A short name for the plan, a few words. Its page is headed by it."
-    },
-    plan: {
-      type: "string",
-      description:
-        "The plan, in Markdown, for the person who approves it: what will change and where, what stays as it is, and how the result will be checked. Complete on its own — the session that carries it out usually continues this conversation, but may start without it and have only this. What you established about the base goes in it as fact, so that session compares against it instead of finding it out again. Where a real choice existed — another shape, another place for the change, a smaller change that solves most of it — the plan says what you weighed and what decided it, with the cost on each side. Where the request named an approach and another is better, say so and why, and say what following the request would mean. Where there was only one sensible way, write nothing about alternatives: a section that lists none is noise in what the person reads. Name no branch: that session is given one, and it is the pull request's head."
-    },
-    lastReply: {
-      type: "string",
-      description:
-        "What you tell the agent that asked for the plan, which does not read the plan itself: what it does in two or three sentences, and anything the agent should know — assumptions you made, questions only the person can answer, a shape you would recommend over the one the request named, what you could not check. You cannot stop to ask mid-run, so this is where a question reaches the person: the agent puts it to them with the plan."
-    }
-  },
-  required: ["title", "plan", "lastReply"],
-  additionalProperties: false
-} as const;
+export { PLAN_OUTPUT } from "./schemas";
 
-/** A planning session's answer, as {@link PLAN_OUTPUT} describes it. */
+/** A planning session's answer, as `PLAN_OUTPUT` in `./schemas.ts` describes it. */
 export const PlanAnswer = z.object({
   title: z.string().trim().min(1),
   plan: z.string().trim().min(1),

@@ -165,3 +165,6 @@ secrets
 
 # Bundle-isolation check scratch (scripts/verify-isolation.mjs)
 .isolation-check/
+
+# The sandbox daemon bundle, built before every deploy: scripts/build-daemon.mjs
+/container/

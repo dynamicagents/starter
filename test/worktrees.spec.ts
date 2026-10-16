@@ -57,8 +57,7 @@ function setup(opts: { selected?: string | null; checkoutDir?: string } = {}) {
     active,
     pool,
     binding: {
-      idFromName: (name: string) => name,
-      get: () => ({
+      getByName: () => ({
         checkoutDir: async () =>
           "checkoutDir" in opts ? opts.checkoutDir : CHECKOUT.dir
       })

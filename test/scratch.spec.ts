@@ -176,7 +176,7 @@ describe("where a scratchpad lands", () => {
     });
 
     expect(said).toContain("not usable yet");
-    expect(said).toContain("the workspace cannot see it yet");
+    expect(said).toContain("the sandbox cannot see it yet");
     expect(said).toContain(`Call ${SCRATCH_OPEN_TOOL} again`);
   });
 });

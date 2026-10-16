@@ -2,10 +2,10 @@ import { describe, it, expect } from "vitest";
 import { env } from "cloudflare:workers";
 import { runInDurableObject } from "cloudflare:test";
 import type { TurnConfig, TurnContext } from "@cloudflare/think";
-import type { ComputerConfig } from "@dynamicagents/plugins/computer";
 import type { ContextConfig } from "agents/context";
 import { CODE } from "@/agents/coding/code";
-import { container } from "@/agents/coding/plugins";
+import { place } from "@/agents/coding/plugins";
+import { SANDBOX_TOOLS } from "@/workspace/container";
 
 /**
  * `coding`'s tool surface, pinned.
@@ -131,7 +131,7 @@ describe("the parent's tools", () => {
       return texts.join("\n");
     });
     expect(text).toContain(
-      "You can read the workspace the `code` sub-agents work in"
+      "You can read the checkout the `code` sub-agents work in"
     );
     expect(text).not.toMatch(/`bash`/);
   });
@@ -170,38 +170,27 @@ describe("the verification rule the sub-agent runs under", () => {
 });
 
 /**
- * The container settings, which every call site has to agree on.
+ * The settings every path into a sandbox shares, and where each agent's tools
+ * reach.
  *
- * A path that builds its own `ComputerConfig` with only `binding` and
- * `workspaceName` runs its commands under a different shell than every other
- * command in the same container — a cancellation's `git reset` once did. It is
- * one exported function, and this is what stops it being two.
+ * A path that builds its own tools config without `shell: "bash"` runs its
+ * commands under a different shell than every other command in the same
+ * container — a cancellation's `git reset` once did. It is one exported value,
+ * and this is what stops it being two.
  */
-describe("the container config", () => {
-  it("carries the settings every path depends on", () => {
-    const config = container(env, () => "caller|owner/repo");
-
+describe("the sandbox settings", () => {
+  it("carry what every path depends on", () => {
     // `bash`, not the image's dash: a model writing shell writes bash, and a
     // sub-agent once lost two minutes to `${PIPESTATUS[0]}` failing under dash.
-    expect(config.shell).toBe("bash");
-    expect(config.cwd).toBe("/workspace");
-    expect(config.workspaceName()).toBe("caller|owner/repo");
-    expect(config.installGateMs).toBeGreaterThan(0);
-    // The plugin's command timeout, which its container-idle window is sized
-    // against.
-    expect(config.timeoutMs).toBeUndefined();
+    expect(SANDBOX_TOOLS.shell).toBe("bash");
+    expect(SANDBOX_TOOLS.installGateMs).toBeGreaterThan(0);
+    // The plugin's command timeout.
+    expect(SANDBOX_TOOLS.timeoutMs).toBeUndefined();
   });
 
-  it("is the same shape whichever name it is given", () => {
-    const a = container(env, () => "one");
-    const b = container(env, () => "two");
-
-    // Everything but the two that legitimately differ per workspace.
-    const shape = ({
-      workspaceName: _name,
-      binding: _binding,
-      ...rest
-    }: ComputerConfig) => rest;
-    expect(shape(a)).toEqual(shape(b));
+  it("send the agent's tools to the sandbox its name resolves", () => {
+    const at = place(env, () => "caller|owner/repo");
+    expect(at.binding).toBe(env.CODING_SANDBOX);
+    expect(at.sandboxName()).toBe("caller|owner/repo");
   });
 });

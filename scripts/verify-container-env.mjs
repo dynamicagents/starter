@@ -128,7 +128,9 @@ const wrangler = readFileSync(
   new URL("../wrangler.jsonc", import.meta.url),
   "utf8"
 );
-const pinned = /"CLAUDE_CODE_VERSION":\s*"([^"]*)"/.exec(wrangler)?.[1];
+const pins = [...wrangler.matchAll(/"CLAUDE_CODE_VERSION":\s*"([^"]*)"/g)].map(
+  (match) => match[1]
+);
 const verifiedModule = new URL(
   "../node_modules/@dynamicagents/plugins/dist/claude-code/verified.js",
   import.meta.url
@@ -144,15 +146,71 @@ if (!verified) {
   );
   process.exit(1);
 }
-if (pinned !== verified) {
+const unverified = pins.filter((pin) => pin !== verified);
+if (pins.length === 0 || unverified.length > 0) {
   console.error(
-    `wrangler.jsonc: CLAUDE_CODE_VERSION is ${pinned ?? "not pinned"} but the ` +
-      `claude-code plugin verified ${verified}. Set it to ${verified}; a newer ` +
+    `wrangler.jsonc: CLAUDE_CODE_VERSION is ${unverified[0] ?? "not pinned"} but the ` +
+      `claude-code plugin verified ${verified}. Set every pin to ${verified}; a newer ` +
       "CLI is verified in the plugin first, by its probe."
   );
   process.exit(1);
 }
 
 console.log(
-  `✓ wrangler.jsonc: Claude Code ${pinned} is the version the claude-code plugin verified`
+  `✓ wrangler.jsonc: Claude Code ${verified} is the version the claude-code plugin verified`
+);
+
+/**
+ * The sandbox image, `Dockerfile.sandbox`: two more pairs that build and deploy
+ * cleanly and fail only in a running container.
+ *
+ * `sandbox-shim` is `@cloudflare/sandbox`'s, which the Worker's `Files` and
+ * `DirectoryBackup` drive, so its donor image is the installed version. And the
+ * daemon refuses to start unless the image starts it as the agent holding its
+ * one capability — the entrypoint `@dynamicagents/plugins/sandbox`'s README
+ * gives — which a container would report only as a sandbox that never starts.
+ */
+const sandboxfile = readFileSync(
+  new URL("../Dockerfile.sandbox", import.meta.url),
+  "utf8"
+);
+const shimTag = /cloudflare\/sandbox:(\S+)/.exec(sandboxfile)?.[1];
+const shimVersion = JSON.parse(
+  readFileSync(
+    new URL(
+      "../node_modules/@cloudflare/sandbox/package.json",
+      import.meta.url
+    ),
+    "utf8"
+  )
+).version;
+if (shimTag !== shimVersion) {
+  console.error(
+    `Dockerfile.sandbox: cloudflare/sandbox is ${shimTag ?? "not pinned"} but ` +
+      `@cloudflare/sandbox is ${shimVersion}. Set the tag to ${shimVersion}.`
+  );
+  process.exit(1);
+}
+const entrypoint = /^ENTRYPOINT (\[[\s\S]*?\])/m
+  .exec(sandboxfile)?.[1]
+  ?.replace(/\\\n/g, "");
+const argv = entrypoint ? JSON.parse(entrypoint) : [];
+const required = [
+  "setpriv",
+  "--reuid=10001",
+  "--regid=10001",
+  "--init-groups",
+  "--inh-caps=-all,+net_bind_service",
+  "--ambient-caps=+net_bind_service",
+  "--bounding-set=-all,+net_bind_service"
+];
+if (required.some((flag, i) => argv[i] !== flag)) {
+  console.error(
+    `Dockerfile.sandbox: the ENTRYPOINT must start ${JSON.stringify(required)}, ` +
+      "or the sandbox daemon refuses to start."
+  );
+  process.exit(1);
+}
+console.log(
+  `✓ Dockerfile.sandbox: sandbox-shim ${shimTag} matches @cloudflare/sandbox, and the daemon starts as the agent`
 );

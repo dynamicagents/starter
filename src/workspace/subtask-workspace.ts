@@ -1,11 +1,14 @@
-import { parseRepo } from "@dynamicagents/plugins/repo-github";
 import {
-  openWorkspaceFs,
-  pathExists,
+  parseRepo,
+  sandboxRepoGit,
+  type SandboxGitHost
+} from "@dynamicagents/plugins/repo-github";
+import {
+  sandboxName,
   sessionAdvisory,
-  workspaceName,
-  type WorkspaceObjectBase
-} from "@dynamicagents/plugins/workspace";
+  type SnapshotSeed,
+  type WorkspaceAdvisory
+} from "@dynamicagents/plugins/sandbox";
 import type { ActiveCheckout, ActiveRepo } from "./active-repo";
 import { SCRATCH_REPO } from "./scratch";
 import {
@@ -23,8 +26,8 @@ import {
  * Where a Claude Code session works, and what becomes of it afterwards.
  *
  * `@dynamicagents/plugins/claude-code` owns *that* a writing session needs a
- * workspace no other live session shares, and why. What is here is the half a
- * plugin cannot have: **which Durable Object, how it comes to hold the right
+ * checkout no other live session shares, and why. What is here is the half a
+ * plugin cannot have: **which sandbox, how it comes to hold the right
  * checkout on the right branch, and what is kept when the session ends.** The
  * sub-agents' `prepare` and `settle` in `src/agents/claude-coordinator/children.ts`
  * are what call it.
@@ -62,33 +65,19 @@ export function placementRepo(active: ActiveRepo): string | undefined {
  * when it could not be read — which a caller keeps its last answer for rather
  * than recording "no submodules".
  *
- * **Read from the workspace object's filesystem, which starts no container.**
- * That is the whole constraint this function exists under. The caller is
- * `afterCheckout`, which runs immediately before the dependency install, and a
- * container command there would start the container ahead of the install and
- * cost it the snapshot it restores from. The filesystem is the object's own
- * SQLite, so `openWorkspaceFs` serves a read without one — the same property
- * `gitOrigin` relies on, and the reason this is not
- * {@link readSubmodules}, which runs `git config` through a shell.
+ * Read as a file rather than through git, which is {@link readSubmodules}'s
+ * job: the caller is `afterCheckout`, which only needs the repositories it
+ * names. The two nothings differ, and a read that failed must record nothing
+ * at all, or a transient fault would erase a superproject's submodules from
+ * the selection and send the next session to clone the root alone.
  */
 export async function gitmodulesOf(
-  host: Parameters<typeof openWorkspaceFs>[0],
+  host: { readFile(path: string): Promise<Uint8Array | null> },
   dir: string
 ): Promise<string | undefined> {
-  const path = `${dir}/.gitmodules`;
   try {
-    // `using`, because the client holds RPC handles into the object and every
-    // exit here has to release them — an absent file and a failed read
-    // included. `stopSession` in `src/agents/claude-coordinator/plugins.ts`
-    // binds the other opener the same way.
-    using opened = await openWorkspaceFs(host);
-    // Asked before reading, because the two nothings differ and `readFile`
-    // gives one error for both. A repository with no submodules is the common
-    // case and must record "none"; a read that failed must record nothing at
-    // all, or a transient fault would erase a superproject's submodules from
-    // the selection and send the next session to clone the root alone.
-    if (!(await pathExists(opened.fs, path))) return "";
-    return await opened.fs.readFile(path, "utf8");
+    const bytes = await host.readFile(`${dir}/.gitmodules`);
+    return bytes === null ? "" : new TextDecoder().decode(bytes);
   } catch {
     return undefined;
   }
@@ -301,8 +290,8 @@ EOF`,
  * only reach a pull request under another name, and `/repo` refuses the push.
  *
  * `-f` and `clean -x` because nothing uncommitted in a worktree is kept, and
- * `-e node_modules` because a dependency tree is a mount point `clean` cannot
- * remove. `@pinned` is the commit the superproject records for a submodule that
+ * `-e node_modules` because the dependency tree is the checkout's, kept with it
+ * so a session does not wait on a full install. `@pinned` is the commit the superproject records for a submodule that
  * declares no branch, read after the superproject is on its own.
  */
 const PUT_ON_BRANCH = `tab="$(printf '\\t')"
@@ -543,8 +532,26 @@ export interface SubtaskWorkspaces {
   releaseTask(taskId: string): Promise<void>;
 }
 
+/** The sandbox RPCs a worktree is prepared, kept and released through. */
+export interface WorktreeHost extends SandboxGitHost {
+  noteCheckout(record: {
+    dir: string;
+    kind: "repo";
+    repo?: string;
+  }): Promise<{ present: boolean }>;
+  checkoutDir(): Promise<string | undefined>;
+  advisories(): Promise<readonly WorkspaceAdvisory[]>;
+  snapshotRecord(): Promise<SnapshotSeed | undefined>;
+  seedFrom(seed: SnapshotSeed): Promise<{ seeded: boolean; reason?: string }>;
+  release(): Promise<{ released: boolean; reason?: string }>;
+  startInstall(target: {
+    dir: string;
+    repo?: string;
+  }): Promise<{ state: string }>;
+}
+
 export function subtaskWorkspaces(config: {
-  binding: DurableObjectNamespace<WorkspaceObjectBase>;
+  binding: DurableObjectNamespace<WorktreeHost & Rpc.DurableObjectBranded>;
   /** The verified caller. */
   callerKey: () => string;
   /**
@@ -574,12 +581,8 @@ export function subtaskWorkspaces(config: {
 }): SubtaskWorkspaces {
   const now = config.now ?? Date.now;
   const nameOf = (worktree: Worktree) =>
-    workspaceName(
-      config.callerKey(),
-      worktreeRepo(worktree.repo, worktree.slot)
-    );
-  const stubFor = (name: string) =>
-    config.binding.get(config.binding.idFromName(name));
+    sandboxName(config.callerKey(), worktreeRepo(worktree.repo, worktree.slot));
+  const stubFor = (name: string) => config.binding.getByName(name);
   /**
    * The row a run holds, whichever pool it is in: the parent may have moved to
    * another repository since the run was resolved.
@@ -614,26 +617,27 @@ export function subtaskWorkspaces(config: {
   };
 
   /**
-   * Offer a worktree the dependency snapshot of the parent's checkout, which it
-   * was cut from at the same path, and say whether it took it — see
-   * `seedDepsSnapshot` in `@dynamicagents/plugins/workspace`. Both are this
-   * caller's. Never refuses a session: a worktree without it installs.
+   * Start a fresh worktree from the parent's last checkpoint — its checkout
+   * and the dependencies installed into it, at the same path — and say whether
+   * it took it. Only before the worktree's container has started, which reads
+   * it: see `seedFrom` in `@dynamicagents/plugins/sandbox`. Never refuses a
+   * session: a worktree without it clones and installs.
    */
   const seeded = async (parent: string, worktree: string): Promise<boolean> => {
     try {
-      const record = await stubFor(parent).depsSnapshot();
+      const record = await stubFor(parent).snapshotRecord();
       if (!record) return false;
-      return (await stubFor(worktree).seedDepsSnapshot(record)).seeded;
+      return (await stubFor(worktree).seedFrom(record)).seeded;
     } catch (err) {
       console.warn(
-        `[${config.label}] could not offer a worktree the parent's dependencies`,
+        `[${config.label}] could not start a worktree from the parent's checkout`,
         { worktree, err: String(err) }
       );
       return false;
     }
   };
 
-  /** A session in a workspace's own checkout: a scratchpad's. */
+  /** A session in a sandbox's own checkout: a scratchpad's. */
   const placeIn = async (name: string): Promise<SessionPlace> => {
     const dir = await checkoutIn(name);
     await config.admit(name);
@@ -663,59 +667,74 @@ export function subtaskWorkspaces(config: {
     const recorded = new Map(worktree.repos.map((repo) => [repo.path, repo]));
     let mode = worktree.mode ?? "new";
 
-    // A worktree used before keeps its checkout, and its container went when its
-    // last session settled. The fetch below starts the next one, and a start is
-    // where a snapshot restores — offered later, it would meet a container
-    // already up, perhaps reinstalling from its last install.
-    const reused = (await stub.checkoutDir()) !== undefined;
-    if (reused) await seeded(parent, name);
+    const git = sandboxRepoGit(() => stub);
 
+    // A worktree used before keeps its checkout on its own disk, the next start
+    // restoring it; only a fresh one is filled.
+    const reused = (await stub.checkoutDir()) !== undefined;
     if (!reused) {
-      /**
-       * A clone that failed part-way leaves a repository nobody recorded — the
-       * clone initialises before it fetches — and a second clone into it is
-       * refused with "git repository already exists", on every retry. Nothing
-       * is worth keeping in a worktree with no recorded checkout, so what is
-       * there is cleared first.
-       */
       if (!/^\/[^/]+\/./.test(checkout.dir)) {
         throw new Error(
-          `claude-coordinator: refusing to clear a checkout path that is not under a workspace directory: ${checkout.dir}`
+          `claude-coordinator: refusing to clear a checkout path that is not under a sandbox directory: ${checkout.dir}`
         );
       }
-      const cleared = await run('rm -rf "$CHECKOUT_DIR"', {
-        cwd: "/",
-        env: { CHECKOUT_DIR: checkout.dir }
-      });
-      if (!cleared.success) {
-        throw new Error(
-          `claude-coordinator: could not clear an unfinished clone in a worktree: ${cleared.stderr || cleared.stdout}`
-        );
+      /**
+       * From the parent's checkpoint, where it can: the checkout with its
+       * dependencies installed, at the same path, so neither a clone nor an
+       * install stands in front of the session. A lock a checkpoint caught
+       * mid-write would refuse every git that follows.
+       */
+      const fromParent =
+        (await seeded(parent, name)) &&
+        (
+          await run(
+            'test -d "$CHECKOUT_DIR/.git" && rm -f "$CHECKOUT_DIR/.git/index.lock"',
+            { cwd: "/", env: { CHECKOUT_DIR: checkout.dir } }
+          )
+        ).success;
+      if (!fromParent) {
+        /**
+         * A clone that failed part-way leaves a repository nobody recorded —
+         * the clone initialises before it fetches — and a second clone into it
+         * is refused with "git repository already exists", on every retry.
+         * Nothing is worth keeping in a worktree with no recorded checkout, so
+         * what is there is cleared first.
+         */
+        const cleared = await run('rm -rf "$CHECKOUT_DIR"', {
+          cwd: "/",
+          env: { CHECKOUT_DIR: checkout.dir }
+        });
+        if (!cleared.success) {
+          throw new Error(
+            `claude-coordinator: could not clear an unfinished clone in a worktree: ${cleared.stderr || cleared.stdout}`
+          );
+        }
+        const cloned = await git.clone({
+          url: checkout.url,
+          dir: checkout.dir,
+          branch: checkout.branch,
+          // The host this checkout already came from, rather than the plugin's
+          // whole allowlist: it passed that allowlist once, and narrowing to the
+          // one host cannot refuse anything the parent was allowed.
+          allowedHosts: [host]
+        });
+        if (!cloned.ok) {
+          // The branch is named because the likeliest cause is one that exists
+          // only in the parent's checkout — a worktree clones from the remote.
+          throw new Error(
+            `claude-coordinator: could not clone ${checkout.url} at ${checkout.branch} into a worktree: ${cloned.message}`
+          );
+        }
       }
-      const cloned = await stub.gitClone({
-        url: checkout.url,
-        dir: checkout.dir,
-        branch: checkout.branch,
-        // The host this checkout already came from, rather than the plugin's
-        // whole allowlist: it passed that allowlist once, and narrowing to the
-        // one host cannot refuse anything the parent was allowed.
-        allowedHosts: [host]
-      });
-      if (!cloned.ok) {
-        // The branch is named because the likeliest cause is one that exists
-        // only in the parent's checkout — a worktree clones from the remote.
-        throw new Error(
-          `claude-coordinator: could not clone ${checkout.url} at ${checkout.branch} into a worktree: ${cloned.message}`
-        );
-      }
-      // A worktree whose storage went — reclaimed after a week untouched — no
+      // A worktree whose sandbox went — reclaimed after a week untouched — no
       // longer holds the branch it is recorded with. What the remote has of it
       // is all that is left.
       if (mode === "continue") mode = "adopt";
     }
     // Straight after the clone, so a repeat that fails later finds a recorded
-    // checkout and does not clone over it — and before the install, for the
-    // reason `noteCheckout` gives in `@dynamicagents/plugins/workspace`.
+    // checkout and does not clone over it — and before the install, which is
+    // conditional where a checkout is not: a recorded checkout is what the
+    // sandbox backs up and brings back.
     await stub.noteCheckout({
       dir: checkout.dir,
       kind: "repo",
@@ -723,7 +742,7 @@ export function subtaskWorkspaces(config: {
     });
 
     const fetch = async (url: string, dir: string, what: string) => {
-      const fetched = await stub.gitFetch({ url, dir, allowedHosts: [host] });
+      const fetched = await git.fetch({ url, dir, allowedHosts: [host] });
       if (!fetched.ok) {
         throw new Error(
           `claude-coordinator: could not fetch ${what} in a worktree: ${fetched.message}`
@@ -771,7 +790,7 @@ export function subtaskWorkspaces(config: {
      * Every submodule, each cloned into this worktree with objects of its own.
      *
      * The superproject's clone leaves an empty directory at each gitlink —
-     * isomorphic-git clones no submodules — so a session asked to change one
+     * a plain clone initialises no submodules — so a session asked to change one
      * would find nothing there. Each is cloned on its declared branch, which is
      * what the superproject's own sync would check out, and fetched in full so
      * the pinned commit of one that declares none is there too.
@@ -786,7 +805,7 @@ export function subtaskWorkspaces(config: {
       const branch = sub.branch === "." ? checkout.branch : sub.branch;
       refs.set(sub.path, branch ? `origin/${branch}` : "@pinned");
       if (!present.has(sub.path)) {
-        const cloned = await stub.gitClone({
+        const cloned = await git.clone({
           url,
           dir,
           allowedHosts: [host],
@@ -826,22 +845,9 @@ export function subtaskWorkspaces(config: {
       );
     }
 
-    // A snapshot is restored only into a cold start, and the steps above started
-    // this worktree's container — so it stops, and the install below starts the
-    // next one from the snapshot: seconds, where installing takes minutes. A
-    // release refused — an install already running, a pull still moving — keeps
-    // the container, and the install below joins or runs in it.
-    if (await seeded(parent, name)) {
-      const { released } = await stub.releaseContainer();
-      if (!released)
-        console.info(
-          `[${config.label}] a worktree installs instead of restoring the parent's dependencies`,
-          { worktree: name }
-        );
-    }
-
-    // Returns as soon as the command is spawned. Awaiting a dependency install
-    // here would put minutes in front of the session waiting for it.
+    // Returns as soon as the command is spawned, and installs nothing a
+    // checkpoint brought that the branch did not move. Awaiting an install here
+    // would put minutes in front of the session waiting for it.
     await stub.startInstall({ dir: checkout.dir, repo: worktree.repo });
 
     const urls = new Map<string, string>([[".", checkout.url]]);
@@ -894,7 +900,7 @@ export function subtaskWorkspaces(config: {
       const selected = config.active.get();
       const picked = selectedRepo(selected);
       if (picked === undefined) {
-        return placeIn(workspaceName(config.callerKey(), selected));
+        return placeIn(sandboxName(config.callerKey(), selected));
       }
       const repo = config.active.rootOf(picked);
 
@@ -957,11 +963,11 @@ export function subtaskWorkspaces(config: {
             claimed,
             checkout,
             name,
-            workspaceName(config.callerKey(), repo)
+            sandboxName(config.callerKey(), repo)
           );
       // `note`, not `set`: this enrols the worktree in the sweep's candidate list
-      // without routing the parent's own tools to it. A workspace the sweep cannot
-      // see falls back to its own seven-day alarm with no backstop.
+      // without routing the parent's own tools to it. A sandbox the sweep cannot
+      // see is never reclaimed.
       config.active.note(worktreeRepo(ready.repo, ready.slot));
       return {
         workspaceName: name,
@@ -1064,9 +1070,7 @@ export function subtaskWorkspaces(config: {
       // Nobody works in a worktree between sessions, so its container stops
       // now rather than at the idle deadline. Its files stay for the next run.
       try {
-        await config.binding
-          .get(config.binding.idFromName(nameOf(row)))
-          .releaseContainer();
+        await config.binding.getByName(nameOf(row)).release();
       } catch (err) {
         console.warn(
           `[${config.label}] could not release a worktree's container`,

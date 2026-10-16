@@ -8,19 +8,19 @@ import { requireArtifactsStub } from "@dynamicagents/core/artifacts";
 import { SubAgent } from "@dynamicagents/core/subagent";
 import {
   CLAUDE_CODE_AGENT,
-  claudeCodeModel,
+  claudeCodeHarnessModel,
+  type SandboxRuns,
   type SessionEnd,
-  type SessionOutcome,
-  type SessionWorkspace
+  type SessionOutcome
 } from "@dynamicagents/plugins/claude-code";
 import {
-  openWorkspace,
-  sessionAdvisory,
-  workspaceExec,
-  workspaceName,
-  workspaceNameFromRuntime,
-  WORKSPACE_RUNTIME_KEY
-} from "@dynamicagents/plugins/workspace";
+  sandboxName,
+  sandboxNameFromRuntime,
+  SANDBOX_RUNTIME_KEY,
+  sessionAdvisory
+} from "@dynamicagents/plugins/sandbox";
+import { CLAUDE_CODE_SESSION } from "@/config";
+import { sandboxShell } from "@/workspace/container";
 import {
   placementRepo,
   readSubmodules,
@@ -30,7 +30,6 @@ import {
 } from "@/workspace/subtask-workspace";
 import { activeRepo } from "@/workspace/active-repo";
 import { isBranchName } from "@/workspace/worktree-pool";
-import { claudeCodeConfig } from "./claude-code";
 import { branchSession, recordBranchRun, type BranchScope } from "./branches";
 import {
   createPlan,
@@ -40,7 +39,6 @@ import {
   lookUpPlan,
   PLAN_INPUT,
   PLAN_LABEL,
-  PLAN_OUTPUT,
   PlanAnswer,
   PLANNER_DESCRIPTION,
   plannedSession,
@@ -56,8 +54,9 @@ import {
   type ReviseInput,
   type WriteInput
 } from "./plans";
-import { container, sessionWorkspaces } from "./plugins";
-import type { SessionNote } from "./workspace";
+import { sessionWorkspaces } from "./plugins";
+import type { SessionNote } from "./sandbox";
+import type { SessionSchema } from "./schemas";
 import {
   COUNT_COMMITS,
   DISCARD,
@@ -78,17 +77,16 @@ import {
   writingNote,
   type RepoStart,
   type Uncommitted,
-  type WritingOutcome,
-  WRITE_OUTPUT
+  type WritingOutcome
 } from "./session";
 
 /**
  * `claude-coordinator`'s sub-agents: a Claude Code session each, not a model loop.
  *
- * The session is the sub-agent's **model** — `claudeCodeModel` in
+ * The session is the sub-agent's **model** — `claudeCodeHarnessModel` in
  * `@dynamicagents/plugins/claude-code` — so Think's recovery drives it: a run
- * cut by an eviction or a deploy is continued, and the model re-attaches to the
- * session from where it stopped. What is here is this deployment's half: the
+ * cut by an eviction or a deploy is continued, and the model polls the
+ * session, which the sandbox kept running, from where it stopped. What is here is this deployment's half: the
  * brief, the one warning for work left uncommitted, the report, and where each
  * session works.
  */
@@ -155,12 +153,12 @@ export function forgetKept(
 }
 
 /**
- * Where a session works, as `prepare` hands it over. `workspaceName` is
- * `WORKSPACE_RUNTIME_KEY`, so the plugins' own readers find it too.
+ * Where a session works, as `prepare` hands it over. Its sandbox is under
+ * `SANDBOX_RUNTIME_KEY`, so the plugins' own readers find it too.
  */
 function runtimeOf(place: SessionPlace): Record<string, unknown> {
   return {
-    [WORKSPACE_RUNTIME_KEY]: place.workspaceName,
+    [SANDBOX_RUNTIME_KEY]: place.workspaceName,
     dir: place.dir,
     ...(place.branch ? { branch: place.branch } : {}),
     ...(place.continues ? { continues: true } : {})
@@ -169,7 +167,7 @@ function runtimeOf(place: SessionPlace): Record<string, unknown> {
 
 /** The same, read back in the sub-agent. Its absence is a wiring fault. */
 function placeOf(runtime: Record<string, unknown> | undefined): SessionPlace {
-  const workspaceName = workspaceNameFromRuntime(runtime);
+  const workspaceName = sandboxNameFromRuntime(runtime);
   const dir = runtime?.dir;
   if (!workspaceName || typeof dir !== "string") {
     throw new Error(
@@ -381,7 +379,7 @@ function branchScope(parent: {
   const active = activeRepo(parent.storage);
   const repo = placementRepo(active);
   return repo === undefined
-    ? { workspaceName: workspaceName(parent.callerKey(), active.get()) }
+    ? { workspaceName: sandboxName(parent.callerKey(), active.get()) }
     : { repo };
 }
 
@@ -507,15 +505,14 @@ export async function settleReviser(
 const settleWriter = (ctx: SubAgentSettleContext<Env>): Promise<void> =>
   settleSession(sessionWorkspaces(ctx.parent), ctx.parent.storage, ctx);
 
-function workspaceStub(env: Env, name: string) {
-  const binding = env.CLAUDE_COORDINATOR_WORKSPACE;
-  return binding.get(binding.idFromName(name));
+function sandboxStub(env: Env, name: string) {
+  return env.CLAUDE_COORDINATOR_SANDBOX.getByName(name);
 }
 
-/** How a `prepare` asks a workspace for a run's session. */
+/** How a `prepare` asks a sandbox for a run's session. */
 function sessionLookup(env: Env) {
   return (workspaceName: string, runId: string) =>
-    workspaceStub(env, workspaceName).sessionOf(runId);
+    sandboxStub(env, workspaceName).sessionOf(runId);
 }
 
 /** Where a run's conversation to carry on from is kept in what `prepare` hands it. */
@@ -762,26 +759,24 @@ abstract class ClaudeCodeRun extends SubAgent<Env> {
     const resume = carryOnOf(runtime);
     // Recorded with the session, so a run carrying it on finds the page.
     const transcript = resume?.transcript ?? this.name;
-    return claudeCodeModel({
-      config: claudeCodeConfig(this.env),
-      // A new stub per open: a re-attach after a cut stream opens it again, and
-      // the stub that stream came over may not have survived it.
-      workspace: () =>
-        openWorkspace(
-          this.#stub(place.workspaceName)
-        ) as Promise<SessionWorkspace>,
+    const schema: SessionSchema = plan ? "plan" : "write";
+    return claudeCodeHarnessModel({
+      // A new stub per call: a call that failed may have been its stub's last.
+      sandbox: () => this.#stub(place.workspaceName) as unknown as SandboxRuns,
       storage: this.ctx.storage,
       runId: this.name,
       dir: place.dir,
+      timeoutMs: CLAUDE_CODE_SESSION.timeoutMs,
       // A plan is a writing session under `plan`, answering as data: it reads,
       // changes nothing, and has nobody to approve its plan mid-run.
-      ...(plan
-        ? { jsonSchema: PLAN_OUTPUT, permissionMode: "plan" as const }
-        : { jsonSchema: WRITE_OUTPUT }),
+      schema,
+      ...(plan ? { permissionMode: "plan" as const } : {}),
+      // The run that holds the conversation, in this same sandbox: `carryOn`
+      // hands one over only where that is so.
       ...(resume
         ? {
             resume: {
-              sessionId: resume.sessionId,
+              run: resume.fromRun,
               ...(resume.fork ? { fork: true } : {})
             }
           }
@@ -790,7 +785,7 @@ abstract class ClaudeCodeRun extends SubAgent<Env> {
       // the card, and plugins' own spec is what proves the model passes it.
       note: this.note.bind(this),
       // Every run's, so a later one can carry on from it: see `noteSession`
-      // on the workspace.
+      // on the sandbox.
       onSession: (record) =>
         this.#noteSession(place, { sessionId: record.sessionId, transcript }),
       brief: (task) =>
@@ -832,7 +827,7 @@ abstract class ClaudeCodeRun extends SubAgent<Env> {
   }
 
   /**
-   * Record a run's session on the workspace that holds its conversation.
+   * Record a run's session on the sandbox that holds its conversation.
    * Best-effort: a record lost is a later run starting fresh from the plan,
    * which it always could.
    */
@@ -860,12 +855,12 @@ abstract class ClaudeCodeRun extends SubAgent<Env> {
   }
 
   #stub(name: string) {
-    return workspaceStub(this.env, name);
+    return sandboxStub(this.env, name);
   }
 
-  /** A shell in a named workspace, under the settings every tool uses. */
+  /** A shell in a named sandbox, the one every tool uses. */
   #exec(name: string) {
-    return workspaceExec(container(this.env, () => name));
+    return sandboxShell(this.env.CLAUDE_COORDINATOR_SANDBOX, () => name);
   }
 
   /**
@@ -873,8 +868,8 @@ abstract class ClaudeCodeRun extends SubAgent<Env> {
    * throw fails the run with its message. The credential pool was reopened in
    * `prepare` — see `admitSession` in `./plugins.ts`.
    *
-   * **What is true about the workspace, folded in.** The session starts whatever
-   * the workspace's state, and it has no tool that reaches the host, so a fact
+   * **What is true about the sandbox, folded in.** The session starts whatever
+   * the sandbox's state, and it has no tool that reaches the host, so a fact
    * it is not given is one the parent never sees either. Reported, never
    * enforced: a Claude Code session can run `npm ci` itself, so the useful
    * thing is to hand it the facts. The wording is the plugin's.
@@ -972,8 +967,8 @@ abstract class ClaudeCodeRun extends SubAgent<Env> {
    * uncommitted, and count what it kept.
    *
    * **After the session, and that ordering is load-bearing.** Every read here
-   * goes through the workspace's filesystem, which the container's edits only
-   * reach once the drain has unwound; the model calls this after it has.
+   * is of the checkout the session wrote, and the model calls this only once
+   * the session has ended.
    *
    * Nothing is discarded for a session stopped from outside: it did not choose
    * what it left, and whoever stopped it decides. `keep` in

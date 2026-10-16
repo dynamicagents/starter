@@ -9,13 +9,12 @@ import {
   type CredentialState
 } from "@dynamicagents/plugins/claude-code";
 import {
-  openWorkspace,
-  workspaceName,
-  WORKSPACE_RUNTIME_KEY
-} from "@dynamicagents/plugins/workspace";
+  sandboxName,
+  SANDBOX_RUNTIME_KEY
+} from "@dynamicagents/plugins/sandbox";
 import type { AgentToolLifecycleResult, AgentToolRunInfo } from "agents";
 import type { ContextConfig } from "agents/context";
-import type { ClaudeCoordinatorWorkspace } from "@/index";
+import type { ClaudeCoordinatorSandbox } from "@/index";
 import { requireArtifactsStub } from "@dynamicagents/core/artifacts";
 import {
   ClaudeCoordinatorPlannerChild,
@@ -121,8 +120,8 @@ const onParent = <T>(
     (instance) => read(instance as unknown as Parent)
   );
 
-const { freshStub: freshWorkspace } = makeDoHelpers<ClaudeCoordinatorWorkspace>(
-  env.CLAUDE_COORDINATOR_WORKSPACE
+const { freshStub: freshWorkspace } = makeDoHelpers<ClaudeCoordinatorSandbox>(
+  env.CLAUDE_COORDINATOR_SANDBOX
 );
 
 /**
@@ -312,21 +311,16 @@ describe("preparing a session", () => {
     }
   );
 
-  it("does not mistake a checkout with nothing to install for an empty workspace", async () => {
+  it("places a session in a scratchpad, a checkout with nothing to install", async () => {
     const dir = "/workspace/scratch";
     const key = `claude-coordinator-spec:${crypto.randomUUID()}`;
-    const name = workspaceName(key, SCRATCH_REPO);
-    const workspace = env.CLAUDE_COORDINATOR_WORKSPACE.get(
-      env.CLAUDE_COORDINATOR_WORKSPACE.idFromName(name)
-    );
-
-    // A scratchpad — a git repository of its own — with no lockfile: opened,
-    // recorded, and skipped by the resolver.
-    using ws = await openWorkspace(workspace);
-    await ws.fs.mkdir(`${dir}/.git`, { recursive: true });
-    await ws.fs.writeFile(`${dir}/.git/HEAD`, "ref: refs/heads/main\n");
-    await workspace.noteCheckout({ dir, kind: "scratch" });
-    expect((await workspace.startInstall({ dir })).state).toBe("skipped");
+    const name = sandboxName(key, SCRATCH_REPO);
+    // Recorded as `scratch_open` records one, on a sandbox whose container is
+    // stopped: a stopped sandbox answers from its record.
+    await env.CLAUDE_COORDINATOR_SANDBOX.getByName(name).noteCheckout({
+      dir,
+      kind: "scratch"
+    });
 
     const runtime = await onParent((agent) => {
       activeRepo(agent.ctx.storage).set(SCRATCH_REPO);
@@ -337,7 +331,7 @@ describe("preparing a session", () => {
         parent: agent.pluginContext() as never
       });
     }, key);
-    expect(runtime).toEqual({ workspaceName: name, dir });
+    expect(runtime).toEqual({ [SANDBOX_RUNTIME_KEY]: name, dir });
   });
 });
 
@@ -425,7 +419,7 @@ describe("a plan", () => {
 
     expect(asked).toEqual([{ taskId: ctx.taskId, runId: ctx.runId }]);
     expect(runtime).toMatchObject({
-      workspaceName: place.workspaceName,
+      [SANDBOX_RUNTIME_KEY]: place.workspaceName,
       dir: place.dir
     });
     expect(calls).toEqual(["release, forgetting its branch"]);
@@ -444,7 +438,7 @@ describe("a plan", () => {
           {
             runId: ctx.runId,
             taskId: ctx.taskId,
-            runtime: { workspaceName: "w", dir: "/d" },
+            runtime: { [SANDBOX_RUNTIME_KEY]: "w", dir: "/d" },
             result: { status: "error" } as never,
             parent: agent.pluginContext()
           },
@@ -563,7 +557,11 @@ describe("a plan", () => {
         settlePlanner({
           runId: "run-1",
           taskId: "task-1",
-          runtime: { workspaceName: "w", dir: "/d", plan: { id, isNew } },
+          runtime: {
+            [SANDBOX_RUNTIME_KEY]: "w",
+            dir: "/d",
+            plan: { id, isNew }
+          },
           result: { status: "completed" } as never,
           parent: agent.pluginContext()
         })
@@ -1033,9 +1031,7 @@ function placingPool(place: SessionPlace) {
 
 /** The workspace object a session ran in, where its handle is recorded. */
 function workspaceAt(name: string) {
-  return env.CLAUDE_COORDINATOR_WORKSPACE.get(
-    env.CLAUDE_COORDINATOR_WORKSPACE.idFromName(name)
-  );
+  return env.CLAUDE_COORDINATOR_SANDBOX.getByName(name);
 }
 
 /** A pool that records what a session's hooks asked of it. */
@@ -1183,7 +1179,7 @@ describe("a writing session's worktree", () => {
   it("frees a completed revision's worktree, and holds a stopped one's with a note saying where", async () => {
     const place = worktree();
     const runtime = {
-      [WORKSPACE_RUNTIME_KEY]: place.workspaceName,
+      [SANDBOX_RUNTIME_KEY]: place.workspaceName,
       dir: place.dir,
       branch: place.branch,
       revisions: [{ branch: "feat/x", pulls: [] }]
@@ -1266,7 +1262,7 @@ describe("the credential pool", () => {
   it("admits a session once every credential is spent, clearing the marks", async () => {
     const name = `admit-spent:${crypto.randomUUID()}`;
     const resetAt = Date.now() + 60 * 60_000;
-    const binding = env.CLAUDE_COORDINATOR_WORKSPACE;
+    const binding = env.CLAUDE_COORDINATOR_SANDBOX;
     const poolIn = (storage: DurableObjectStorage) =>
       credentialPool({
         credentials: claudeCodeConfig(env).credentials,
@@ -2131,72 +2127,25 @@ describe("the checkouts a caller has recorded", () => {
  * one.
  */
 describe("a checkout's .gitmodules", () => {
-  /**
-   * A workspace object as the filesystem half of it: `__getWorkspaceFsStub` is
-   * the method that must be reached, and `__getWorkspaceStub` the one that
-   * must not — asking for it is what starts a container.
-   */
-  const workspaceHolding = (
+  /** A sandbox as the file read sees it: `null` is a file that is not there. */
+  const sandboxHolding = (
     files: Record<string, string | { throws: unknown }>
-  ) => {
-    const reached: string[] = [];
-    const fs = {
-      exists: async (path: string) => {
-        reached.push(`exists ${path}`);
-        return path in files;
-      },
-      readFile: async (path: string) => {
-        reached.push(`readFile ${path}`);
-        const held = files[path];
-        if (held === undefined) throw new Error("ENOENT");
-        if (typeof held !== "string") throw held.throws;
-        return held;
-      }
-    };
-    // What `getWorkspace` reads off a stub besides `fs`. Spelled out because
-    // an incomplete one fails inside the client rather than at the call, which
-    // would read here as "the file was unreadable".
-    const stub = {
-      fs,
-      useThink: false,
-      hasAssets: false,
-      runtime: { backends: async () => [] },
-      // What the client's own `Symbol.dispose` reaches, and the reason the
-      // caller binds it with `using`: these are RPC handles into the object,
-      // and `afterCheckout` runs on every checkout of every session.
-      [Symbol.dispose]: () => {
-        reached.push("disposed");
-      }
-    };
-    const host = {
-      __getWorkspaceFsStub: async () => {
-        reached.push("fs stub");
-        return stub as never;
-      },
-      __getWorkspaceStub: async () => {
-        reached.push("container stub");
-        return stub as never;
-      }
-    };
-    return { host, reached };
-  };
+  ) => ({
+    readFile: async (path: string) => {
+      const held = files[path];
+      if (held === undefined) return null;
+      if (typeof held !== "string") throw held.throws;
+      return new TextEncoder().encode(held);
+    }
+  });
 
-  const read = async (files: Record<string, string | { throws: unknown }>) => {
-    const { host, reached } = workspaceHolding(files);
-    const text = await gitmodulesOf(
-      host as unknown as Parameters<typeof gitmodulesOf>[0],
-      "/workspace/super"
+  const read = (files: Record<string, string | { throws: unknown }>) =>
+    gitmodulesOf(sandboxHolding(files), "/workspace/super");
+
+  it("is the file", async () => {
+    expect(await read({ "/workspace/super/.gitmodules": "[submodule]" })).toBe(
+      "[submodule]"
     );
-    return { text, reached };
-  };
-
-  it("is the file, read without starting a container", async () => {
-    const { text, reached } = await read({
-      "/workspace/super/.gitmodules": "[submodule]"
-    });
-    expect(text).toBe("[submodule]");
-    expect(reached).toContain("fs stub");
-    expect(reached).not.toContain("container stub");
   });
 
   /**
@@ -2206,43 +2155,24 @@ describe("a checkout's .gitmodules", () => {
    * clone the root alone.
    */
   it("is empty when the repository has no submodules", async () => {
-    const { text } = await read({});
-    expect(text).toBe("");
+    expect(await read({})).toBe("");
   });
 
   it("is unknown when the file is there and will not read", async () => {
-    const { text } = await read({
-      "/workspace/super/.gitmodules": { throws: new Error("EIO") }
-    });
-    expect(text).toBeUndefined();
+    expect(
+      await read({
+        "/workspace/super/.gitmodules": { throws: new Error("EIO") }
+      })
+    ).toBeUndefined();
   });
 
-  /**
-   * Every exit releases the client, the two that answer nothing included. This
-   * runs once per checkout per session, so a handle left behind here leaks for
-   * as long as the object lives.
-   */
-  it.each([
-    ["the file read", { "/workspace/super/.gitmodules": "[submodule]" }],
-    ["no file at all", {}],
-    [
-      "a read that threw",
-      { "/workspace/super/.gitmodules": { throws: new Error("EIO") } }
-    ]
-  ])("releases the workspace client after %s", async (_what, files) => {
-    const { reached } = await read(
-      files as Record<string, string | { throws: unknown }>
-    );
-    expect(reached.at(-1)).toBe("disposed");
-  });
-
-  it("is unknown when the workspace cannot be reached at all", async () => {
+  it("is unknown when the sandbox cannot be reached at all", async () => {
     const text = await gitmodulesOf(
       {
-        __getWorkspaceFsStub: async () => {
+        readFile: async () => {
           throw new Error("no such object");
         }
-      } as unknown as Parameters<typeof gitmodulesOf>[0],
+      },
       "/workspace/super"
     );
     expect(text).toBeUndefined();

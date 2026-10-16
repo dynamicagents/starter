@@ -1,8 +1,5 @@
-import {
-  IDLE_RECLAIM_MS,
-  workspaceName,
-  type WorkspaceObjectBase
-} from "@dynamicagents/plugins/workspace";
+import { sandboxName } from "@dynamicagents/plugins/sandbox";
+import { SANDBOX_RECLAIM_MS } from "@/config";
 import type { RepoWorktrees } from "@dynamicagents/plugins/repo-github";
 import type { ActiveRepo } from "./active-repo";
 import { placementRepo, selectedRepo } from "./subtask-workspace";
@@ -38,8 +35,8 @@ export interface WorktreeSwitch extends RepoWorktrees {
   where(): string;
 }
 
-/** Days a workspace survives untouched, as the parent is told it. */
-const KEPT_DAYS = Math.round(IDLE_RECLAIM_MS / 86_400_000);
+/** Days a sandbox survives untouched, as the parent is told it. */
+const KEPT_DAYS = Math.round(SANDBOX_RECLAIM_MS / 86_400_000);
 
 /** Where one of a worktree's repositories sits. */
 function dirOf(worktree: Worktree, repo: PoolRepo): string {
@@ -70,7 +67,10 @@ function summary(worktree: Worktree): string {
 export function worktreeSwitch(config: {
   active: ActiveRepo;
   pool: PoolStore;
-  binding: DurableObjectNamespace<WorkspaceObjectBase>;
+  /** Asked whether a worktree's sandbox still holds its checkout; starts no container. */
+  binding: DurableObjectNamespace<
+    { checkoutDir(): Promise<string | undefined> } & Rpc.DurableObjectBranded
+  >;
   callerKey: () => string;
 }): WorktreeSwitch {
   /** The worktree the parent's tools point at now, if they point at one. */
@@ -134,8 +134,8 @@ export function worktreeSwitch(config: {
       }
 
       const sentinel = worktreeRepo(repo, row.slot);
-      const stub = config.binding.get(
-        config.binding.idFromName(workspaceName(config.callerKey(), sentinel))
+      const stub = config.binding.getByName(
+        sandboxName(config.callerKey(), sentinel)
       );
       if (!(await stub.checkoutDir())) {
         // Its storage is gone, so the row describes nothing; the slot is free

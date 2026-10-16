@@ -35,6 +35,8 @@ import { manifest as claudeCoordinatorManifest } from "@/agents/claude-coordinat
 import { createPlan } from "@/agents/claude-coordinator/plans";
 import { RETRY_WORK } from "@/agents/claude-coordinator/soul";
 import { ClaudeCoordinatorWorkflow } from "@/agents/claude-coordinator/workflow";
+import { ClaudeCoordinatorSandbox as LiveClaudeCoordinatorSandbox } from "@/agents/claude-coordinator/sandbox";
+import { CodingSandbox as LiveCodingSandbox } from "@/agents/coding/sandbox";
 
 /**
  * The Worker the suite runs: this deployment's own, plus each agent on a
@@ -49,6 +51,60 @@ import { ClaudeCoordinatorWorkflow } from "@/agents/claude-coordinator/workflow"
  */
 
 export * from "@/index";
+// Named, not left to the line above: the pool's `ctx.exports` lists what this
+// module exports by name, and a sandbox's harness refuses to start without its
+// egress entrypoint there.
+export {
+  ClaudeCoordinatorEgress,
+  CodingEgress,
+  DirectoryBackupGateway
+} from "@/index";
+
+/**
+ * A container that is stopped and stays stopped: the pool runs none, so a
+ * spec that reaches one has reached past what it tests. What the sandbox does
+ * with a running container is `@dynamicagents/plugins/sandbox`'s to test, over
+ * its own fake; here a sandbox answers what it answers from its storage — its
+ * records, its credential pool, its sessions.
+ */
+function stoppedContainer(): Container {
+  const refuse = async () => {
+    throw new Error("the test pool runs no container");
+  };
+  return {
+    running: false,
+    images: { app: "test-image" },
+    start: () => {
+      throw new Error("the test pool runs no container");
+    },
+    monitor: () => new Promise<void>(() => undefined),
+    destroy: async () => undefined,
+    signal: () => undefined,
+    getTcpPort: () => {
+      throw new Error("the test pool runs no container");
+    },
+    setInactivityTimeout: async () => undefined,
+    interceptOutboundHttp: async () => undefined,
+    interceptAllOutboundHttp: async () => undefined,
+    interceptOutboundHttps: async () => undefined,
+    snapshotContainer: refuse,
+    exec: refuse,
+    inspect: async () => null
+  } as unknown as Container;
+}
+
+/** The sandboxes, bound under their own names, over {@link stoppedContainer}. */
+export class ClaudeCoordinatorSandbox extends LiveClaudeCoordinatorSandbox {
+  protected override containerFor(): Container {
+    return stoppedContainer();
+  }
+}
+
+export class CodingSandbox extends LiveCodingSandbox {
+  protected override containerFor(): Container {
+    return stoppedContainer();
+  }
+}
 
 export interface TestEnv extends Env {
   TEST_GENERIC_AGENT: DurableObjectNamespace<TestGenericAgent>;

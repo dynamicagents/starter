@@ -1,14 +1,17 @@
 import { restrictTools, type AgentPlugin } from "@dynamicagents/core";
-import { computer, type ComputerConfig } from "@dynamicagents/plugins/computer";
+import {
+  sandboxComputer,
+  type SandboxComputerConfig
+} from "@dynamicagents/plugins/computer";
 import { repo } from "@dynamicagents/plugins/repo-github";
 import { browser } from "@dynamicagents/plugins/browser";
-import { workspaceExec } from "@dynamicagents/plugins/workspace";
 import type { ActiveRepo } from "@/workspace/active-repo";
 import {
   parentWorkspaceContext,
-  workspaceContainer
+  SANDBOX_TOOLS,
+  sandboxShell
 } from "@/workspace/container";
-import { workspaceGit } from "@/workspace/git";
+import { sandboxGit } from "@/workspace/git";
 import { gitIdentity } from "@/workspace/git-identity";
 import { hostScratch } from "@/workspace/scratch";
 
@@ -34,17 +37,16 @@ import { hostScratch } from "@/workspace/scratch";
  */
 
 /**
- * This agent's container settings.
- *
- * The settings themselves are shared — see `@/workspace/container.ts`, which
- * carries the reason a second copy is not an option. All this adds is which
- * namespace they apply to.
+ * Where this agent's tools reach: the sandbox `sandboxName` names, in this
+ * agent's namespace. The tools' own settings are shared — see
+ * `@/workspace/container.ts`, which carries the reason a second copy is not an
+ * option.
  */
-export function container(
+export function place(
   env: Env,
-  workspaceName: () => string
-): ComputerConfig {
-  return workspaceContainer(env.CODING_WORKSPACE, workspaceName);
+  sandboxName: () => string
+): SandboxComputerConfig {
+  return { binding: env.CODING_SANDBOX, sandboxName };
 }
 
 /**
@@ -58,13 +60,11 @@ export function container(
 export const parentPlugins = (
   env: Env,
   active: ActiveRepo,
-  config: ComputerConfig
+  at: SandboxComputerConfig
 ): AgentPlugin<Env>[] => {
-  const workspace = () =>
-    env.CODING_WORKSPACE.get(
-      env.CODING_WORKSPACE.idFromName(config.workspaceName())
-    );
-  /** Shared with the workspace object — see `@/workspace/git-identity`. */
+  const sandbox = () => env.CODING_SANDBOX.getByName(at.sandboxName());
+  const shell = sandboxShell(env.CODING_SANDBOX, at.sandboxName);
+  /** Shared with every command the sandbox runs — see `@/workspace/git-identity`. */
   const author = gitIdentity(env);
 
   return [
@@ -72,19 +72,17 @@ export const parentPlugins = (
       // Composed rather than imported: the repo plugin needs a shell, not a
       // container, so it takes one instead of depending on the computer module.
       // This is also what lets the parent keep git while having no shell of its
-      // own — `workspaceExec` is a function, not a tool.
-      exec: workspaceExec(config),
-      // The other half of the same seam, and the reason `exec` above is safe to
-      // hand a model with a shell: clone, fetch and push do not go through it.
-      // They go here, to the workspace object, which reads `GITHUB_TOKEN` from
-      // its own environment — so the container never holds the credential at
-      // all, in any command, for any length of time.
-      git: workspaceGit({
-        binding: env.CODING_WORKSPACE,
-        // The same name `config` resolves, and it has to be: a push acting on a
-        // different workspace than the container writes into would push whatever
+      // own — a shell here is a function, not a tool.
+      exec: shell,
+      // Clone, fetch and push: the container's git, with a placeholder the
+      // egress swaps for `GITHUB_TOKEN` on the Worker side, so the container
+      // never holds the credential — see `@/workspace/git.ts`.
+      git: sandboxGit({
+        binding: env.CODING_SANDBOX,
+        // The same name the shell resolves, and it has to be: a push acting on
+        // a different sandbox than the one written into would push whatever
         // that other checkout happened to contain.
-        workspaceName: config.workspaceName
+        sandboxName: at.sandboxName
       }),
       // Still needed, and now only for `repo_open_pr` — the one credentialed
       // call this side makes directly.
@@ -98,19 +96,19 @@ export const parentPlugins = (
       // the tree is there, which is when an install becomes meaningful.
       beforeCheckout: ({ owner, repo: name }) => active.set(`${owner}/${name}`),
       afterCheckout: async ({ dir, repo: name }) => {
-        const ws = workspace();
+        const ws = sandbox();
         // Before the install, and never inside it: an install is conditional
         // where a checkout is not, so no install outcome may decide whether the
-        // path is recorded. The reasoning is on `noteCheckout` in the
-        // workspace object, in `@dynamicagents/plugins/workspace`.
+        // path is recorded — and a recorded checkout is what the sandbox backs
+        // up and brings back.
         await ws.noteCheckout({
           dir,
           kind: "repo",
           ...(name ? { repo: name } : {})
         });
-        // Returns as soon as the command is spawned — the workspace object
-        // drains it. Blocking here would put a 225-second install inside a
-        // model turn, which is the failure this whole arrangement avoids.
+        // Returns as soon as the command is spawned — the sandbox drains it.
+        // Blocking here would put a 225-second install inside a model turn,
+        // which is the failure this whole arrangement avoids.
         await ws.startInstall({
           dir,
           ...(name ? { repo: name } : {})
@@ -126,8 +124,8 @@ export const parentPlugins = (
      * identity and its workspace thunk, so there is one answer to each of those
      * rather than a second one drifting alongside.
      */
-    hostScratch({ exec: workspaceExec(config), workspace, active, author }),
-    restrictTools(computer(config), {
+    hostScratch({ exec: shell, workspace: sandbox, active, author }),
+    restrictTools(sandboxComputer(SANDBOX_TOOLS), {
       allow: ["grep"],
       context: [
         {
@@ -155,7 +153,7 @@ export const parentPlugins = (
  * a sub-agent legitimately needs from git (`git status`, `git diff`, `git log`)
  * it runs through `bash`, which leaves no credential anywhere near it.
  */
-export const childPlugins = (
-  env: Env,
-  config: ComputerConfig
-): AgentPlugin<Env>[] => [computer(config), browser({ binding: env.BROWSER })];
+export const childPlugins = (env: Env): AgentPlugin<Env>[] => [
+  sandboxComputer(SANDBOX_TOOLS),
+  browser({ binding: env.BROWSER })
+];

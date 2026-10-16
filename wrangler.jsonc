@@ -17,6 +17,11 @@
   "main": "src/index.ts",
   "compatibility_date": "2026-07-06",
   "compatibility_flags": ["nodejs_compat"],
+  // The sandbox image's daemon, bundled from this repo's own `node_modules`
+  // before every deploy and dev run, so the object and the daemon in its
+  // container speak one `agents` version. `Dockerfile.sandbox` copies it in;
+  // `scripts/build-daemon.mjs` says why it is built rather than committed.
+  "build": { "command": "node scripts/build-daemon.mjs" },
   // The deployment's public origin, and the only one.
   //
   // Declared here rather than attached in the dashboard because a deploy that
@@ -83,24 +88,20 @@
   // missing one fails with a sentence naming the plugin rather than at the first
   // tool call, inside a request someone is waiting on.
 
-  // Each coder's workspace container, running `computerd` (see Dockerfile).
-  // Requires a PAID Workers plan.
+  // Each coder's containers. Requires a PAID Workers plan.
   //
   // `class_name` is the Durable Object that *owns* the container, one-to-one:
-  // `@cloudflare/computer` pairs each object's SQLite filesystem with exactly
-  // one container, which is what makes "one workspace per repository" a
-  // structural property rather than a convention.
+  // a container belongs to exactly one object, which is what makes "one sandbox
+  // per repository" a structural property rather than a convention.
   //
   // **The object starts its own container** (`scheduling_policy`), from the
-  // image under `images.app` and at the size its workspace config passes:
-  // `WORKSPACE_INSTANCE` and `CLAUDE_COORDINATOR_WORKSPACE_INSTANCE` in
-  // `src/config.ts`, which say why. The policy is fixed when
-  // an application is created: one made under another policy is deleted before
-  // the deploy that moves it, never switched. `@dynamicagents/plugins/workspace`
-  // carries how, and what the gap between the two costs.
+  // image under `images.app` and at the size its config passes — see
+  // `SANDBOX_INSTANCE` in `src/config.ts`. The policy is fixed when an
+  // application is created: one made under another policy is deleted before
+  // the deploy that moves it, never switched.
   //
   // **One Dockerfile, an image per entry.** Cloudflare builds each entry's
-  // `images` on its own, so every entry naming this Dockerfile gets an image of
+  // `images` on its own, so every entry naming a Dockerfile gets an image of
   // its own — and `build_vars` is a Docker build arg, which is how
   // `claude-coordinator`'s image gets the Claude Code CLI and `coding`'s does not.
   //
@@ -108,24 +109,50 @@
   // account's limits rather than a ceiling per entry, and for `claude-coordinator`
   // that is what bounds the fan-out: a writing or planning session works in a
   // worktree of its own while the parent keeps one, so N sessions at once want N+1
-  // instances of `ClaudeCoordinatorWorkspace` — `CLAUDE_COORDINATOR` in
+  // instances of `ClaudeCoordinatorSandbox` — `CLAUDE_COORDINATOR` in
   // `src/config.ts` carries why. A full fan-out plus its parent, three times over,
   // is around 2% of the concurrent vCPU Cloudflare documents per account, and 1.5%
-  // of the memory — both scale with `CLAUDE_COORDINATOR_WORKSPACE_INSTANCE`, so
-  // resizing it moves them. What the width costs is the bill, because memory and disk are billed
-  // on provisioned resources for as long as an instance runs — the same reason a
-  // settled task stops its container rather than waiting out the idle deadline.
-  // `npm run cf -- containers` is where to watch it.
-  //
-  // **A deploy with a new image replaces each running container** when its
-  // workspace next connects, so there is no rollout to stage: the library in the
-  // Worker and the `computerd` in the image are one release, and `backend` in
-  // `@dynamicagents/plugins/workspace` carries why that has to hold.
+  // of the memory — both scale with `CLAUDE_COORDINATOR_SANDBOX_INSTANCE`, so
+  // resizing it moves them. What the width costs is the bill, because memory and
+  // disk are billed on provisioned resources for as long as an instance runs —
+  // the same reason a settled task stops its container rather than waiting out
+  // the idle deadline. `npm run cf -- containers` is where to watch it.
   //
   // `observability` is per entry and not inherited from the Worker's — omitted,
-  // an application keeps whatever it had. It is what carries `computerd`'s own
-  // output, including whether it mounted over FUSE or fell back to the shim.
+  // an application keeps whatever it had. It is what carries the daemon's own
+  // output.
   "containers": [
+    // The sandboxes: one container per caller per repository, whose disk is
+    // the checkout. Started by their object through `@dynamicagents/plugins/sandbox`,
+    // at `SANDBOX_INSTANCE` and `CLAUDE_COORDINATOR_SANDBOX_INSTANCE`. A new
+    // image reaches a sandbox at its next start; a running one keeps its own.
+    {
+      "class_name": "CodingSandbox",
+      "scheduling_policy": "durable_object",
+      "images": { "app": { "dockerfile": "./Dockerfile.sandbox" } },
+      "observability": { "logs": { "enabled": true } }
+    },
+    {
+      "class_name": "ClaudeCoordinatorSandbox",
+      "scheduling_policy": "durable_object",
+      "images": {
+        "app": {
+          "dockerfile": "./Dockerfile.sandbox",
+          // **Pinned to the version the claude-code plugin verified**, and
+          // `npm run check` fails when the two differ — `Dockerfile.sandbox`
+          // carries why. The checksum is pinned because the build downloads
+          // the tarball.
+          "build_vars": {
+            "CLAUDE_CODE_VERSION": "2.1.296",
+            "GH_VERSION": "2.101.0",
+            "GH_SHA256": "9bca2d1c16825f109907a23307628a2f0698fbf99662b73a5cf0b020293072b8"
+          }
+        }
+      },
+      "observability": { "logs": { "enabled": true } }
+    },
+    // The workspaces the sandboxes replaced, kept until their storage is
+    // deleted.
     {
       "class_name": "CodingWorkspace",
       "scheduling_policy": "durable_object",
@@ -154,21 +181,15 @@
     }
   ],
 
-  // There is deliberately **no R2 bucket here**, and it is worth saying why,
-  // because a `BACKUP_BUCKET` binding looks like an obvious thing to add.
-  //
-  // The coding agent used to snapshot its container's `/workspace` to R2 between tasks
-  // so a follow-up skipped the clone and the install. It never worked once in
-  // production: `@cloudflare/sandbox` mounts that archive **inside the
-  // container** over s3fs, so it needs R2 S3-API credentials
-  // (`R2_ACCESS_KEY_ID` and friends) that a Workers R2 binding cannot supply —
-  // the binding has no presign API. Every task logged `InvalidBackupConfigError`.
-  //
-  // Nothing replaces it for the checkout: it now lives in the workspace object's
-  // own SQLite storage, which survives the container and costs no credential at
-  // all. Dependencies live on the container's disk, and a new container starts
-  // from a Containers snapshot of the one that installed them — a platform
-  // feature, not a bucket. See `src/workspace/install-plan.ts`.
+  // Where a sandbox backs its checkouts up before every stop — scratchpads
+  // included, which have no remote. A start on a new image drops the
+  // container's snapshot, and this is what brings unpushed work back.
+  // `DirectoryBackup` writes it through this binding alone, from the Worker
+  // side, so no S3 credential exists anywhere; `@dynamicagents/plugins/sandbox`
+  // owns the rest. A reclaimed sandbox deletes its own.
+  "r2_buckets": [
+    { "binding": "SANDBOX_BACKUPS", "bucket_name": "da-sandbox-backups" }
+  ],
 
   // `@dynamicagents/plugins/browser` — used by every agent.
   // NOTE: requires a PAID Workers plan; Browser Rendering is not on the free
@@ -205,7 +226,18 @@
         "name": "ClaudeCoordinatorAgent"
       },
 
-      // Not agents — the workspaces. One object per caller per repository,
+      // Not agents — the sandboxes. One object per caller per repository,
+      // driving the container whose disk is that checkout. Addressed by name,
+      // never by the caller alone: see `sandboxName` in
+      // `@dynamicagents/plugins/sandbox`, which both share. Two classes for the
+      // same reason as the workspaces below.
+      { "class_name": "CodingSandbox", "name": "CODING_SANDBOX" },
+      {
+        "class_name": "ClaudeCoordinatorSandbox",
+        "name": "CLAUDE_COORDINATOR_SANDBOX"
+      },
+
+      // The workspaces the sandboxes replaced. One object per caller per repository,
       // holding that checkout's filesystem in SQLite and owning the container
       // that mounts it. Addressed by `idFromName`, never by the caller alone;
       // see `workspaceName` in `@dynamicagents/plugins/workspace`, which
@@ -345,6 +377,12 @@
         "ClaudeCoordinatorAgent",
         "ClaudeCoordinatorWorkspace"
       ]
+    },
+    {
+      // The sandboxes, beside the workspaces they replace, which stay until a
+      // later tag deletes them and what they hold — unpushed work included.
+      "tag": "v13",
+      "new_sqlite_classes": ["CodingSandbox", "ClaudeCoordinatorSandbox"]
     }
   ],
 

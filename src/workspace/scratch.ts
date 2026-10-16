@@ -1,9 +1,6 @@
 import { scratch, DEFAULT_SCRATCH_DIR } from "@dynamicagents/plugins/scratch";
 import type { AgentPlugin } from "@dynamicagents/core";
-import type {
-  workspaceExec,
-  WorkspaceObjectBase
-} from "@dynamicagents/plugins/workspace";
+import type { sandboxExec } from "@dynamicagents/plugins/sandbox";
 import type { ActiveRepo } from "./active-repo";
 
 /**
@@ -21,16 +18,14 @@ import type { ActiveRepo } from "./active-repo";
 /**
  * The repository sentinel a scratchpad is keyed on.
  *
- * A scratchpad is routed as a repository — `workspaceName(caller, SCRATCH_REPO)`
- * gives it its own object and its own container, which is what
- * `@cloudflare/computer`'s one-object-one-container pairing requires of anything
- * with a filesystem of its own.
+ * A scratchpad is routed as a repository — `sandboxName(caller, SCRATCH_REPO)`
+ * gives it a sandbox of its own, so its own container and its own disk.
  *
  * Angle brackets because no GitHub name can contain them. This shares a namespace
  * with the `owner/repo` strings in {@link ActiveRepo}, so a sentinel a caller
  * could clone is a sentinel a caller could collide with — the same reasoning that
- * spells the pre-selection window `<unassigned>` — see `workspaceName` in
- * `@dynamicagents/plugins/workspace`.
+ * spells the pre-selection window `<unassigned>` — see `sandboxName` in
+ * `@dynamicagents/plugins/sandbox`.
  */
 export const SCRATCH_REPO = "<scratch>";
 
@@ -47,24 +42,28 @@ export const SCRATCH_DIR = DEFAULT_SCRATCH_DIR;
  *
  * `beforeOpen` is the routing decision and has to be first — `exec` and
  * `workspace()` both resolve through the active selection, so a command issued
- * before it runs in whichever workspace the last task left open. Going through
+ * before it runs in whichever sandbox the last task left open. Going through
  * `active.set()` rather than setting the name some other way is also what enrols
  * a scratchpad in `sweepIdleWorkspaces`, which walks `seen()`: without it a
- * scratchpad would rely solely on its own seven-day alarm with no backstop, which
- * is the state the accidental `<unassigned>` workspace is in.
+ * scratchpad's sandbox would never be reclaimed.
  *
  * `afterOpen` is what makes a scratchpad reachable at all. `checkoutDir()` on
- * the workspace host answers from the checkout record, and a scratchpad has
+ * the sandbox answers from the checkout record, and a scratchpad has
  * nothing else that would
  * write one — a directory with no `package.json` is exactly what the install
  * resolver skips. The `present` it reports back is the same probe the delegation
- * will make, so a workspace that cannot see the tree says so in this tool's own
+ * will make, so a sandbox that cannot see the tree says so in this tool's own
  * result rather than in a delegation refusing a scratchpad the model was just
  * told it had opened.
  */
 export function hostScratch(config: {
-  exec: ReturnType<typeof workspaceExec>;
-  workspace: () => DurableObjectStub<WorkspaceObjectBase>;
+  exec: ReturnType<typeof sandboxExec>;
+  workspace: () => {
+    noteCheckout(record: {
+      dir: string;
+      kind: "scratch";
+    }): Promise<{ present: boolean }>;
+  };
   active: ActiveRepo;
   author: { name: string; email: string };
 }): AgentPlugin {
@@ -79,7 +78,7 @@ export function hostScratch(config: {
       });
       return {
         ready: present,
-        because: "the workspace cannot see it yet"
+        because: "the sandbox cannot see it yet"
       };
     }
   });

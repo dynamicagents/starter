@@ -9,7 +9,7 @@ import {
   type WorkspaceObjectConfig
 } from "@dynamicagents/plugins/workspace";
 import {
-  CLAUDE_COORDINATOR_WORKSPACE_INSTANCE,
+  CLAUDE_COORDINATOR_SANDBOX_INSTANCE,
   CLAUDE_CODE_SESSION
 } from "@/config";
 import { INSTALL_PLAN } from "@/workspace/install-plan";
@@ -71,7 +71,7 @@ export class ClaudeCoordinatorWorkspace extends WorkspaceObjectBase {
       binding: "CLAUDE_COORDINATOR_WORKSPACE",
       label: "claude-coordinator-workspace",
       installPlan: INSTALL_PLAN,
-      instance: CLAUDE_COORDINATOR_WORKSPACE_INSTANCE,
+      instance: CLAUDE_COORDINATOR_SANDBOX_INSTANCE,
       // Above the whole session.
       //
       // The base's default is twenty minutes, and its rule is that the window

@@ -4,11 +4,11 @@
  *
  * ## The ordering problem this solves
  *
- * A workspace is one Durable Object, one container and **one repository**, which
- * is structural rather than conventional — `@cloudflare/computer` pairs an object
- * with exactly one container. But the repository is not known when the plugin
+ * A sandbox is one Durable Object, one container and **one repository**, which
+ * is structural rather than conventional — a container belongs to exactly one
+ * object. But the repository is not known when the plugin
  * list is built, or even at the start of the task: the model chooses it by
- * calling `repo_clone` with a URL, and `repo_clone` needs a workspace to run
+ * calling `repo_clone` with a URL, and `repo_clone` needs a sandbox to run
  * `git clone` in. The repo plugin's `beforeCheckout` hook breaks the cycle — it
  * fires with the parsed `owner/repo` after the host allowlist passes and before
  * any git runs.

@@ -296,7 +296,7 @@ so reach a third-party provider over that same binding. **There is no model cred
 this deployment** on either path: the platform authenticates the binding and AI Gateway
 decides what pays, so there is nothing to store, nothing to rotate, and `coding`'s
 container has never seen one. [`.env.example`](.env.example) is the full list of what a
-deployment does need, and what a gateway error means.
+deployment does need, and says what a gateway error means.
 
 The container needs the **Workers Paid** plan and a running Docker daemon on the
 machine that runs `wrangler deploy` — wrangler builds this repository's Dockerfiles
@@ -332,15 +332,16 @@ the Worker and leaves the container alone.
 The **sandbox** is a Durable Object, one per caller per repository, driving one container
 through `agents`' `ContainerHarness`, and that container's disk holds `node_modules`
 beside the checkout. The object keeps the durable record: each session, its transcript,
-the CLI's own files to resume it from. The checkout's own files never cross into it —
-reading one means asking the container — so a reset of the object leaves the container
-running. `@dynamicagents/plugins/sandbox`'s README has the mechanism.
+the CLI's own files to resume it from. The checkout's own files never cross into it, so
+reading one means asking the container. A reset of the object leaves the container
+running, and the object reattaches. The mechanism is in
+`@dynamicagents/plugins/sandbox`'s README.
 
 A container nobody uses is backed up to R2 and stopped minutes after its last use, and
-its next start is a snapshot of its disk — the checkout, the dependencies, and any commit
-nobody pushed — or a restore from that backup, when a new image dropped the snapshot. An
-install runs once per checkout and again only when what it depends on changed: the
-fingerprint is the plugin's, and the commands are in
+its next start is a snapshot of its disk: the checkout, the dependencies, and any commit
+nobody pushed. A start on a new image drops that snapshot and restores each checkout from
+its backup. An install runs once per checkout and again only when what it depends on
+changed — the plugin owns that fingerprint, and this deployment's commands are in
 [`src/workspace/install-plan.ts`](src/workspace/install-plan.ts). A writing session's
 worktree is a sandbox of its own, seeded from the parent's checkpoint so its checkout and
 dependencies sit at the same path.

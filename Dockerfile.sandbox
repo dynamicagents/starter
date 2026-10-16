@@ -2,10 +2,10 @@
 # the checkout, driven by its Durable Object through the harness daemon.
 #
 # What `@dynamicagents/plugins/sandbox` requires of an image is in its README:
-# the `agent` user owning /workspace, setpriv, timeout, git,
-# update-ca-certificates, sandbox-shim, and a root-owned session skeleton. The
-# rest is what a repository needs to build: Node, a C toolchain for native
-# modules, and ripgrep for the file tools' searches.
+# the `agent` user owning /workspace, setpriv, timeout, an `env` that takes
+# `-C`, git, update-ca-certificates, sandbox-shim, and a root-owned session
+# skeleton. The rest is what a repository needs to build: Node, a C toolchain
+# for native modules, and ripgrep for the file tools' searches.
 
 # `sandbox-shim`, which `@cloudflare/sandbox`'s `Files` and `DirectoryBackup`
 # run through. Its tag follows the `@cloudflare/sandbox` the plugins install.
@@ -81,6 +81,7 @@ RUN node -e "const m=Number(process.versions.node.split('.')[0]); if (m < 24) { 
   && git --version \
   && rg --version | head -n1 \
   && command -v setpriv timeout pkill update-ca-certificates \
+  && env -C / true \
   && test -x /usr/local/bin/sandbox-shim
 
 COPY container/daemon.mjs /opt/da/daemon.mjs

@@ -274,7 +274,7 @@ The two differ in exactly one place, and it is one level below the agent: what a
 sub-agent _is_. `coding`'s `code` is a Think sub-agent on Workers AI, working in
 the container. A `claude-coordinator` session is one `claude -p` process — its own loop,
 its own tools, its own context management — so its sub-agent's model is
-`claudeCodeHarnessModel`, which runs the session, rather than a model call. Their
+`claudeCodeModel`, which runs the session, rather than a model call. Their
 sandboxes are two thin subclasses of `SandboxObjectBase` from
 `@dynamicagents/plugins/sandbox`, differing in their config and in what their egress
 lets through.
@@ -388,7 +388,7 @@ them. An agent whose files live in a container says so itself, next to its plugi
 
 ```ts
 // src/agents/coding/agent.ts
-override workspace = sandboxWorkspace(this.#place);
+override workspace = computerWorkspace(this.#place);
 ```
 
 Nothing in core imports a plugin, and `@dynamicagents/plugins` has no root barrel — the bare

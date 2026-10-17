@@ -4,7 +4,7 @@ import {
   type PluginContext
 } from "@dynamicagents/core";
 import {
-  sandboxComputer,
+  computer,
   type SandboxComputerConfig
 } from "@dynamicagents/plugins/computer";
 import { repo } from "@dynamicagents/plugins/repo-github";
@@ -220,7 +220,7 @@ export const parentPlugins = (
      * rather than a second one drifting alongside.
      */
     hostScratch({ exec: shell, workspace: sandbox, active, author }),
-    restrictTools(sandboxComputer(SANDBOX_TOOLS), {
+    restrictTools(computer(SANDBOX_TOOLS), {
       allow: ["grep"],
       context: [
         {

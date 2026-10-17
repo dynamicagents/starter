@@ -8,7 +8,7 @@ import { requireArtifactsStub } from "@dynamicagents/core/artifacts";
 import { SubAgent } from "@dynamicagents/core/subagent";
 import {
   CLAUDE_CODE_AGENT,
-  claudeCodeHarnessModel,
+  claudeCodeModel,
   type SandboxRuns,
   type SessionEnd,
   type SessionOutcome
@@ -83,7 +83,7 @@ import {
 /**
  * `claude-coordinator`'s sub-agents: a Claude Code session each, not a model loop.
  *
- * The session is the sub-agent's **model** — `claudeCodeHarnessModel` in
+ * The session is the sub-agent's **model** — `claudeCodeModel` in
  * `@dynamicagents/plugins/claude-code` — so Think's recovery drives it: a run
  * cut by an eviction or a deploy is continued, and the model polls the
  * session, which the sandbox kept running, from where it stopped. What is here is this deployment's half: the
@@ -760,7 +760,7 @@ abstract class ClaudeCodeRun extends SubAgent<Env> {
     // Recorded with the session, so a run carrying it on finds the page.
     const transcript = resume?.transcript ?? this.name;
     const schema: SessionSchema = plan ? "plan" : "write";
-    return claudeCodeHarnessModel({
+    return claudeCodeModel({
       // A new stub per call: a call that failed may have been its stub's last.
       sandbox: () => this.#stub(place.workspaceName) as unknown as SandboxRuns,
       storage: this.ctx.storage,

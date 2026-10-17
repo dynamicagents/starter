@@ -56,7 +56,7 @@ export class ClaudeCoordinatorSandbox
     });
   }
 
-  // The pool, as `claudeCodeSandboxEgress` leases from it.
+  // The pool, as `claudeCodeEgress` leases from it.
 
   async lead(): Promise<Lead> {
     return this.#pool.lead();

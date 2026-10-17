@@ -78,7 +78,7 @@ const AGENTS = [
       plugin("scratch"),
       plugin("claude-code")
     ],
-    // Measured 11694 KiB, and nearly all of it is Think and the `agents` SDK:
+    // Measured 11722 KiB, and nearly all of it is Think and the `agents` SDK:
     // see "What every agent carries" above.
     maxBytes: 12_940_000
   },
@@ -103,7 +103,7 @@ const AGENTS = [
     // would also put an Anthropic credential path in an agent that has no
     // business with one.
     forbidden: [plugin("claude-code")],
-    // Measured 12432 KiB: generic's, plus the plugins this agent installs and
+    // Measured 12492 KiB: generic's, plus the plugins this agent installs and
     // the `/alarm` and `/job` its sandbox runs on.
     maxBytes: 13_750_000
   },
@@ -123,7 +123,7 @@ const AGENTS = [
     // Nothing to forbid: this agent installs every plugin in this repo, and
     // `coding`'s entry above is the other half of the `/claude-code` pair.
     forbidden: [],
-    // Measured 12544 KiB: `coding`'s, plus `/claude-code`.
+    // Measured 12603 KiB: `coding`'s, plus `/claude-code`.
     maxBytes: 13_880_000
   }
 ];

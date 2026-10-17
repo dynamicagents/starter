@@ -146,10 +146,10 @@ describe.each(TENANTS)("$tenant", ({ tenant, background }) => {
       "TASK_STATE_INPUT_REQUIRED"
     );
     const question = questionOf(parked!);
-    expect(question.prompt).toBe("which one?");
+    expect(question.questions[0]?.prompt).toBe("which one?");
 
     await harness.answer(accepted.id, question.requestId, {
-      optionId: question.options![0]!.id
+      q1: { optionIds: ["q1.o1"] }
     });
     const done = await harness.waitForTerminal(accepted.id);
     expect(done.state).toBe("TASK_STATE_COMPLETED");

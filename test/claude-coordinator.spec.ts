@@ -2385,4 +2385,12 @@ describe("what the coordinator does with a session's question", () => {
   it("still asks a caller who does not approve plans what only they can decide", () => {
     expect(SOUL).toContain("what they opted out of is reading a plan");
   });
+
+  /**
+   * One `ask_user` holds every question, so the planner's open question is
+   * asked beside the plan's approval rather than folded into its prose.
+   */
+  it("asks the planner's open question beside the plan's approval, in one call", () => {
+    expect(SOUL).toContain("ask it beside the approval, in the same call");
+  });
 });

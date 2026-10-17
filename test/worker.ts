@@ -5,6 +5,8 @@ import { handleArtifactRoute } from "@dynamicagents/core/artifacts";
 import type { SubAgentClass } from "@dynamicagents/core/subagent";
 import type { TaskParams } from "@dynamicagents/core/workflow";
 import {
+  askApproval,
+  askUser,
   call,
   scriptedModel,
   type MockStep,
@@ -164,9 +166,7 @@ function parentRule(
     }
     const ask = after(text, "ask:");
     if (ask !== undefined) {
-      return view.answered
-        ? { text: "asked" }
-        : call("ask_user", { question: ask, options: ["Yes", "No"] });
+      return view.answered ? { text: "asked" } : askUser(ask, ["Yes", "No"]);
     }
     // An approval of an artifact; its answer arrives as the next message, and
     // is echoed as the reply. A refused one fails the call, and the model echoes
@@ -175,7 +175,7 @@ function parentRule(
     if (artifact !== undefined) {
       return view.answered
         ? { text: lastToolOutput(view) }
-        : call("ask_user", { question: "Approve the plan?", artifact });
+        : askApproval("Approve the plan?", artifact);
     }
     const wait = after(text, "wait:");
     if (wait !== undefined) {

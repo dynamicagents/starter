@@ -19,7 +19,7 @@
   "compatibility_flags": ["nodejs_compat"],
   // The sandbox image's daemon, bundled from this repo's own `node_modules`
   // before every deploy and dev run, so the object and the daemon in its
-  // container speak one `agents` version. `Dockerfile.sandbox` copies it in;
+  // container speak one `agents` version. The `Dockerfile` copies it in;
   // `scripts/build-daemon.mjs` says why it is built rather than committed.
   "build": { "command": "node scripts/build-daemon.mjs" },
   // The deployment's public origin, and the only one.
@@ -49,13 +49,9 @@
   "limits": { "cpu_ms": 300000 },
   "observability": {
     "enabled": true,
-    // Traces, not just logs. Every workspace passes
-    // `createCloudflareObserver({ tracing })` to its `Workspace`, which emits a
-    // span per sync push, sync pull, exec spawn and filesystem operation — and
-    // the sync telemetry alongside it reports what each block of a pull cost.
-    // Those are the only view into how long a container→host sync actually
-    // takes, and without this flag `tracing` is undefined and the observer
-    // silently degrades to a no-op.
+    // Traces, not just logs: a span per RPC and alarm, which is where a Durable
+    // Object that restarted shows (`agent_start`). `npm run cf -- spans` reads
+    // them.
     "traces": {
       "enabled": true
     }
@@ -129,7 +125,7 @@
     {
       "class_name": "CodingSandbox",
       "scheduling_policy": "durable_object",
-      "images": { "app": { "dockerfile": "./Dockerfile.sandbox" } },
+      "images": { "app": { "dockerfile": "./Dockerfile" } },
       "observability": { "logs": { "enabled": true } }
     },
     {
@@ -137,39 +133,11 @@
       "scheduling_policy": "durable_object",
       "images": {
         "app": {
-          "dockerfile": "./Dockerfile.sandbox",
-          // **Pinned to the version the claude-code plugin verified**, and
-          // `npm run check` fails when the two differ — `Dockerfile.sandbox`
-          // carries why. The checksum is pinned because the build downloads
-          // the tarball.
-          "build_vars": {
-            "CLAUDE_CODE_VERSION": "2.1.296",
-            "GH_VERSION": "2.101.0",
-            "GH_SHA256": "9bca2d1c16825f109907a23307628a2f0698fbf99662b73a5cf0b020293072b8"
-          }
-        }
-      },
-      "observability": { "logs": { "enabled": true } }
-    },
-    // The workspaces the sandboxes replaced, kept until their storage is
-    // deleted.
-    {
-      "class_name": "CodingWorkspace",
-      "scheduling_policy": "durable_object",
-      "images": { "app": { "dockerfile": "./Dockerfile" } },
-      "observability": { "logs": { "enabled": true } }
-    },
-    {
-      "class_name": "ClaudeCoordinatorWorkspace",
-      "scheduling_policy": "durable_object",
-      "images": {
-        "app": {
           "dockerfile": "./Dockerfile",
           // **Pinned to the version the claude-code plugin verified**, and
-          // `npm run check` fails when the two differ — the Dockerfile carries
-          // why. `gh` is unauthenticated and can only read public repositories —
-          // the Dockerfile block carries why, and why it still needs a GH_TOKEN.
-          // The checksum is pinned because the build downloads the tarball.
+          // `npm run check` fails when the two differ — the `Dockerfile`
+          // carries why. The checksum is pinned because the build downloads
+          // the tarball.
           "build_vars": {
             "CLAUDE_CODE_VERSION": "2.1.296",
             "GH_VERSION": "2.101.0",
@@ -229,28 +197,16 @@
       // Not agents — the sandboxes. One object per caller per repository,
       // driving the container whose disk is that checkout. Addressed by name,
       // never by the caller alone: see `sandboxName` in
-      // `@dynamicagents/plugins/sandbox`, which both share. Two classes for the
-      // same reason as the workspaces below.
-      { "class_name": "CodingSandbox", "name": "CODING_SANDBOX" },
-      {
-        "class_name": "ClaudeCoordinatorSandbox",
-        "name": "CLAUDE_COORDINATOR_SANDBOX"
-      },
-
-      // The workspaces the sandboxes replaced. One object per caller per repository,
-      // holding that checkout's filesystem in SQLite and owning the container
-      // that mounts it. Addressed by `idFromName`, never by the caller alone;
-      // see `workspaceName` in `@dynamicagents/plugins/workspace`, which
-      // both share.
+      // `@dynamicagents/plugins/sandbox`, which both share.
       //
       // Two classes rather than one shared class with two bindings, because a
       // Durable Object namespace is keyed by class name: one class would put
       // both agents' checkouts in one namespace, and a caller working on the
       // same repository through both would get one container for both.
-      { "class_name": "CodingWorkspace", "name": "CODING_WORKSPACE" },
+      { "class_name": "CodingSandbox", "name": "CODING_SANDBOX" },
       {
-        "class_name": "ClaudeCoordinatorWorkspace",
-        "name": "CLAUDE_COORDINATOR_WORKSPACE"
+        "class_name": "ClaudeCoordinatorSandbox",
+        "name": "CLAUDE_COORDINATOR_SANDBOX"
       },
 
       // Not an agent, and not optional. Core files every sub-agent note on the
@@ -379,10 +335,15 @@
       ]
     },
     {
-      // The sandboxes, beside the workspaces they replace, which stay until a
-      // later tag deletes them and what they hold — unpushed work included.
+      // The sandboxes, beside the workspaces they replace.
       "tag": "v13",
       "new_sqlite_classes": ["CodingSandbox", "ClaudeCoordinatorSandbox"]
+    },
+    {
+      // The workspaces the sandboxes replaced, and everything they held —
+      // checkouts, unpushed work and session records included.
+      "tag": "v14",
+      "deleted_classes": ["CodingWorkspace", "ClaudeCoordinatorWorkspace"]
     }
   ],
 
@@ -426,9 +387,9 @@
       "GATEKEEPER_ORIGINS",
       // Both coders. `GITHUB_TOKEN` needs contents and pull-request write.
       //
-      // It is read exclusively inside a workspace object, never crosses an RPC
-      // argument, and never enters the container — `onAuth` checks the host
-      // allowlist at the moment the token is handed over.
+      // Read on the Worker side only — by `/repo-github`'s API calls and by the
+      // sandbox egress, which swaps it in for the placeholder a container holds
+      // — so it never enters a container.
       "GITHUB_TOKEN",
       // The git identity behind those commits — same requirement as
       // GITHUB_TOKEN above. See `.env.example` for what each configures.

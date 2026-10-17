@@ -47,7 +47,7 @@
 //   npm run cf -- logs --since 2h --level error
 //   npm run cf -- logs --worker da-starter --grep "[agent]"
 //   npm run cf -- logs --worker da-starter --app --since 30m
-//   npm run cf -- logs --container da-starter-claudecoordinatorworkspace --since 2h
+//   npm run cf -- logs --container da-starter-claudecoordinatorsandbox --since 2h
 //   npm run cf -- spans --name agent_start --since 6h
 //   npm run cf -- spans --object 8e4d430c --app --since 1h
 //   npm run cf -- ai --since 2h
@@ -293,12 +293,10 @@ async function cmdLogs(args) {
   /**
    * `--app` — this Worker's own log lines, without the container's egress.
    *
-   * Under `http-gateway` every request a container makes is intercepted, and
-   * each one is an invocation that observability records — twice, once on
-   * `WorkspaceProxy` and once on the workspace object. Measured over one
-   * thirteen-minute coding session: 1,633 of 1,711 events, 95%, almost all of
-   * them `npm ci` fetching tarballs. They bury everything the Worker actually
-   * said, and an unfiltered `logs` is unreadable while a session is running.
+   * Every request a container makes to an intercepted host is an invocation
+   * of its class's egress entrypoint — every model call a Claude Code session
+   * makes among them — and they bury everything the Worker actually said while
+   * a session runs.
    *
    * `origin` is the discriminator rather than the message text: an egress event
    * is a `fetch` invocation and a `console.*` line from a Durable Object is
@@ -395,11 +393,8 @@ async function containerApp(nameOrId) {
  *
  * Its own dataset, keyed by the application's id rather than a script name, so
  * no Worker filter reaches it. It is where a container that dies says why:
- * computerd's `uncaughtException` is here, while the Worker's logs record only
- * that the container exited.
- *
- * `--grep` matches records, not lines, so a long line shows only the record
- * that matched.
+ * the daemon's own errors are here, while the Worker's logs record only that
+ * the container exited.
  */
 async function cmdContainerLogs(flags, { from, to, limit, sinceLabel }) {
   for (const flag of ["worker", "service", "level", "app"])
@@ -441,13 +436,13 @@ async function cmdContainerLogs(flags, { from, to, limit, sinceLabel }) {
   const containers = new Set(lines.map((l) => l.container)).size;
   const count = (n, noun) => `${n} ${noun}${n === 1 ? "" : "s"}`;
   out(
-    `${app.name} · last ${sinceLabel} · ${count(lines.length, "line")} from ${count(records.length, "record")} · ${count(containers, "container")}`
+    `${app.name} · last ${sinceLabel} · ${count(lines.length, "line")} · ${count(containers, "container")}`
   );
   out(`${hhmmss(lines[0].at)} → ${hhmmss(lines.at(-1).at)}`);
   out("");
   for (const l of lines)
     out(
-      `${hhmmss(l.at)}  ${l.container.slice(0, 8)}  ${elideDataUrls(l.text).replace(/\s+/g, " ").slice(0, 200)}`
+      `${hhmmss(l.at)}  ${l.container.slice(0, 8)}  ${l.text.replace(/\s+/g, " ").slice(0, 200)}`
     );
   if (records.length >= limit)
     out(
@@ -456,52 +451,23 @@ async function cmdContainerLogs(flags, { from, to, limit, sinceLabel }) {
 }
 
 /**
- * Records back into lines, oldest first so a stack reads top to bottom. The
- * container is the workspace object's id, as the Worker's logs name it.
- *
- * A long line arrives across consecutive `processId`s, cut wherever the pipe
- * was read — mid-line, and at no fixed size, so nothing in a record says it ends
- * one. The long line that matters is computerd's uncaught-exception stack, whose
- * frames embed its whole bundle as a `data:` URL: a record opening on a long
- * base64 run, after a line whose `data:` URL is still open, is that URL going
- * on. Every other record is a line of its own.
+ * Records as lines, oldest first so a stack reads top to bottom. The container
+ * is the sandbox object's id, as the Worker's logs name it.
  */
 function containerLines(records) {
-  const sorted = [...records].sort(
-    (a, b) =>
-      a.timestamp - b.timestamp ||
-      Number(a.$containers?.processId) - Number(b.$containers?.processId)
-  );
-  const open = new Map();
-  const lines = [];
-  for (const r of sorted) {
-    const container =
-      r.$containers?.container?.id ?? r.$containers?.applicationId ?? "?";
-    const seq = Number(r.$containers?.processId);
-    const message = r.source?.message ?? "";
-    const last = open.get(container);
-    if (
-      last?.seq + 1 === seq &&
-      /;base64,[A-Za-z0-9+/=]*$/.test(last.text) &&
-      /^[A-Za-z0-9+/=]{64}/.test(message)
-    ) {
-      last.text += message;
-      last.seq = seq;
-      continue;
-    }
-    const line = { at: r.timestamp, container, text: message, seq };
-    lines.push(line);
-    open.set(container, line);
-  }
-  return lines;
+  return [...records]
+    .sort(
+      (a, b) =>
+        a.timestamp - b.timestamp ||
+        Number(a.$containers?.processId) - Number(b.$containers?.processId)
+    )
+    .map((r) => ({
+      at: r.timestamp,
+      container:
+        r.$containers?.container?.id ?? r.$containers?.applicationId ?? "?",
+      text: r.source?.message ?? ""
+    }));
 }
-
-/** A `data:` URL, as its type and size — a stack frame can carry a bundle. */
-const elideDataUrls = (s) =>
-  s.replace(
-    /data:([\w/+.-]+);base64,[A-Za-z0-9+/=]+/g,
-    (url, type) => `data:${type};base64,<${Math.round(url.length / 1024)} KB>`
-  );
 
 /**
  * `spans` — the Worker's traces, from the telemetry API's `otel` dataset, which
@@ -567,16 +533,16 @@ async function cmdSpans(args) {
     );
   /**
    * `--app` — without the container's egress, as `logs --app`. Every request a
-   * container makes is traced as an HTTP span on the workspace object, and again
-   * on `WorkspaceProxy`: 98% of one window's spans while an install ran. So any
-   * span carrying an HTTP method goes, whatever the method, and every span on the
-   * proxy. The Worker's own HTTP requests go too, the A2A POST among them, so it
-   * is a flag.
+   * container makes to an intercepted host is traced on its class's egress
+   * entrypoint. So any span carrying an HTTP method goes, whatever the method,
+   * and every span on an egress entrypoint. The Worker's own HTTP requests go
+   * too, the A2A POST among them, so it is a flag.
    */
   if (flags.app)
     filters.push(
       filter("http.request.method", "is_null"),
-      filter("cloudflare.entrypoint", "neq", "WorkspaceProxy")
+      filter("cloudflare.entrypoint", "neq", "ClaudeCoordinatorEgress"),
+      filter("cloudflare.entrypoint", "neq", "CodingEgress")
     );
 
   const { res, text } = await telemetryQuery({

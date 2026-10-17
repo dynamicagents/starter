@@ -39,23 +39,6 @@ export { ClaudeCoordinatorEgress } from "./agents/claude-coordinator/egress";
 // every image change would lose unpushed work without it.
 export { DirectoryBackupGateway } from "@dynamicagents/plugins/sandbox";
 
-// The workspaces the sandboxes replaced, kept bound until their storage is
-// deleted: a Durable Object holding one repository's filesystem in
-// SQLite, paired with the container that mounts it. One class per agent that has
-// one — a namespace is keyed by class name, so a shared class would put both
-// agents' checkouts in one namespace. Both are thin subclasses of the base in
-// `@dynamicagents/plugins/workspace`; `verify:isolation` keeps each out of
-// the bundles that do not install it.
-export { CodingWorkspace } from "./agents/coding/workspace";
-export { ClaudeCoordinatorWorkspace } from "./agents/claude-coordinator/workspace";
-
-// Not one of our classes, and **not optional**. `ContainerBackend` builds the
-// container's egress loopback with `ctx.exports.WorkspaceProxy`, so the class
-// has to be in this module's graph under that exact name. Nothing imports it
-// and no binding names it, which makes it look like dead code — deleting it
-// compiles cleanly and breaks every container at runtime.
-export { WorkspaceProxy } from "@cloudflare/computer";
-
 // Core's own class, shipped whole and re-exported unmodified — there is nothing
 // here to subclass, and a namespace is keyed by the class name, so this export
 // is what `ARTIFACTS` resolves to. Why it is required rather than optional sits

@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /**
  * Bundle the sandbox image's daemon, `src/sandbox-daemon.ts`, into
- * `container/daemon.mjs`, which `Dockerfile.sandbox` copies in.
+ * `container/daemon.mjs`, which the `Dockerfile` copies in.
  *
  * Run by wrangler before every deploy, dev run and type generation (`build` in
  * `wrangler.jsonc`), and built rather than committed: the daemon has to speak

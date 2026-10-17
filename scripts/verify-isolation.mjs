@@ -49,7 +49,7 @@ const plugin = (name) => `@dynamicagents/plugins/dist/${name}/`;
  * a bump of either moves every ceiling here at once, and that is not a leak:
  * `forbidden` is the check that would catch one.
  *
- * An agent that owns a workspace additionally carries `core/dist/alarm` and
+ * An agent that owns a sandbox additionally carries `core/dist/alarm` and
  * `core/dist/job` — and *only* such an agent, which is the isolation this file
  * exists to assert still holding.
  *
@@ -94,8 +94,7 @@ const AGENTS = [
       // and leaving one out leaves the assertion below that names
       // `/claude-code` unable to fail for an import added only there.
       "src/agents/coding/sandbox.ts",
-      "src/agents/coding/egress.ts",
-      "src/agents/coding/workspace.ts"
+      "src/agents/coding/egress.ts"
     ],
     // Both coders share one sandbox base, from `@dynamicagents/plugins/sandbox`,
     // and the whole point of that base is that it knows nothing about Claude
@@ -105,12 +104,9 @@ const AGENTS = [
     // would also put an Anthropic credential path in an agent that has no
     // business with one.
     forbidden: [plugin("claude-code")],
-    // Measured 13474 KiB. Over generic's by the container client and
-    // `@cloudflare/computer/git`, which bundles isomorphic-git so that clone,
-    // fetch and push run on this side of the container boundary and the GitHub
-    // token never crosses it. A workspace agent, so it also carries `/alarm`
-    // and `/job`.
-    maxBytes: 14_910_000
+    // Measured 12516 KiB: generic's, plus the plugins this agent installs and
+    // the `/alarm` and `/job` its sandbox runs on.
+    maxBytes: 13_850_000
   },
   {
     name: "claude-coordinator",
@@ -123,14 +119,13 @@ const AGENTS = [
       // where the credential pool and the Anthropic egress are wired, so they
       // are the files this check most needs to be watching.
       "src/agents/claude-coordinator/sandbox.ts",
-      "src/agents/claude-coordinator/egress.ts",
-      "src/agents/claude-coordinator/workspace.ts"
+      "src/agents/claude-coordinator/egress.ts"
     ],
     // Nothing to forbid: this agent installs every plugin in this repo, and
     // `coding`'s entry above is the other half of the `/claude-code` pair.
     forbidden: [],
-    // Measured 13606 KiB: `coding`'s, plus `/claude-code`.
-    maxBytes: 15_050_000
+    // Measured 12588 KiB: `coding`'s, plus `/claude-code`.
+    maxBytes: 13_930_000
   }
 ];
 
@@ -149,8 +144,7 @@ const EXTERNAL = ["cloudflare:*", "node:*", ...builtinModules];
  * name: one that imported a class would carry that agent's plugins into every
  * graph it is part of, another tenant's included.
  */
-const AGENT_CLASS =
-  /^src\/agents\/[^/]+\/(agent|children|sandbox|egress|workspace)\.ts$/;
+const AGENT_CLASS = /^src\/agents\/[^/]+\/(agent|children|sandbox|egress)\.ts$/;
 
 let leakFailed = false;
 let sizeFailed = false;

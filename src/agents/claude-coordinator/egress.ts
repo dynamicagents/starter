@@ -18,6 +18,12 @@ import {
  * answers its review as the deployment's account — git and `gh` both, so the
  * API is intercepted too. Every credentialed push is still held to what
  * `repo_push` would allow; `@dynamicagents/plugins/repo-github` says what that is.
+ *
+ * **Every other host is reached directly, unrestricted.** A restriction that
+ * forgot a host would stop `npm ci` dead, inside a `postinstall` whose error
+ * names no egress. What that gives up is a bound on exfiltration — the
+ * container can send its checkout anywhere — and what holds is that it holds no
+ * credential. `.env.example` says how to scope the token for that.
  */
 export const CLAUDE_COORDINATOR_EGRESS: readonly SandboxEgressRule[] = [
   claudeCodeSandboxEgress({ label: "claude-coordinator-egress" }),

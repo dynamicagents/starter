@@ -12,7 +12,7 @@ import {
   ClaudeCoordinatorPlannerChild,
   ClaudeCoordinatorWriterChild
 } from "@/agents/claude-coordinator/children";
-import { resolveInstallCommand } from "@dynamicagents/plugins/workspace";
+import { resolveInstallCommand } from "@dynamicagents/plugins/sandbox";
 import { CODING, CLAUDE_COORDINATOR, GENERIC } from "@/config";
 import { INSTALL_PLAN } from "@/workspace/install-plan";
 

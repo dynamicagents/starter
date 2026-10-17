@@ -1,7 +1,7 @@
 import type { ThinkModel } from "@cloudflare/think";
 import type { AgentPlugin, SubAgentSpec } from "@dynamicagents/core";
 import { SubAgent } from "@dynamicagents/core/subagent";
-import { sandboxWorkspace } from "@dynamicagents/plugins/computer";
+import { computerWorkspace } from "@dynamicagents/plugins/computer";
 import { CODING } from "@/config";
 import { agentModel, turnTask } from "@/model";
 import { CODE } from "./code";
@@ -25,7 +25,7 @@ export class CodingChild extends SubAgent<Env> {
     );
   });
 
-  override workspace = sandboxWorkspace(this.#place, () =>
+  override workspace = computerWorkspace(this.#place, () =>
     this.pluginContext().runtime()
   );
 

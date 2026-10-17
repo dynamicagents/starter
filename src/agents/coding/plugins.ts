@@ -1,6 +1,6 @@
 import { restrictTools, type AgentPlugin } from "@dynamicagents/core";
 import {
-  sandboxComputer,
+  computer,
   type SandboxComputerConfig
 } from "@dynamicagents/plugins/computer";
 import { repo } from "@dynamicagents/plugins/repo-github";
@@ -125,7 +125,7 @@ export const parentPlugins = (
      * rather than a second one drifting alongside.
      */
     hostScratch({ exec: shell, workspace: sandbox, active, author }),
-    restrictTools(sandboxComputer(SANDBOX_TOOLS), {
+    restrictTools(computer(SANDBOX_TOOLS), {
       allow: ["grep"],
       context: [
         {
@@ -154,6 +154,6 @@ export const parentPlugins = (
  * it runs through `bash`, which leaves no credential anywhere near it.
  */
 export const childPlugins = (env: Env): AgentPlugin<Env>[] => [
-  sandboxComputer(SANDBOX_TOOLS),
+  computer(SANDBOX_TOOLS),
   browser({ binding: env.BROWSER })
 ];

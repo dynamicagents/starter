@@ -7,7 +7,7 @@ import {
   sandboxName,
   sessionAdvisory,
   type SnapshotSeed,
-  type WorkspaceAdvisory
+  type SandboxAdvisory
 } from "@dynamicagents/plugins/sandbox";
 import type { ActiveCheckout, ActiveRepo } from "./active-repo";
 import { SCRATCH_REPO } from "./scratch";
@@ -540,7 +540,7 @@ export interface WorktreeHost extends SandboxGitHost {
     repo?: string;
   }): Promise<{ present: boolean }>;
   checkoutDir(): Promise<string | undefined>;
-  advisories(): Promise<readonly WorkspaceAdvisory[]>;
+  advisories(): Promise<readonly SandboxAdvisory[]>;
   snapshotRecord(): Promise<SnapshotSeed | undefined>;
   seedFrom(seed: SnapshotSeed): Promise<{ seeded: boolean; reason?: string }>;
   release(): Promise<{ released: boolean; reason?: string }>;

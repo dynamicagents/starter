@@ -8,7 +8,7 @@ import type { AgentPlugin } from "@dynamicagents/core";
 import { StepAgent } from "@dynamicagents/core/agent";
 import type { SubAgentClass } from "@dynamicagents/core/subagent";
 import type { StepJob } from "@dynamicagents/core/workflow";
-import { sandboxWorkspace } from "@dynamicagents/plugins/computer";
+import { computerWorkspace } from "@dynamicagents/plugins/computer";
 import { sandboxName } from "@dynamicagents/plugins/sandbox";
 import type { ContextConfig } from "agents/context";
 import type { LanguageModel, ToolSet } from "ai";
@@ -50,7 +50,7 @@ export class CodingAgent extends StepAgent<Env> {
   );
 
   /** Think's file tools, over the checkout rather than this object's SQLite. */
-  override workspace = sandboxWorkspace(this.#place);
+  override workspace = computerWorkspace(this.#place);
   /**
    * Off, because the parent has no shell: Think's own `bash` would run over the
    * same workspace and could write anything the file tools are kept from.

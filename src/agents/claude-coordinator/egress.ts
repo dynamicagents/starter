@@ -1,6 +1,6 @@
 import { WorkerEntrypoint } from "cloudflare:workers";
 import type { EgressRoute } from "agents/harness/container";
-import { claudeCodeSandboxEgress } from "@dynamicagents/plugins/claude-code";
+import { claudeCodeEgress } from "@dynamicagents/plugins/claude-code";
 import { githubSandboxEgress } from "@dynamicagents/plugins/repo-github";
 import {
   sandboxEgress,
@@ -26,7 +26,7 @@ import {
  * credential. `.env.example` says how to scope the token for that.
  */
 export const CLAUDE_COORDINATOR_EGRESS: readonly SandboxEgressRule[] = [
-  claudeCodeSandboxEgress({ label: "claude-coordinator-egress" }),
+  claudeCodeEgress({ label: "claude-coordinator-egress" }),
   githubSandboxEgress({ tokenBinding: "GITHUB_TOKEN", api: true })
 ];
 

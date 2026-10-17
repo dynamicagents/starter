@@ -138,6 +138,13 @@ and plugins bound it by range because a library has to leave a consumer room; th
 is the deployment, and it has no one to leave room for. Move it as a deliberate edit
 beside the `agents` bump it needs, never by widening it.
 
+**`vitest` stays a major behind the registry until the whole train moves.** On
+vitest 5 the Cloudflare Workers pool crashes workerd mid-run and the test file it
+was running goes unreported, and this Worker — every agent and every plugin in one
+bundle — is the worst hit of the three that run the pool. core's `AGENTS.md` is the
+home of that ceiling and of what to re-check before lifting it; it moves here in
+the round that moves it there.
+
 ### `main`, and what it installs
 
 **`main` is the only branch.** A PR into it squash-merges, and each green push deploys

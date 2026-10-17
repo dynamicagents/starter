@@ -16,10 +16,10 @@
  * ## Why this is SQL and not `storage.get`
  *
  * The selection must survive an isolate eviction mid-task, or a new isolate
- * falls back to a caller-level workspace and `repo_diff` reports an empty tree
- * for a checkout sitting right there. So it is persisted — but `workspaceName()`
+ * falls back to a caller-level sandbox and `repo_diff` reports an empty tree
+ * for a checkout sitting right there. So it is persisted — but `sandboxName()`
  * is a **synchronous** thunk called on the path of every tool, inside
- * `workspaceExec`, where there is nowhere to await. `storage.get` is async;
+ * `sandboxExec`, where there is nowhere to await. `storage.get` is async;
  * `storage.sql` is not. Hence a one-row table, with an in-memory cache in front
  * so the common case touches no storage at all.
  *
@@ -38,12 +38,12 @@
  * selection before the follow-up turn that reviews and pushes the work.
  *
  * The fix is to key the selection by task, which every turn now carries
- * (`StepAgent.turnTaskId()`), threaded through `workspaceName()`, which must stay
+ * (`StepAgent.turnTaskId()`), threaded through `sandboxName()`, which must stay
  * synchronous. Until then, one task at a time per caller is a load-bearing
  * assumption.
  *
- * The workspace itself should stay keyed on `(caller, repo)` even then: per-task
- * workspaces would mean a fresh checkout and a fresh install every time, which is
+ * The sandbox itself should stay keyed on `(caller, repo)` even then: per-task
+ * sandboxes would mean a fresh checkout and a fresh install every time, which is
  * the cost this whole design exists to avoid. It is the *routing* that needs task
  * scope, not the storage.
  */

@@ -1,7 +1,7 @@
 /**
  * The sandbox image's entrypoint: the harness daemon, serving Claude Code as
  * each session's CLI. Node, not a Worker — `scripts/build-daemon.mjs` bundles
- * it for `Dockerfile.sandbox` — so it imports nothing that reaches the Worker's
+ * it for the `Dockerfile` — so it imports nothing that reaches the Worker's
  * bindings, and its relative imports are to modules with none.
  *
  * What a session is told to answer is named here and compiled in: a run's

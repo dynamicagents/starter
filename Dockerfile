@@ -1,166 +1,63 @@
-# The workspace container, for every agent in this Worker that has one.
+# The sandbox image: one container per caller per repository, whose disk is
+# the checkout, driven by its Durable Object through the harness daemon.
 #
-# **One Dockerfile, two images.** `coding` and `claude-coordinator` both point a
-# `containers[]` entry here; the second passes a `CLAUDE_CODE_VERSION` build arg
-# (see the block near the end) and gets the CLI, the first does not and stays
-# smaller. Cloudflare builds once per entry, so two entries naming this file are
-# two images.
+# What `@dynamicagents/plugins/sandbox` requires of an image is in its README:
+# the `agent` user owning /workspace, setpriv, timeout, an `env` that takes
+# `-C`, git, update-ca-certificates, sandbox-shim, and a root-owned session
+# skeleton. The rest is what a repository needs to build: Node, a C toolchain
+# for native modules, and ripgrep for the file tools' searches.
 #
-# Generic, the agent without a workspace, never touches
-# one. Cloudflare builds this on `wrangler deploy` from the `containers` block in
-# wrangler.jsonc, always for linux/amd64: wrangler passes `--platform` itself and
-# rejects any other value, so never set one here.
-#
-# The ENTRYPOINT is `computerd`, the workspace daemon from
-# `@cloudflare/computer`. It mounts the Durable Object's SQLite-backed VFS at
-# MOUNT_POINT over FUSE, so every command below sees the same tree the Worker
-# reads and writes — and that tree survives the container, which is the whole
-# reason this image replaced the `@cloudflare/sandbox` one.
-#
-# **The container's TLS trust is not established here**, and cannot be: under
-# `egress: { mode: "http-gateway" }` the CA is mounted after the container
-# starts, so anything in this image runs too early to find it. The workspace
-# object installs it instead — the `ca-trust` module in
-# `@dynamicagents/plugins/computer` carries the ordering constraint and the
-# measurements.
-# `NODE_OPTIONS` below is the other half, and belongs here because it is an
-# image property.
-#
-# The `computerd` tag is paired with `@cloudflare/computer`;
-# `scripts/verify-container-env.mjs` holds it to the installed version.
-#
-# Add to this file deliberately. Every layer is image size, image size is
-# container cold start, and cold start is already the slow part of a task.
+# Each `containers[]` entry in wrangler.jsonc builds its own image from this
+# file; wrangler.jsonc says how they differ. wrangler builds for linux/amd64 and
+# rejects any other `--platform`, so never set one here. Every layer is cold
+# start; add to it deliberately.
 
-# A single layer over `scratch` holding one file: the 126 MB SEA binary at
-# /usr/local/bin/computerd. Nothing else is in this image, so it is a staging
-# stage and never a base.
-FROM ghcr.io/cloudflare/computer-computerd-linux-x64:0.5.0 AS computerd
+# `sandbox-shim`, which `@cloudflare/sandbox`'s `Files` and `DirectoryBackup`
+# run through. Its tag follows the `@cloudflare/sandbox` the plugins install.
+FROM docker.io/cloudflare/sandbox:1.0.1 AS shim
 
-# `debian:stable-slim`, matching the upstream reference recipe
-# (examples/container/Dockerfile) exactly — and the base is the load-bearing
-# part of that match, not an incidental one.
-#
-# The obvious simplification is `node:24-slim`, which would drop the nodesource
-# block below. It does not work: `node:24-slim` is Debian **bookworm**, and the
-# FUSE packaging differs between the two releases in a way that decides whether
-# this image can mount anything at all. On trixie, `fuse3` ships
-# `/usr/bin/fusermount` (it took over the diversion, and `fusermount3` alongside
-# it). On bookworm, `fusermount` comes from a separate `fuse` package which
-# **conflicts** with `fuse3`, and `libfuse2t64` does not exist there — the
-# pre-t64 name is `libfuse2`.
-#
-# So a bookworm base needs a different, untested package set for the one
-# component whose failure mode is "the workspace is empty and no command can see
-# the tree". `wrangler dev` cannot catch that either: it has no `/dev/fuse`, so
-# computerd falls back to the userspace shim and a local run proves nothing.
-# Fidelity to the tested set is worth a nodesource block.
-FROM docker.io/debian:stable-slim
+FROM docker.io/node:24-trixie-slim
 
-# fuse3,     — what computerd needs to mount its VFS. The `libfuse.so.2` the
-# libfuse2t64   binary links is unpacked from inside the SEA at startup, so
-#               these are the mount helper and its runtime, not the library
-#               itself. Straight from the upstream recipe; keep them together.
-# ripgrep    — reading an unfamiliar repo is the first thing the agent does, and
-#               `grep -r` across node_modules is how a turn runs out of time.
-#               It matters more here than it did on a real disk: reads go
-#               through FUSE.
-# xxd        — the model reaches for it unprompted to inspect trailing bytes of a
-#               file (`tail -c 200 README.md | xxd`), and it was the *first*
-#               command of several consecutive production runs. Absent, that cost
-#               a turn each time: exit 127, then a retry with `od -c`. It is the
-#               `xxd` package on Debian 13, **not** `vim-common` — the two were
-#               split apart, and vim-common alone leaves no `xxd` on PATH
-#               (verified against debian:stable-slim, 13.6).
-# make,      — node-gyp's prerequisites. Nothing in the Dynamic Agents repos compiles
-# g++,          today (workerd, esbuild and friends all ship prebuilt binaries),
-# python3       but one transitive dependency that does turns an install into
-#               "gyp ERR! find Python", and that is not a failure the agent can
-#               route around: fixing it means an operator rebuilding and
-#               redeploying this image. ~150 MB to delete a class of dead run.
-# git        — the whole delivery path is clone → commit → push.
+# Node 24 because every repository here pins it and CI runs it: an agent
+# building on another reports "passed in the sandbox, failed in CI".
 #
-# Node 24, not the reference's 22. Every Dynamic Agents repo pins 24 in `.nvmrc` and
-# `engines`, and CI runs `setup-node@v6` with 24. An agent that builds and tests
-# on 22 eventually produces "passed in the sandbox, failed in CI", which is the
-# one result a coding agent must never produce.
-#
-# It is a plain system Node rather than the separate `/opt` prefix the
-# predecessor image used. That prefix existed because the `@cloudflare/sandbox`
-# base ran its own container server on the Node it shipped, and moving it out
-# from under that server broke startup. `computerd` has no such constraint: it
-# is a Node SEA that embeds its own runtime, the `fuse-native` prebuilds and
-# `libfuse` as assets, so the host image needs no Node at all. Everything
-# installed here is for the *agent's* commands, and there is one Node on PATH.
+# `procps` for `pkill`, which a cancelled command is ended with. `xxd` is its
+# own package on Debian 13 — `vim-common` alone leaves none on PATH — and the
+# model reaches for it unprompted; without it, a turn goes on exit 127.
 RUN DEBIAN_FRONTEND=noninteractive apt-get update \
   && apt-get install -y --no-install-recommends \
     ca-certificates \
     curl \
-    gnupg \
-    fuse3 \
-    libfuse2t64 \
     git \
     ripgrep \
+    procps \
     xxd \
     make \
     g++ \
     python3 \
-  && mkdir -p /etc/apt/keyrings \
-  && curl -fsSL https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key \
-    | gpg --dearmor -o /etc/apt/keyrings/nodesource.gpg \
-  && echo "deb [signed-by=/etc/apt/keyrings/nodesource.gpg] https://deb.nodesource.com/node_24.x nodistro main" \
-    > /etc/apt/sources.list.d/nodesource.list \
-  && apt-get update \
-  && apt-get install -y --no-install-recommends nodejs \
   && rm -rf /var/lib/apt/lists/*
 
-COPY --from=computerd /usr/local/bin/computerd /usr/local/bin/computerd
+COPY --from=shim /usr/local/bin/sandbox-shim /usr/local/bin/sandbox-shim
 
-# pnpm and yarn on demand, for repos that are not npm ones. A pnpm repo has no
-# package-lock.json, so `npm ci` fails outright there and the install step burns
-# its budget discovering it; corepack ships with Node and honours the repo's own
-# `packageManager` pin, which is exactly what `resolveInstallCommand` keys on.
-#
-# Named managers rather than a bare `corepack enable`, which also shims `npm`:
-# a shimmed npm in a repo with no `packageManager` field resolves through
-# corepack's last-known-good version, putting a network round trip in front of
-# every `npm ci`. Guarded because corepack is on its way out of Node, and a
-# missing nice-to-have must not fail the image build.
+# pnpm and yarn for a repository that pins one, as `packageManager` does.
+# Named rather than a bare `corepack enable`, which shims `npm` too and puts a
+# network round trip in front of every `npm ci` in a repository with no pin.
 RUN if command -v corepack > /dev/null; then \
       corepack enable pnpm yarn; \
     else \
       echo "corepack is not bundled with this Node build — skipping pnpm/yarn shims"; \
     fi
 
-# --- Claude Code, for the agent whose sub-agents run it ---------------------
+# Claude Code, for `claude-coordinator`'s image: `CLAUDE_CODE_VERSION` is a
+# build var on that entry in wrangler.jsonc, pinned to the version the
+# claude-code plugin verified, and `npm run check` fails when the two differ —
+# plugins' egress and stream parser are written against one version's traffic.
+# `coding`'s entry sets none, and its image has no CLI.
 #
-# `build_vars` in wrangler.jsonc is a Docker build arg, so which image gets the
-# CLI is decided per `containers[]` entry rather than per file. The `coding`
-# entry passes nothing and this is a no-op; the `claude-coordinator` entry passes a
-# version.
-#
-# A build arg rather than a second Dockerfile, because everything above encodes
-# things that were expensive to learn — why the base is trixie and not bookworm,
-# why `xxd` rather than `vim-common`, why Node 24 — and a copied file would drift
-# silently, in whichever direction the image nobody redeployed recently went.
-#
-# **The pin is load-bearing, not tidiness.** The egress gateway rewrites this
-# client's requests and its stream parser reads what it prints, and both are
-# written against one version's traffic — `VERIFIED_CLAUDE_CODE_VERSION` in
-# `@dynamicagents/plugins/claude-code`. The version passed here is that one, and
-# `npm run check` fails when they differ. A newer CLI is verified in plugins
-# first, by its probe; the plugins repository's AGENTS.md ("Updating Claude
-# Code") is the procedure.
-#
-# **The `postinstall` is the install**, so `--allow-scripts` approves it. `claude`
-# is published as a placeholder that exits 1, which the script replaces with the
-# platform's native binary. npm warns on an unapproved install script or blocks
-# it, depending on the release the nodesource line ships, and a global install
-# never reads this repo's `allowScripts`. `claude --version` fails the build on
+# The `postinstall` is the install — `claude` is published as a placeholder that
+# exits 1 until it runs — and a global install never reads `allowScripts`, so
+# `--allow-scripts` approves it here and `claude --version` fails the build on
 # the placeholder.
-#
-# `--no-fund --no-audit` for the same reason as the ENV block below: a build log
-# nobody reads is still a build log somebody has to scroll.
 ARG CLAUDE_CODE_VERSION=""
 RUN if [ -n "$CLAUDE_CODE_VERSION" ]; then \
       npm i -g --no-fund --no-audit \
@@ -171,24 +68,9 @@ RUN if [ -n "$CLAUDE_CODE_VERSION" ]; then \
       echo "no CLAUDE_CODE_VERSION build arg: this image has no Claude Code"; \
     fi
 
-# --- The GitHub CLI ------------------------------------------------------------
-#
-# Behind its own build arg for the reason Claude Code is: `build_vars` in
-# wrangler.jsonc decides per `containers[]` entry, so the `coding` image passes
-# nothing and stays smaller.
-#
-# **Signed in, with no credential in the image or the container.** A
-# claude-coordinator session pushes its branch, opens its pull request and
-# answers its review with `gh` and git. Both present a placeholder token, and the
-# egress gateway swaps in the real one for GitHub's hosts only — `githubToken` in
-# `@dynamicagents/plugins/claude-code`. The placeholder lives in the session env,
-# not here: `coding`'s container egresses `direct`, where nothing would swap it.
-#
-# A pinned release tarball rather than the apt repository: `gh` is a static Go
-# binary that needs no dependency resolution, so this is one layer and no second
-# keyring, and the checksum is verified because the build reaches the network for
-# it. Only `bin/gh` is kept; the tarball also carries manpages and completions
-# that nothing in here reads.
+# `gh`, for a session that opens and answers its own pull requests. It reaches
+# the API through the egress, which intercepts `api.github.com` and swaps in the
+# token: `gh` holds a placeholder, never the credential.
 ARG GH_VERSION=""
 ARG GH_SHA256=""
 RUN if [ -n "$GH_VERSION" ]; then \
@@ -203,120 +85,31 @@ RUN if [ -n "$GH_VERSION" ]; then \
       echo "no GH_VERSION build arg: this image has no GitHub CLI"; \
     fi
 
-# Fail the BUILD, not a task, if the base image stops delivering the
-# toolchain. npm ignores `engines` unless a repo opts in, so nothing downstream
-# would tell you.
-RUN node -e "const m=Number(process.versions.node.split('.')[0]); if (m < 24) { console.error('this image needs Node >= 24, PATH resolves to ' + process.execPath + ' at ' + process.versions.node); process.exit(1); }" \
-  && node -p "'node ' + process.version + ' at ' + process.execPath" \
-  && npm --version \
+# The agent, which every command, install and session runs as, and which owns
+# the checkouts. The skeleton every session's home starts as is root's, so a
+# session starts from this image rather than from what an earlier one left.
+RUN useradd --create-home --home-dir /home/agent --uid 10001 --user-group \
+      --shell /bin/bash agent \
+  && mkdir -p /workspace /etc/da/skel \
+  && chown agent:agent /workspace
+
+# Fail the build, not the first session, on a missing requirement.
+RUN node -e "const m=Number(process.versions.node.split('.')[0]); if (m < 24) { console.error('this image needs Node >= 24, found ' + process.versions.node); process.exit(1); }" \
   && git --version \
   && rg --version | head -n1 \
-# The workspace object shells out to this to trust the interception CA, so a
-# base image that stopped shipping it must fail here rather than in a task.
-  && command -v update-ca-certificates \
-# The workspace object bind-mounts container disk over node_modules with these;
-# `@dynamicagents/plugins/computer` carries why.
-  && command -v mount && command -v mountpoint && command -v sha256sum \
-  && test -x /usr/local/bin/computerd
+  && command -v setpriv timeout pkill update-ca-certificates \
+  && env -C / true \
+  && test -x /usr/local/bin/sandbox-shim
 
-# Everything below exists because tool output lands in a model's context window.
-# `bash` truncates to a character budget, so every one spent on an ANSI colour
-# code or an npm progress bar is one not spent on the error message.
-#
-# **The COMPUTER_VAR_ prefix is what makes any of it reach a command**, and its
-# absence fails silently. A command spawned by the workspace inherits PATH, HOME,
-# TMPDIR, TZ, LANG, TERM and the LC_* family from `computerd` and nothing else —
-# the allowlist that keeps the daemon's own secret out of a cloned repository's
-# `postinstall`. Anything else arrives only as COMPUTER_VAR_<NAME>, which the
-# daemon strips on the way through, so COMPUTER_VAR_CI=1 is what a command sees
-# as CI=1. An unprefixed ENV here configures `computerd` and stops there.
-#
-# LANG is the exception below, and deliberately unprefixed: it is on the
-# allowlist already, so it passes as itself.
-#
-# CI=1 does double duty: it is also what stops wrangler and friends from
-# blocking on an interactive prompt that nobody is there to answer — a hang,
-# which is a worse failure than an error.
-#
-# HUSKY=0 is the judgement call in this file. An install runs `prepare`, which
-# in this repo family installs git hooks, and slack-gatekeeper's pre-commit hook
-# runs the full `npm run check`. That would turn every `repo_commit` into a
-# multi-minute lint run surfacing as an opaque "commit failed" with the real
-# cause truncated out of the middle of the output. The agent should run
-# `npm run check` deliberately, as its own visible step. Drop this line if you
-# would rather the repo's own gate fire on each commit.
-#
-# DISABLE_AUTOUPDATER=1 belongs in the image as well as in the exec environment
-# the plugin passes. The plugin's copy covers the sessions it launches; this one
-# covers anything else that ever runs `claude` in here — a repo script, a command
-# the model writes — and an autoupdate is exactly the event the pin above exists
-# to prevent. Harmless in the image without the CLI.
-#
-# IS_SANDBOX=1 is here for the same reason, and it is load-bearing for the same
-# clients. **This container runs as root**, and the CLI refuses to bypass its
-# permission checks under uid 0 without it — `process.exit(1)` before the first
-# JSON line, with the only explanation on stderr. The plugin sets it alongside
-# `--permission-mode bypassPermissions` so the two cannot drift; this copy is
-# what makes any other `claude` in here behave the same way the sessions do.
-#
-# It says what it means: a container with no persistent identity, holding no
-# credential, running a cloned repository's `postinstall` by design. If this
-# image is ever changed to exec as a non-root user, delete this line — the guard
-# it clears will no longer be firing.
-ENV COMPUTER_VAR_CI=1 \
-    COMPUTER_VAR_HUSKY=0 \
-    COMPUTER_VAR_DISABLE_AUTOUPDATER=1 \
-    COMPUTER_VAR_IS_SANDBOX=1 \
-    COMPUTER_VAR_NO_COLOR=1 \
-    COMPUTER_VAR_FORCE_COLOR=0 \
-    COMPUTER_VAR_NPM_CONFIG_FUND=false \
-    COMPUTER_VAR_NPM_CONFIG_AUDIT=false \
-    COMPUTER_VAR_NPM_CONFIG_PROGRESS=false \
-    COMPUTER_VAR_NPM_CONFIG_UPDATE_NOTIFIER=false \
-    COMPUTER_VAR_WRANGLER_SEND_METRICS=false \
-    LANG=C.UTF-8
+COPY container/daemon.mjs /opt/da/daemon.mjs
 
-# Node reads the OS trust store instead of the one it bundles.
-#
-# This is what makes the workspace object's CA install reach the clients that
-# matter. Node ships its own root list and ignores the system one, so
-# `update-ca-certificates` alone leaves `npm ci`, `claude -p` and every
-# `bash` running `node …` failing on an intercepted connection exactly as if nothing
-# had been installed — measured, not assumed.
-#
-# The alternative is `NODE_EXTRA_CA_CERTS`, which cannot be set from here: the
-# path does not exist at build time and nothing in the image can export it into
-# a process the Worker spawns later. Supplying it per-exec would mean threading
-# one variable through every path that spawns a process in this container, each
-# with its own lifetime — and getting it wrong anywhere fails as a TLS error
-# that names no cause.
-#
-# The prefix carries the same weight as the flag: unprefixed, this configures
-# `computerd`, which makes no outbound TLS connection and does not need it, while
-# every client that does keeps failing.
-#
-# Safe because `ca-certificates` is installed above, so the OS store already
-# holds the normal public roots — verified: `npm ping` reaches the registry with
-# this set and no extra CA present.
-ENV COMPUTER_VAR_NODE_OPTIONS=--use-openssl-ca
+ENV LANG=C.UTF-8
+WORKDIR /workspace
 
-# computerd's own configuration. `ContainerBackend` passes PORT and MOUNT_POINT
-# in the container env when it starts the container, so these two are defaults
-# for a manual `docker run` rather than load-bearing — but they must agree with
-# the backend's, or a hand-run container answers on a port nothing dials.
-#
-# FUSE_MOUNT=auto is the one that matters, and it is why a single image serves
-# both environments: Cloudflare Containers expose /dev/fuse to the workload, so
-# the real FUSE backend mounts; `wrangler dev` does not, so computerd falls back
-# to a userspace shim. `computerd` logs which one it resolved to at startup —
-# `[info] FUSE_MOUNT=auto resolved to backend=…` — and that log line is the
-# first thing to read when commands cannot see the tree.
-ENV PORT=8080 \
-    MOUNT_POINT=/workspace \
-    FUSE_MOUNT=auto
-EXPOSE 8080
-
-# No WORKDIR, deliberately: computerd mounts the workspace at MOUNT_POINT after
-# it starts, so a build-time WORKDIR /workspace would bake an empty directory
-# that the mount then covers. Every exec passes an explicit cwd.
-ENTRYPOINT ["/usr/local/bin/computerd"]
+# The daemon runs as the agent, holding one capability that grants nothing
+# here, so Linux refuses agent processes its `/proc/<pid>/environ`, where the
+# harness's token is. It refuses to start any other way:
+# `@dynamicagents/plugins/sandbox/daemon` says why.
+ENTRYPOINT ["setpriv", "--reuid=10001", "--regid=10001", "--init-groups", \
+  "--inh-caps=-all,+net_bind_service", "--ambient-caps=+net_bind_service", \
+  "--bounding-set=-all,+net_bind_service", "node", "/opt/da/daemon.mjs"]

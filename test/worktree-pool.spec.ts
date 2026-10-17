@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { env } from "cloudflare:workers";
 import { runInDurableObject } from "cloudflare:test";
-import { workspaceName } from "@dynamicagents/plugins/workspace";
+import { sandboxName } from "@dynamicagents/plugins/sandbox";
 import { SCRATCH_REPO } from "@/workspace/scratch";
 import {
   claim,
@@ -36,15 +36,15 @@ describe("addressing a worktree", () => {
   /**
    * The sentinel shares a namespace with the `owner/repo` strings a model can
    * cause to be cloned, so it has to be one no repository name can collide with,
-   * and never carry the separator `workspaceName` joins on.
+   * and never carry the separator `sandboxName` joins on.
    */
   it("cannot collide with a repository anyone could clone, or forge a caller", () => {
     const sentinel = worktreeRepo(REPO, 0);
     expect(sentinel).toBe("<worktree:acme/api:0>");
     expect(sentinel).not.toContain("|");
     expect(sentinel).not.toBe(SCRATCH_REPO);
-    expect(workspaceName("caller", sentinel)).not.toBe(
-      workspaceName("caller", REPO)
+    expect(sandboxName("caller", sentinel)).not.toBe(
+      sandboxName("caller", REPO)
     );
   });
 
@@ -492,9 +492,8 @@ describe("a worktree whose workspace was reclaimed", () => {
 
 describe("the pool in the parent's SQLite", () => {
   it("keeps rows per repository and slot, and finds them across repositories", async () => {
-    const stub = env.CLAUDE_COORDINATOR_WORKSPACE.get(
-      env.CLAUDE_COORDINATOR_WORKSPACE.idFromName("pool-spec")
-    );
+    // Any Durable Object's SQLite: the pool asks nothing else of its host.
+    const stub = env.CLAUDE_COORDINATOR_SANDBOX.getByName("pool-spec");
     await runInDurableObject(stub, (_instance, state) => {
       const pool = sqlPoolStore(state.storage);
       const row: Worktree = {

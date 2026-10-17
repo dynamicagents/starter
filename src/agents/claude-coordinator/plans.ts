@@ -5,7 +5,7 @@ import {
 } from "@dynamicagents/core/artifacts";
 import { CLAUDE_CODE_WRITE_INPUT } from "@dynamicagents/plugins/claude-code";
 import { z } from "zod";
-import type { SessionNote } from "./workspace";
+import type { SessionNote } from "./sandbox";
 
 /**
  * A plan, as `claude-coordinator` keeps one: an artifact of its own, which a

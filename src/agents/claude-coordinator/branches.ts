@@ -1,6 +1,6 @@
 import { ARTIFACT_RETENTION_MS } from "@dynamicagents/core/artifacts";
 import type { PlannedSession } from "./plans";
-import type { SessionNote } from "./workspace";
+import type { SessionNote } from "./sandbox";
 
 /**
  * Which conversation a branch carries, so a session sent back to it with

@@ -1,9 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { env } from "cloudflare:workers";
-import { makeDoHelpers } from "@dynamicagents/core/testing";
-import type { CodingWorkspace } from "@/index";
 import type { PluginContext } from "@dynamicagents/core";
-import { openWorkspace, workspaceName } from "@dynamicagents/plugins/workspace";
+import { sandboxName } from "@dynamicagents/plugins/sandbox";
 import { SCRATCH_OPEN_TOOL } from "@dynamicagents/plugins/scratch";
 import type { ActiveCheckout, ActiveRepo } from "@/workspace/active-repo";
 import { hostScratch, SCRATCH_DIR, SCRATCH_REPO } from "@/workspace/scratch";
@@ -22,10 +20,6 @@ import { hostScratch, SCRATCH_DIR, SCRATCH_REPO } from "@/workspace/scratch";
  * exists.** Both are answered by hooks, so both are testable without a
  * container — which is just as well, since the pool cannot start one.
  */
-
-const { freshStub: freshWorkspace } = makeDoHelpers<CodingWorkspace>(
-  env.CODING_WORKSPACE
-);
 
 /** `ActiveRepo` over two variables — the same contract, without the SQLite. */
 function fakeActive(): ActiveRepo {
@@ -93,44 +87,51 @@ async function open(
   return String(await execute({}, { toolCallId: "call-1", messages: [] }));
 }
 
-/** A workspace with a scratchpad on disk, as `git init` would leave it. */
-async function seedScratch(stub: DurableObjectStub<CodingWorkspace>) {
-  using ws = await openWorkspace(stub);
-  await ws.fs.mkdir(`${SCRATCH_DIR}/.git`, { recursive: true });
-  await ws.fs.writeFile(`${SCRATCH_DIR}/.git/HEAD`, "ref: refs/heads/main\n");
+/**
+ * A sandbox as the hook sees it: `present` is what its probe of the recorded
+ * directory answers, and `records` every checkout it was asked to note.
+ */
+function fakeSandbox(present: boolean) {
+  const records: { dir: string; kind: "scratch" }[] = [];
+  return {
+    records,
+    noteCheckout: async (record: { dir: string; kind: "scratch" }) => {
+      records.push(record);
+      return { present };
+    }
+  };
 }
 
 describe("where a scratchpad lands", () => {
   /**
    * The selection is the routing decision, and it has to land before any command
-   * runs — `exec` and the workspace stub both resolve through it, so a command
-   * issued first would run in whichever workspace the last task left open. The
+   * runs — `exec` and the sandbox stub both resolve through it, so a command
+   * issued first would run in whichever sandbox the last task left open. The
    * same ordering `repo_clone` gets from `beforeCheckout`.
    *
    * The enrolment is the lifecycle half, and it is why this goes through
-   * `active.set()` rather than naming a workspace some other way.
-   * `sweepIdleWorkspaces` walks `seen()`, so a workspace that never passes
+   * `active.set()` rather than naming a sandbox some other way.
+   * `sweepIdleWorkspaces` walks `seen()`, so a sandbox that never passes
    * through here has no backstop at all — which is the state the accidental
-   * `<unassigned>` workspace is in. Going through the same door as a clone gives
+   * `<unassigned>` sandbox is in. Going through the same door as a clone gives
    * a scratchpad the seven-day reclaim every checkout already has, with no second
    * mechanism to maintain.
    */
-  it("selects the scratchpad workspace and enrols it for reclaim", async () => {
-    const stub = freshWorkspace("scratch-select");
-    await seedScratch(stub);
+  it("selects the scratchpad's sandbox and enrols it for reclaim", async () => {
+    const sandbox = fakeSandbox(true);
     const active = fakeActive();
     const { exec } = fakeExec();
 
-    await open({ exec, workspace: () => stub, active, author: AUTHOR });
+    await open({ exec, workspace: () => sandbox, active, author: AUTHOR });
 
     expect(active.get()).toBe(SCRATCH_REPO);
     // What the weekly sweep will walk, and the name it resolves to.
     expect(active.seen()).toContain(SCRATCH_REPO);
-    expect(workspaceName("caller", SCRATCH_REPO)).toBe("caller|<scratch>");
+    expect(sandboxName("caller", SCRATCH_REPO)).toBe("caller|<scratch>");
   });
 
   /**
-   * The test that cannot exist in the plugin: it is the *workspace object* that
+   * The test that cannot exist in the plugin: it is the *sandbox* that
    * has to end up holding the record, and only this side knows which object that
    * is.
    *
@@ -141,18 +142,17 @@ describe("where a scratchpad lands", () => {
    * live assertion of that fix.
    */
   it("records the scratchpad where a delegation will look for it", async () => {
-    const stub = freshWorkspace("scratch-record");
-    await seedScratch(stub);
+    const sandbox = fakeSandbox(true);
     const { exec } = fakeExec();
 
     const said = await open({
       exec,
-      workspace: () => stub,
+      workspace: () => sandbox,
       active: fakeActive(),
       author: AUTHOR
     });
 
-    expect(await stub.checkoutDir()).toBe(SCRATCH_DIR);
+    expect(sandbox.records).toEqual([{ dir: SCRATCH_DIR, kind: "scratch" }]);
     expect(said).toContain("scratchpad");
     expect(said).not.toContain("not usable yet");
   });
@@ -163,14 +163,13 @@ describe("where a scratchpad lands", () => {
    * them. The hook runs the same probe the delegation will, so the disagreement
    * surfaces in a result the model can act on — or not at all.
    */
-  it("reports a scratchpad the workspace cannot see", async () => {
-    // No `.git` seeded, so the workspace's probe finds nothing.
-    const stub = freshWorkspace("scratch-invisible");
+  it("reports a scratchpad the sandbox cannot see", async () => {
+    const sandbox = fakeSandbox(false);
     const { exec } = fakeExec();
 
     const said = await open({
       exec,
-      workspace: () => stub,
+      workspace: () => sandbox,
       active: fakeActive(),
       author: AUTHOR
     });

@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from "vitest";
+import { afterEach, describe, it, expect, vi } from "vitest";
 import { env } from "cloudflare:workers";
 import { runInDurableObject } from "cloudflare:test";
 import type { TurnConfig, TurnContext } from "@cloudflare/think";
@@ -8,7 +8,10 @@ import {
   credentialPool,
   type CredentialState
 } from "@dynamicagents/plugins/claude-code";
+import { GITHUB_TOKEN_PLACEHOLDER } from "@dynamicagents/plugins/repo-github";
 import {
+  egressPlan,
+  sandboxEgress,
   sandboxName,
   SANDBOX_RUNTIME_KEY
 } from "@dynamicagents/plugins/sandbox";
@@ -60,9 +63,10 @@ import {
 } from "@/agents/claude-coordinator/session";
 import { CLAUDE_CODE_SESSION } from "@/config";
 import {
-  claudeCodeConfig,
+  claudeCredentials,
   CREDENTIALS_KEY
 } from "@/agents/claude-coordinator/claude-code";
+import { CLAUDE_COORDINATOR_EGRESS } from "@/agents/claude-coordinator/egress";
 import { admitSession } from "@/agents/claude-coordinator/plugins";
 import { activeRepo } from "@/workspace/active-repo";
 import {
@@ -72,6 +76,7 @@ import {
 import { SCRATCH_REPO } from "@/workspace/scratch";
 import { sqlPoolStore, worktreeRepo } from "@/workspace/worktree-pool";
 import { gitIdentity } from "@/workspace/git-identity";
+import { sandboxEnv } from "@/workspace/container";
 import {
   gitmodulesOf,
   submoduleRepos,
@@ -797,7 +802,7 @@ describe("carrying a plan on from the session that wrote it", () => {
     sessionId: string,
     plan: { id: string; version: number }
   ) {
-    return workspaceAt(place.workspaceName).noteSession(runId, {
+    return sandboxAt(place.workspaceName).noteSession(runId, {
       sessionId,
       plan: plan.id,
       version: plan.version
@@ -850,7 +855,7 @@ describe("carrying a plan on from the session that wrote it", () => {
     const { runtime, asked } = await onParent(async (agent) => {
       const plan = await planned(agent, place);
       // Its handle, but not the plan: it ended before filing a version.
-      await workspaceAt(place.workspaceName).noteSession(plan.runId, {
+      await sandboxAt(place.workspaceName).noteSession(plan.runId, {
         sessionId: "s-plan"
       });
       return build(agent, plan.id, place);
@@ -934,7 +939,7 @@ describe("carrying a plan on from the session that wrote it", () => {
         placingPool(place).pool
       );
       const version = await file(plan.id, "# The plan\n\nDo less.");
-      await workspaceAt(place.workspaceName).noteSession(edit.runId, {
+      await sandboxAt(place.workspaceName).noteSession(edit.runId, {
         sessionId: "s-plan",
         transcript: plan.runId,
         plan: plan.id,
@@ -996,7 +1001,7 @@ describe("carrying a plan on from the session that wrote it", () => {
 
   /** A recovered turn reports the handle again, without the plan it filed. */
   it("keeps the plan a session filed, and forgets a session found gone", async () => {
-    const stub = workspaceAt(`claude-coordinator-spec:${crypto.randomUUID()}`);
+    const stub = sandboxAt(`claude-coordinator-spec:${crypto.randomUUID()}`);
     await stub.noteSession("run-1", {
       sessionId: "s1",
       plan: "p1",
@@ -1063,8 +1068,8 @@ function placingPool(place: SessionPlace) {
   };
 }
 
-/** The workspace object a session ran in, where its handle is recorded. */
-function workspaceAt(name: string) {
+/** The sandbox a session ran in, where its handle is recorded. */
+function sandboxAt(name: string) {
   return env.CLAUDE_COORDINATOR_SANDBOX.getByName(name);
 }
 
@@ -1299,7 +1304,7 @@ describe("the credential pool", () => {
     const binding = env.CLAUDE_COORDINATOR_SANDBOX;
     const poolIn = (storage: DurableObjectStorage) =>
       credentialPool({
-        credentials: claudeCodeConfig(env).credentials,
+        credentials: () => claudeCredentials(env),
         store: {
           read: async () =>
             (await storage.get<CredentialState[]>(CREDENTIALS_KEY)) ?? [],
@@ -1735,11 +1740,9 @@ describe("how hard this deployment asks a session to think", () => {
  */
 describe("claude-coordinator's credential pool", () => {
   it("hands over every configured credential, in declared order", () => {
-    const config = claudeCodeConfig(env as never);
-
     // A misspelled binding reads as `undefined` and is filtered out, so a
     // missing entry fails here rather than at the first 429.
-    expect(config.credentials()).toEqual([
+    expect(claudeCredentials(env as never)).toEqual([
       env.CLAUDE_CODE_OAUTH_TOKEN_1,
       env.CLAUDE_CODE_OAUTH_TOKEN_2,
       env.CLAUDE_CODE_OAUTH_TOKEN_3
@@ -1747,33 +1750,33 @@ describe("claude-coordinator's credential pool", () => {
   });
 
   it("drops an unset entry instead of offering an empty credential", () => {
-    const config = claudeCodeConfig({
-      CLAUDE_CODE_OAUTH_TOKEN_1: "sk-ant-oat01-one",
-      CLAUDE_CODE_OAUTH_TOKEN_2: "",
-      CLAUDE_CODE_OAUTH_TOKEN_3: "sk-ant-oat01-three"
-    } as never);
-
-    expect(config.credentials()).toEqual([
-      "sk-ant-oat01-one",
-      "sk-ant-oat01-three"
-    ]);
+    expect(
+      claudeCredentials({
+        CLAUDE_CODE_OAUTH_TOKEN_1: "sk-ant-oat01-one",
+        CLAUDE_CODE_OAUTH_TOKEN_2: "",
+        CLAUDE_CODE_OAUTH_TOKEN_3: "sk-ant-oat01-three"
+      } as never)
+    ).toEqual(["sk-ant-oat01-one", "sk-ant-oat01-three"]);
   });
 });
 
 /**
  * Who a session's commits belong to.
  *
- * Why the session needs an identity of its own is beside the option, in
- * `@/agents/claude-coordinator/claude-code.ts`. What only this side can get wrong is
- * answering it with a *different* identity from the workspace object's, which
- * is the disagreement `@/workspace/git-identity` exists to prevent — so this
- * pins that they are one answer, not any particular name.
+ * What only this side can get wrong is answering it with a *different* identity
+ * from the one `/repo` commits as, which is the disagreement
+ * `@/workspace/git-identity` exists to prevent — so this pins that they are one
+ * answer, not any particular name.
  */
 describe("who a session commits as", () => {
-  it("hands the session the deployment's git identity", () => {
-    const config = claudeCodeConfig(env as never);
+  it("hands every sandbox command the deployment's git identity", () => {
+    const author = gitIdentity(env as never);
+    const vars = sandboxEnv(env as never);
 
-    expect(config.author).toEqual(gitIdentity(env as never));
+    expect(vars.GIT_AUTHOR_NAME).toBe(author.name);
+    expect(vars.GIT_COMMITTER_NAME).toBe(author.name);
+    expect(vars.GIT_AUTHOR_EMAIL).toBe(author.email || undefined);
+    expect(vars.GIT_COMMITTER_EMAIL).toBe(author.email || undefined);
   });
 });
 
@@ -1783,14 +1786,30 @@ describe("who a session commits as", () => {
  * container could read it.
  */
 describe("the sessions' GitHub token", () => {
-  it("is the deployment's, handed to the egress gateway and not the container", () => {
-    const config = claudeCodeConfig({
-      ...(env as object),
-      GITHUB_TOKEN: "ghp_deployment"
-    } as never);
+  afterEach(() => vi.restoreAllMocks());
 
-    expect(config.githubToken?.()).toBe("ghp_deployment");
-    expect(config.env?.GH_TOKEN).toBeUndefined();
+  it("is the deployment's, swapped in by the egress and never in the container", async () => {
+    const plan = egressPlan(CLAUDE_COORDINATOR_EGRESS, "SANDBOX/caller");
+    const forwarded: Request[] = [];
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+      forwarded.push(new Request(input as RequestInfo, init));
+      return new Response("{}");
+    });
+
+    await sandboxEgress(
+      new Request("https://api.github.com/user", {
+        headers: { authorization: `Bearer ${GITHUB_TOKEN_PLACEHOLDER}` }
+      }),
+      [...plan.http, ...plan.https],
+      { ...(env as object), GITHUB_TOKEN: "ghp_deployment" },
+      CLAUDE_COORDINATOR_EGRESS
+    );
+
+    expect(forwarded[0]?.headers.get("authorization")).toBe(
+      "Bearer ghp_deployment"
+    );
+    expect(plan.env.GH_TOKEN).toBe(GITHUB_TOKEN_PLACEHOLDER);
+    expect(sandboxEnv(env as never)).not.toHaveProperty("GH_TOKEN");
   });
 });
 
@@ -1811,7 +1830,7 @@ describe("going back to a branch", () => {
       workspaceName: place.workspaceName,
       ...(place.slot ? { slot: place.slot } : {})
     });
-    await workspaceAt(place.workspaceName).noteSession(runId, { sessionId });
+    await sandboxAt(place.workspaceName).noteSession(runId, { sessionId });
     return runId;
   }
 
@@ -1891,7 +1910,7 @@ describe("going back to a branch", () => {
         agent.ctx.storage,
         BRANCH,
         { repo: POOL_REPO },
-        (name, runId) => workspaceAt(name).sessionOf(runId)
+        (name, runId) => sandboxAt(name).sessionOf(runId)
       );
     });
 
@@ -2152,13 +2171,8 @@ describe("the checkouts a caller has recorded", () => {
 });
 
 /**
- * A superproject's submodules, read from the workspace object's filesystem.
- *
- * The property under test is as much *how* as *what*: this runs inside
- * `afterCheckout`, immediately before the dependency install, so a read that
- * started the container would cost that install the snapshot it restores from.
- * `openWorkspaceFs` is the half of the workspace that serves a file without
- * one.
+ * A superproject's submodules, read from the sandbox's files — `gitmodulesOf`
+ * says why as a file, and why a failed read records nothing.
  */
 describe("a checkout's .gitmodules", () => {
   /** A sandbox as the file read sees it: `null` is a file that is not there. */

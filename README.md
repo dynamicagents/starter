@@ -290,21 +290,19 @@ an ordered **pool** of credentials the sandbox keeps, and rotates when Anthropic
 one's 5-hour or weekly bucket is spent. Each host an agent's containers may reach is
 declared by the plugin that needs it, in the agent's `egress.ts`.
 
-Every agent's own model, both coders included, runs through the `AI` binding —
-Workers AI for all of them but `claude-coordinator`, whose calls name an AI
-Gateway catalog slug and so reach a third-party provider over that same
-binding. **There is no model credential in this deployment** on either path: the
-binding is authenticated by the platform and AI Gateway decides what pays, so
-there is nothing to store, nothing to rotate, and `coding`'s container has never
-seen one. An AI Gateway `401` means Authenticated Gateway is switched on for the
-`default` AI Gateway every call goes through — switch it off, because the binding
-does not send a token.
-[`.env.example`](.env.example) is the full list of what a deployment does need.
+Every agent's own model, both coders included, runs through the `AI` binding — Workers AI
+for all of them but `claude-coordinator`, whose calls name an AI Gateway catalog slug and
+so reach a third-party provider over that same binding. **There is no model credential in
+this deployment** on either path: the platform authenticates the binding and AI Gateway
+decides what pays, so there is nothing to store, nothing to rotate, and `coding`'s
+container has never seen one. [`.env.example`](.env.example) is the full list of what a
+deployment does need, and says what a gateway error means.
 
 The container needs the **Workers Paid** plan and a running Docker daemon on the
-machine that runs `wrangler deploy` — wrangler builds `./Dockerfile` locally and
-pushes each image — `./Dockerfile.sandbox` for the sandboxes, and `./Dockerfile` for the
-workspaces they replace — so that is your laptop or your CI runner, never Cloudflare:
+machine that runs `wrangler deploy` — wrangler builds this repository's Dockerfiles
+locally and pushes an image per `containers[]` entry in
+[`wrangler.jsonc`](wrangler.jsonc), so that is your laptop or your CI runner, never
+Cloudflare:
 
 - **macOS and Windows** — install **Docker Desktop** and have it running. The
   `docker` CLI on its own is not enough: the build needs a Linux kernel, which is
@@ -319,8 +317,7 @@ the Worker and leaves the container alone.
 > bundled from this repository's own `node_modules` before every deploy
 > (`scripts/build-daemon.mjs`), so the object and the daemon it drives speak one
 > `agents` version. A running container keeps the image it started with, and a deploy
-> does not interrupt it: a sandbox takes a new image at its next start, and brings its
-> checkouts back from R2 when the new image dropped the snapshot.
+> does not interrupt it: a sandbox takes a new image at its next start.
 
 > **Deleting a container application does not rebuild it.** In the dashboard it
 > reads like turning something off and on again, and it is not: the application
@@ -332,25 +329,32 @@ the Worker and leaves the container alone.
 
 #### The checkout is the container's disk, and it outlives the task
 
-The **sandbox** is a Durable Object, one per caller per repository, driving one
-container through `agents`' `ContainerHarness`, and the checkout is that container's own
-disk — `node_modules` beside it. The object keeps the durable record: each session, its
-transcript, the CLI's own files to resume it from. Nothing the container does passes
-through the object, so a reset of the object leaves the container running.
+The **sandbox** is a Durable Object, one per caller per repository, driving one container
+through `agents`' `ContainerHarness`, and that container's disk holds `node_modules`
+beside the checkout. The object keeps the durable record: each session, its transcript,
+the CLI's own files to resume it from. The checkout's own files never cross into it, so
+reading one means asking the container. A reset of the object leaves the container
+running, and the object reattaches. The mechanism is in
+`@dynamicagents/plugins/sandbox`'s README.
 
-A container nobody uses is backed up to R2 and stopped five minutes after its last use,
-and its next start is a snapshot of its disk: the checkout, the dependencies, and any
-commit nobody pushed. A start on a new image, which drops that snapshot, restores each
-checkout from its backup. An install runs once per checkout and again only when what it
-depends on changed — see `src/workspace/install-plan.ts`. A writing session's worktree
-starts from the parent's checkpoint, its checkout and dependencies at the same path.
+A container nobody uses is backed up to R2 and stopped minutes after its last use, and
+its next start is a snapshot of its disk: the checkout, the dependencies, and any commit
+nobody pushed. A start on a new image drops that snapshot and restores each checkout from
+its backup. An install runs once per checkout and again only when what it depends on
+changed — the plugin owns that fingerprint, and this deployment's commands are in
+[`src/workspace/install-plan.ts`](src/workspace/install-plan.ts). A writing session's
+worktree is a sandbox of its own, seeded from the parent's checkpoint so its checkout and
+dependencies sit at the same path.
 
 Two consequences worth knowing before you debug something surprising:
 
 - **A caller's checkout outlives their task.** `repo_clone` therefore fetches and
   resets an existing checkout rather than assuming an empty directory — and
   refuses outright if the tree is dirty, because those changes are a previous
-  task's work and nobody could recover them once discarded.
+  task's work and nobody could recover them once discarded. What ends a checkout
+  is the weekly sweep: a sandbox nothing has touched for `SANDBOX_RECLAIM_MS`
+  ([`src/config.ts`](src/config.ts)) is emptied, its backups and any unpushed
+  commit with it.
 - **A cancelled task leaves its work where it stopped.** A cancel may be a
   pause — to add to the task, or to pick it up later — and what a run did may
   have had effects that redoing it would repeat, so nothing is reset for it. A

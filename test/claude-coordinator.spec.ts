@@ -4,6 +4,8 @@ import { runInDurableObject } from "cloudflare:test";
 import type { TurnConfig, TurnContext } from "@cloudflare/think";
 import type { PluginContext } from "@dynamicagents/core";
 import { makeDoHelpers } from "@dynamicagents/core/testing";
+import { askUserInputSchema, MAX_ASK_OPTIONS } from "@dynamicagents/core/agent";
+import type { z } from "zod";
 import {
   credentialPool,
   type CredentialState
@@ -45,7 +47,9 @@ import {
   ownsPlan,
   PLAN_LABEL,
   PLAN_OUTPUT,
+  PlanAnswer,
   revisionsText,
+  type PlanQuestion,
   type ReviseInput
 } from "@/agents/claude-coordinator/plans";
 import { SOUL } from "@/agents/claude-coordinator/soul";
@@ -554,6 +558,53 @@ describe("a plan", () => {
     ]);
   });
 
+  /**
+   * The questions are `ask_user`'s already, so the parent asks them as they
+   * stand rather than retelling them — and the report says the plan is a draft,
+   * which is what keeps it from being put to the person to approve.
+   */
+  it("reports the questions a session left open, whole, on a draft", async () => {
+    const id = await requireArtifactsStub(env).createArtifact("plan");
+    const questions: PlanQuestion[] = [
+      {
+        question: "Keep the old flag working?",
+        options: [
+          {
+            label: "Alias it (Recommended)",
+            description: "One more line to keep.",
+            example: "```sh\nlist --format json\n```"
+          },
+          { label: "Drop it", description: "Breaks scripts that use it." }
+        ]
+      }
+    ];
+    const report = await reportPlan(
+      env,
+      { id, isNew: true },
+      "run-1",
+      outcome({ ...ANSWER, questions }) as never
+    );
+
+    expect(report).toContain("a draft, not yet one to approve");
+    const json = /(`{3,})json\n([\s\S]*?)\n\1/.exec(report);
+    // A fence longer than the example's own, which would close a shorter one.
+    expect(json?.[1]).toBe("````");
+    expect(JSON.parse(json![2]!)).toEqual(questions);
+    // The plan is filed all the same: revising it carries on from this version.
+    expect(
+      (await requireArtifactsStub(env).readArtifact(id))?.entries
+    ).toHaveLength(1);
+
+    const settled = await reportPlan(
+      env,
+      { id, isNew: false },
+      "run-2",
+      outcome(ANSWER) as never
+    );
+    expect(settled).not.toContain("draft");
+    expect(settled).not.toContain("open questions");
+  });
+
   it("files nothing for a session that did not answer through the schema", async () => {
     const id = await requireArtifactsStub(env).createArtifact("plan");
     const recorded: string[] = [];
@@ -732,7 +783,7 @@ describe("a plan", () => {
    * A comment is the person's, and it can still be worse than the plan it
    * changes. Complying silently loses the one reader who could choose.
    */
-  it("is revised to the person's comment, and says so where the comment makes it worse", () => {
+  it("is revised to the person's comment, and asks where the comment makes it worse", () => {
     const brief = planBrief(TASK, undefined, {
       said: ["Comment: drop the second table"],
       resumed: true
@@ -740,7 +791,10 @@ describe("a plan", () => {
     expect(brief).toMatch(
       /Where what they asked for would make the plan worse/
     );
-    expect(brief).toMatch(/they read both and choose/);
+    expect(brief).toMatch(/put the better way to them in `questions`/);
+    // Answered once, it is settled: asking again would never let the plan
+    // reach its approval.
+    expect(brief).toMatch(/unless\s+they already chose theirs over it/);
   });
 
   /**
@@ -749,16 +803,50 @@ describe("a plan", () => {
    * carries an alternatives section pads what they read with "none".
    */
   it("asks for the alternatives that existed, and for nothing where none did", () => {
-    const { plan, lastReply } = PLAN_OUTPUT.properties;
+    const { plan } = PLAN_OUTPUT.properties;
     expect(plan.description).toMatch(/what you weighed and what decided it/);
     expect(plan.description).toMatch(
       /only one sensible way, write nothing about alternatives/
     );
-    // The planner has no `needs_input`: `lastReply` is the whole channel.
-    expect(lastReply.description).toMatch(
-      /a shape you would recommend over the one the request named/
+  });
+
+  /**
+   * A plan approved with a question still in it settles that question by
+   * default, so what is open never rides in the plan's prose or its account:
+   * it has a field of its own, and while it holds anything the plan is a draft.
+   */
+  it("keeps what is open out of the plan, in questions that hold its approval", () => {
+    const { plan, lastReply, questions } = PLAN_OUTPUT.properties;
+    expect(plan.description).toMatch(/Never an open-questions section/);
+    expect(lastReply.description).toMatch(/goes in `questions`, never here/);
+    // The planner has no `needs_input`: `questions` is the whole channel.
+    expect(questions.description).toMatch(/cannot stop to ask mid-run/);
+    expect(questions.description).toMatch(
+      /a better approach than the one the request named/
     );
-    expect(lastReply.description).toMatch(/cannot stop to ask mid-run/);
+    expect(questions.description).toMatch(
+      /While any is open the plan is a draft/
+    );
+    expect(planBrief(TASK)).toMatch(/approve only once nothing is open/);
+  });
+
+  /** The parent asks them as they stand, so `ask_user` must take them so. */
+  it("asks questions `ask_user` takes as they stand", () => {
+    const { options } = PLAN_OUTPUT.properties.questions.items.properties;
+    expect(options.maxItems).toBe(MAX_ASK_OPTIONS);
+    const asked: z.input<typeof askUserInputSchema>["questions"] =
+      PlanAnswer.parse({
+        ...ANSWER,
+        questions: [
+          {
+            question: "Which?",
+            options: [{ label: "A (Recommended)" }, { label: "B" }]
+          }
+        ]
+      }).questions!;
+    expect(askUserInputSchema.safeParse({ questions: asked }).success).toBe(
+      true
+    );
   });
 });
 
@@ -2387,10 +2475,13 @@ describe("what the coordinator does with a session's question", () => {
   });
 
   /**
-   * One `ask_user` holds every question, so the planner's open question is
-   * asked beside the plan's approval rather than folded into its prose.
+   * An approval beside an open question lets the person approve past it, and
+   * the plan then settles it by default: the questions are asked, and the
+   * plan revised, before any approval is.
    */
-  it("asks the planner's open question beside the plan's approval, in one call", () => {
-    expect(SOUL).toContain("ask it beside the approval, in the same call");
+  it("asks a plan's open questions before its approval, never beside it", () => {
+    expect(SOUL).toContain("is a draft, not a plan to approve");
+    expect(SOUL).toContain("until one comes back with no open question");
+    expect(SOUL).toContain("no open question beside it");
   });
 });

@@ -22,12 +22,59 @@ export const PLAN_OUTPUT = {
     plan: {
       type: "string",
       description:
-        "The plan, in Markdown, for the person who approves it: what will change and where, what stays as it is, and how the result will be checked. Complete on its own — the session that carries it out usually continues this conversation, but may start without it and have only this. What you established about the base goes in it as fact, so that session compares against it instead of finding it out again. Where a real choice existed — another shape, another place for the change, a smaller change that solves most of it — the plan says what you weighed and what decided it, with the cost on each side. Where the request named an approach and another is better, say so and why, and say what following the request would mean. Where there was only one sensible way, write nothing about alternatives: a section that lists none is noise in what the person reads. Name no branch: that session is given one, and it is the pull request's head."
+        "The plan, in Markdown, for the person who approves it: what will change and where, what stays as it is, and how the result will be checked. Complete on its own — the session that carries it out usually continues this conversation, but may start without it and have only this. What you established about the base goes in it as fact, so that session compares against it instead of finding it out again. Where a real choice existed — another shape, another place for the change, a smaller change that solves most of it — the plan says what you weighed and what decided it, with the cost on each side — the person's answer, where the choice was theirs. Where the request named an approach and another is better, say so and why, and say what following the request would mean. Where there was only one sensible way, write nothing about alternatives: a section that lists none is noise in what the person reads. Never an open-questions section: what is open goes in `questions`. Name no branch: that session is given one, and it is the pull request's head."
     },
     lastReply: {
       type: "string",
       description:
-        "What you tell the agent that asked for the plan, which does not read the plan itself: what it does in two or three sentences, and anything the agent should know — assumptions you made, questions only the person can answer, a shape you would recommend over the one the request named, what you could not check. You cannot stop to ask mid-run, so this is where a question reaches the person: the agent puts it to them with the plan."
+        "What you tell the agent that asked for the plan, which does not read the plan itself: what it does in two or three sentences, the assumptions you made, and what you could not check. A question for the person goes in `questions`, never here."
+    },
+    questions: {
+      type: "array",
+      items: {
+        type: "object",
+        properties: {
+          question: {
+            type: "string",
+            description:
+              "The question, standing on its own: the person answers it without the plan in front of them, so say what is being decided and why it matters."
+          },
+          options: {
+            type: "array",
+            // `MAX_ASK_OPTIONS`, from `@dynamicagents/core/agent`: the agent
+            // asks these as they stand.
+            minItems: 2,
+            maxItems: 6,
+            items: {
+              type: "object",
+              properties: {
+                label: {
+                  type: "string",
+                  description:
+                    'What they pick, in a few words. The one you recommend comes first, its label ending "(Recommended)".'
+                },
+                description: {
+                  type: "string",
+                  description: "What picking it means, and what it costs."
+                },
+                example: {
+                  type: "string",
+                  description:
+                    "A concrete sample of what picking it produces — a snippet, a shape — in Markdown, when seeing it helps them choose."
+                }
+              },
+              required: ["label"],
+              additionalProperties: false
+            },
+            description:
+              "The answers to pick from, when there are a few — for a choice, the ways in you weighed. Leave it out to have them type an answer."
+          }
+        },
+        required: ["question"],
+        additionalProperties: false
+      },
+      description:
+        "What only the person can settle: every real choice they have not made — which of the ways in you weighed they prefer, a better approach than the one the request named — and every trade-off only they can rank or constraint you suspect but cannot read. You cannot stop to ask mid-run, so this is how a question reaches them. While any is open the plan is a draft: they answer these first, you revise with their answers, and only a version that comes back with none is put to them to approve. Leave it out when nothing is open."
     }
   },
   required: ["title", "plan", "lastReply"],

@@ -710,7 +710,8 @@ export async function reportPlan(
     kind: "filed",
     id: plan.id,
     title: answer.data.title.trim(),
-    lastReply: answer.data.lastReply
+    lastReply: answer.data.lastReply,
+    ...(answer.data.questions ? { questions: answer.data.questions } : {})
   });
 }
 

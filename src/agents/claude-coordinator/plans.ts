@@ -3,6 +3,7 @@ import {
   requireArtifactsStub,
   type ArtifactEntry
 } from "@dynamicagents/core/artifacts";
+import { MAX_ASK_OPTIONS } from "@dynamicagents/core/agent";
 import { CLAUDE_CODE_WRITE_INPUT } from "@dynamicagents/plugins/claude-code";
 import { z } from "zod";
 import type { SessionNote } from "./sandbox";
@@ -166,9 +167,9 @@ export const PLANNER_DESCRIPTION = [
   "",
   "The plan weighs the ways in rather than describing the one it settled on: where a",
   "real choice exists it is in the plan with what each side costs, and where a better",
-  "approach than the one asked for exists the plan says so. So its account back to you",
-  "may carry a question or a recommendation only the person can settle — put that to",
-  "them with the plan rather than resolving it yourself.",
+  "approach than the one asked for exists the plan says so. What only the person can",
+  "settle comes back as the plan's open questions, written for `ask_user`: while any",
+  "is open the plan is a draft, and none of them is yours to resolve.",
   "",
   "To change a plan, call this again with `plan` set to its id, and say what",
   "to change: the session that wrote it revises it where it can, and the new",
@@ -187,10 +188,31 @@ export { PLAN_OUTPUT } from "./schemas";
 export const PlanAnswer = z.object({
   title: z.string().trim().min(1),
   plan: z.string().trim().min(1),
-  lastReply: z.string()
+  lastReply: z.string(),
+  questions: z
+    .array(
+      z.object({
+        question: z.string().trim().min(1),
+        options: z
+          .array(
+            z.object({
+              label: z.string().trim().min(1),
+              description: z.string().trim().min(1).optional(),
+              example: z.string().trim().min(1).optional()
+            })
+          )
+          .min(2)
+          .max(MAX_ASK_OPTIONS)
+          .optional()
+      })
+    )
+    .optional()
 });
 
 export type PlanAnswer = z.infer<typeof PlanAnswer>;
+
+/** A question the planning session left open, as `ask_user` takes one. */
+export type PlanQuestion = NonNullable<PlanAnswer["questions"]>[number];
 
 // --- which plans are this caller's ---------------------------------------------
 

@@ -19,16 +19,17 @@ const LINES: string[] = [
   // A session with nowhere to work is refused rather than guessing at a path.
   "Every session works inside a directory, so open one before you delegate: `repo_clone` when there is a repository, `scratch_open` when the work just needs somewhere to run.",
 
-  "Start from what the person gave you. Read the issue or pull request the request names with `repo_issue_view`, and what memory says about this caller — their conventions, and whether they approve plans. Ask one question only when the answer would change the work; otherwise decide, and say what you assumed.",
+  "Start from what the person gave you. Read the issue or pull request the request names with `repo_issue_view`, and what memory says about this caller — their conventions, and whether they approve plans. Ask only when an answer would change the work; otherwise decide, and say what you assumed.",
 
   // The plan is a session's, filed where the caller reads it; only its id
   // travels — see `./plans.ts`.
-  "Have a plan written first when the change is large, touches much nobody has read, or the person asked to see one: `claude_code_plan` files it where they can read it, and you get its id, its title and the session's account of it. A small, clear change needs no plan.",
+  "Have a plan written first when the change is large, touches much nobody has read, or the person asked to see one: `claude_code_plan` files it where they can read it, and you get its id, its title, the session's account of it and the questions it left open. A small, clear change needs no plan.",
 
   // Approval is the default, and the caller's memory is how they opt out — of
-  // approving a plan, which is not the same as of being asked. A planner
-  // cannot stop to ask, so its account is the only place its question exists.
-  "A plan you had written is put to the person before anything is built: `ask_user` with a question whose `artifact` is its id, saying in a sentence or two what it does. If the session's account named a better approach than the one that was asked for, or a question only the person can settle, ask it beside the approval, in the same call and in its terms, so they decide it with the plan in front of them. Approved, build it by passing its id to `claude_code` as `plan`. A comment means the plan changes: call `claude_code_plan` with its id and the comment, then ask again. Rejected, stop, and say nothing was changed. If memory says this caller does not approve plans, build without asking — unless the account left a question or a better approach, which goes to them first either way: what they opted out of is reading a plan, not deciding what only they can decide.",
+  // approving a plan, which is not the same as of being asked. Questions come
+  // before the approval, never beside it: approving past an open question
+  // settles it by default.
+  "A plan whose session left questions open is a draft, not a plan to approve. Ask them first, with `ask_user`, as the session wrote them: each a question of its own, its options and its recommendation kept. Send the answers back with `claude_code_plan`, its id and the answers whole, and do the same for each version until one comes back with no open question. Only that one is put to the person before anything is built: `ask_user` with a question whose `artifact` is its id, saying in a sentence or two what it does, and no open question beside it. Approved, build it by passing its id to `claude_code` as `plan`. A comment means the plan changes: call `claude_code_plan` with its id and the comment, then ask again. Rejected, stop, and say nothing was changed. If memory says this caller does not approve plans, build without asking once no question is open: what they opted out of is reading a plan, not deciding what only they can decide.",
 
   "Build with `claude_code`. Brief it as you would a senior engineer: what should be true when it is done, how to tell, and what you know of the caller's preferences and of what matters to them about the design — never how to implement it, and never the plan again, which a session given one has whole. One coherent change per session: starting one is expensive and letting it run is cheap. Two sessions that would touch the same code are not independent; run them one after the other.",
 

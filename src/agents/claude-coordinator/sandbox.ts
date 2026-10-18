@@ -101,7 +101,8 @@ export class ClaudeCoordinatorSandbox
       sessionId: note.sessionId,
       ...(note.transcript ? { transcript: note.transcript } : {}),
       ...(filed?.plan ? { plan: filed.plan } : {}),
-      ...(filed?.version !== undefined ? { version: filed.version } : {})
+      ...(filed?.version !== undefined ? { version: filed.version } : {}),
+      ...(filed?.asked ? { asked: true } : {})
     });
   }
 
@@ -127,8 +128,13 @@ export interface SessionNote {
    * — what a run continuing this conversation files on too.
    */
   transcript?: string;
-  /** A plan this session filed a version of: a planning run's. */
+  /** A plan this session filed a version of, or asked about: a planning run's. */
   plan?: string;
-  /** Which version: the sequence of the entry it filed on the plan's page. */
+  /**
+   * Which version: the sequence of the entry it filed on the plan's page — or,
+   * for a run that asked, the version it asked on, none on a new plan.
+   */
   version?: number;
+  /** It stopped to ask the person rather than file a version. */
+  asked?: true;
 }

@@ -145,8 +145,10 @@ describe("a task is one step", () => {
     using _ = harness.interceptGatekeeper();
     const task = await harness.send("ask:which one?");
     const asked = await question(harness, task.id);
-    expect(asked.prompt).toBe("which one?");
-    await harness.answer(task.id, asked.requestId, { optionId: "option_1" });
+    expect(asked.questions[0]?.prompt).toBe("which one?");
+    await harness.answer(task.id, asked.requestId, {
+      q1: { optionIds: ["q1.o1"] }
+    });
     expect((await harness.waitForTerminal(task.id)).text).toBe("Yes");
   });
 });
@@ -176,13 +178,17 @@ describe("a plan", () => {
 
     const task = await harness.send(`approve:${id}`);
     const asked = await question(harness, task.id);
-    expect(asked.requestKind).toBe("approval");
-    expect(asked.artifact).toEqual({
-      id,
-      url: expect.stringMatching(new RegExp(`/a/${id}$`))
+    expect(asked.questions).toEqual([
+      {
+        kind: "approval",
+        id: "q1",
+        prompt: "Approve the plan?",
+        artifact: { id, url: expect.stringMatching(new RegExp(`/a/${id}$`)) }
+      }
+    ]);
+    await harness.answer(task.id, asked.requestId, {
+      q1: { optionIds: ["approve"] }
     });
-    expect(asked.prompt).toContain(asked.artifact!.url);
-    await harness.answer(task.id, asked.requestId, { optionId: "approve" });
 
     expect((await harness.waitForTerminal(task.id)).text).toBe("Approved.");
     expect(await artifacts.artifactState(id)).toMatchObject({

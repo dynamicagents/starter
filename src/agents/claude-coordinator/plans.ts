@@ -6,6 +6,7 @@ import {
 import { CLAUDE_CODE_WRITE_INPUT } from "@dynamicagents/plugins/claude-code";
 import { z } from "zod";
 import type { SessionNote } from "./sandbox";
+import { SessionQuestions } from "./session";
 
 /**
  * A plan, as `claude-coordinator` keeps one: an artifact of its own, which a
@@ -33,13 +34,13 @@ export const PLAN_INPUT = z.object({
   task: z
     .string()
     .describe(
-      "What to plan: the change and why, what the plan must respect, and what you already know. On an edit, what to change about the plan — the caller's comment, whole."
+      "What to plan: the change and why, what the plan must respect, and what you already know. On an edit, what to change about the plan — the caller's comment, whole. Answering the session's questions, the person's answers whole, with the request they were about in a line: a session that cannot carry on starts from what you give it."
     ),
   plan: z
     .string()
     .optional()
     .describe(
-      "The id of a plan to edit — one claude_code_plan returned. Omit to write a new one."
+      "The id of a plan to edit, or whose session's questions you are answering — one claude_code_plan returned. Omit to write a new one."
     )
 });
 
@@ -76,10 +77,10 @@ export const WRITER_DESCRIPTION = [
   "where you know it. It is expensive to start and cheap to let run, so 'add the",
   "endpoint, its tests and wire it up' is one session, not three.",
   "",
-  "It cannot ask you anything mid-run. It stops instead, with a question for you to",
-  "put to the person — a decision only they can make, or a deviation of design, shape",
-  "or scope it will not take on its own. A stop like that is the session doing its",
-  "job: it is answered, not re-briefed into the simpler path.",
+  "It asks by stopping, with questions for you to put to the person — a decision",
+  "only they can make, or a deviation of design, shape or scope it will not take on",
+  "its own. A stop like that is the session doing its job: it is answered, not",
+  "re-briefed into the simpler path.",
   "",
   "To build an approved plan, pass its id as `plan`. To add to a branch that has",
   "no pull request yet — a session that stopped for a decision, or work a cancel",
@@ -166,9 +167,13 @@ export const PLANNER_DESCRIPTION = [
   "",
   "The plan weighs the ways in rather than describing the one it settled on: where a",
   "real choice exists it is in the plan with what each side costs, and where a better",
-  "approach than the one asked for exists the plan says so. So its account back to you",
-  "may carry a question or a recommendation only the person can settle — put that to",
-  "them with the plan rather than resolving it yourself.",
+  "approach than the one asked for exists the plan says so.",
+  "",
+  "It asks before it delivers. While something only the person can settle is open —",
+  "which way in they prefer, a better approach than the one asked for — it stops",
+  "with its questions instead of a plan, and none of it is yours to resolve. Call",
+  "this again with `plan` set to the id and their answers, and the session carries",
+  "on from where it stopped. A plan it hands back is ready, with nothing left open.",
   "",
   "To change a plan, call this again with `plan` set to its id, and say what",
   "to change: the session that wrote it revises it where it can, and the new",
@@ -178,17 +183,25 @@ export const PLANNER_DESCRIPTION = [
   "To build an approved plan, pass its id to claude_code as `plan`: that session",
   "carries on from this one's conversation, so it starts knowing what it found.",
   "",
-  "It runs in the background, and cannot ask you anything mid-run."
+  "It runs in the background."
 ].join("\n");
 
 export { PLAN_OUTPUT } from "./schemas";
 
 /** A planning session's answer, as `PLAN_OUTPUT` in `./schemas.ts` describes it. */
-export const PlanAnswer = z.object({
-  title: z.string().trim().min(1),
-  plan: z.string().trim().min(1),
-  lastReply: z.string()
-});
+export const PlanAnswer = z.discriminatedUnion("status", [
+  z.object({
+    status: z.literal("ready"),
+    title: z.string().trim().min(1),
+    plan: z.string().trim().min(1),
+    lastReply: z.string()
+  }),
+  z.object({
+    status: z.literal("needs_input"),
+    questions: SessionQuestions,
+    lastReply: z.string()
+  })
+]);
 
 export type PlanAnswer = z.infer<typeof PlanAnswer>;
 
@@ -305,6 +318,8 @@ export interface PlannedSession {
   workspaceName: string;
   /** Its worktree, to be placed in again; none for a scratchpad. */
   near?: { repo: string; slot: number };
+  /** It stopped to ask rather than file a version: what carries it on is the answer. */
+  asked?: true;
 }
 
 /**
@@ -320,6 +335,11 @@ export interface PlannedSession {
  * by when it started, since two edits need not finish in the order they began.
  * `except` is the run asking, whose own row a repeated `prepare` has already
  * written.
+ *
+ * With `asked`, for a planning run: the latest run that stopped to ask on that
+ * version — or, on a new plan, before any — wins over it, since answering is
+ * carrying that conversation on. A build never carries one on: what it builds
+ * is a version, and a run that asked filed none.
  */
 export async function plannedSession(
   storage: DurableObjectStorage,
@@ -328,9 +348,10 @@ export async function plannedSession(
     workspaceName: string,
     runId: string
   ) => Promise<SessionNote | undefined>,
-  except?: string
+  except?: string,
+  options: { asked?: boolean } = {}
 ): Promise<PlannedSession | undefined> {
-  if (plan.version === undefined) return undefined;
+  if (plan.version === undefined && !options.asked) return undefined;
   ensureRuns(storage);
   const runs = storage.sql
     .exec<{
@@ -350,6 +371,7 @@ export async function plannedSession(
       () => undefined
     );
     if (note?.plan !== plan.id || note.version !== plan.version) continue;
+    if (note.asked && !options.asked) continue;
     return {
       runId: run.run_id,
       sessionId: note.sessionId,
@@ -357,7 +379,8 @@ export async function plannedSession(
       workspaceName: run.workspace,
       ...(run.repo !== null && run.slot !== null
         ? { near: { repo: run.repo, slot: run.slot } }
-        : {})
+        : {}),
+      ...(note.asked ? { asked: true as const } : {})
     };
   }
   return undefined;
@@ -429,6 +452,8 @@ export function lastPlanIndex(page: readonly ArtifactEntry[]): number {
 }
 
 /** A version of the plan as it is filed: its title over it. */
-export function planText(answer: PlanAnswer): string {
+export function planText(
+  answer: Extract<PlanAnswer, { status: "ready" }>
+): string {
   return `# ${answer.title.trim()}\n\n${answer.plan.trim()}`;
 }

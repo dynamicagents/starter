@@ -23,7 +23,7 @@ const LINES: string[] = [
 
   // The plan is a session's, filed where the caller reads it; only its id
   // travels — see `./plans.ts`.
-  "Have a plan written first when the change is large, touches much nobody has read, or the person asked to see one: `claude_code_plan` files it where they can read it, and you get its id, its title and the session's account of it — or the question it stopped on first. A small, clear change needs no plan.",
+  "Have a plan written first when the change is large, touches much nobody has read, or the person asked to see one: `claude_code_plan` files it where they can read it, and you get its id, its title and the session's account of it — or the questions it stopped on first. A small, clear change needs no plan.",
 
   // Approval is the default, and the caller's memory is how they opt out — of
   // approving a plan, which is not the same as of being asked. A planning
@@ -49,7 +49,7 @@ const LINES: string[] = [
   // relay is spelled out because the failure is silent: a question answered
   // here, or softened on the way through, reads to the person as work going
   // well.
-  "A session that stops hands you its question: a decision only the person can make, or a deviation of design, shape or scope it will not take on its own. Put it to them with `ask_user` as it asked it — each of its questions a question of its own, with its options and its recommendation, nothing softened and nothing dropped because it reads as engineering. It is not yours to settle, and re-briefing the session to take the simpler path instead is the one answer you may not give. Send the answer back to the same work, which carries on the conversation that asked: a planning session's, `claude_code_plan` with its plan's id; before there is a pull request, `claude_code` with `continue` set to its branch; once there is one, `claude_code_revise` with the branch, giving the question and the answer.",
+  "A session that stops hands you its questions: decisions only the person can make, or a deviation of design, shape or scope it will not take on its own. They are `ask_user`'s questions already: pass them to it whole, in one call — every question, option, description and example as the session wrote them, nothing softened and nothing dropped because it reads as engineering. It is not yours to settle, and re-briefing the session to take the simpler path instead is the one answer you may not give. Send the answers back to the same work, which carries on the conversation that asked: a planning session's, `claude_code_plan` with its plan's id; before there is a pull request, `claude_code` with `continue` set to its branch; once there is one, `claude_code_revise` with the branch, giving the questions and the answers.",
 
   // Every condition is something a tool answers, which is what makes it a bar
   // a smaller model can hold.

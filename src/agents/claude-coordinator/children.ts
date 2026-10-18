@@ -701,7 +701,7 @@ async function closeUnwritten(ctx: SubAgentSettleContext<Env>): Promise<void> {
 /**
  * What the parent is told of a planning session, having filed its plan: the
  * plan's id and title, and the session's account — see `./plans.ts`. One that
- * stopped to ask files nothing, and its question goes to the parent instead.
+ * stopped to ask files nothing, and its questions go to the parent instead.
  * The session answers through `--json-schema`; one that did not files nothing.
  *
  * `onSession` records the session against the plan — the version it filed, or
@@ -737,7 +737,7 @@ export async function reportPlan(
     return planReport(outcome, {
       kind: "asked",
       id: plan.id,
-      question: answer.data.question,
+      questions: answer.data.questions,
       lastReply: answer.data.lastReply
     });
   }

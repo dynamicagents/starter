@@ -3,6 +3,7 @@ import type {
   SessionEnd,
   SessionOutcome
 } from "@dynamicagents/plugins/claude-code";
+import { MAX_ASK_OPTIONS } from "@dynamicagents/core/agent";
 import { z } from "zod";
 import { CLAUDE_CODE_SESSION } from "@/config";
 
@@ -128,8 +129,8 @@ Mechanical deviations are yours — a helper under another name, a test in anoth
 order the code forces. Make them, and say so in your summary.
 
 When you have a question, do not guess. Commit and push what you have, and answer with
-\`needs_input\` and the question, with the options you see: you are resumed with their
-answer, and what you committed is kept.`;
+\`needs_input\` and everything you need from them at once, each question with the options
+you see: you are resumed with their answers, and what you committed is kept.`;
 
 /**
  * How often a **writing** session runs the project's checks: on the tree it
@@ -193,6 +194,65 @@ landed while you worked. Then stop: do not wait for anything still running.`;
 
 export { WRITE_OUTPUT } from "./schemas";
 
+/** Words a session may leave blank, read as left out. */
+const optionalText = z
+  .string()
+  .trim()
+  .transform((text) => text || undefined)
+  .optional();
+
+/**
+ * What a session that stops asks the person, as `QUESTIONS` in `./schemas.ts`
+ * describes it — and as core's `ask_user` takes it, which the parent passes
+ * them to whole.
+ */
+export const SessionQuestions = z
+  .array(
+    z.object({
+      question: z.string().trim().min(1),
+      header: optionalText,
+      options: z
+        .array(
+          z.object({
+            label: z.string().trim().min(1),
+            description: optionalText,
+            example: optionalText
+          })
+        )
+        .min(2)
+        .max(MAX_ASK_OPTIONS)
+        .optional(),
+      multiple: z.boolean().optional()
+    })
+  )
+  .min(1);
+
+export type SessionQuestions = z.infer<typeof SessionQuestions>;
+
+/**
+ * `value` as a fenced JSON block, its fence longer than any run of backticks
+ * inside — an option's example is Markdown, and its own fence would close a
+ * shorter one.
+ */
+function jsonBlock(value: unknown): string {
+  const json = JSON.stringify(value, null, 2);
+  const longest = Math.max(
+    0,
+    ...(json.match(/`+/g) ?? []).map((run) => run.length)
+  );
+  const fence = "`".repeat(Math.max(3, longest + 1));
+  return `${fence}json\n${json}\n${fence}`;
+}
+
+/**
+ * A session's questions as the parent is handed them: JSON, because it puts
+ * them to the person as they stand, and retelling a question is how it gets
+ * softened or loses an option.
+ */
+export function questionsText(questions: SessionQuestions): string {
+  return `**Questions for the person**, as \`ask_user\`'s \`questions\`:\n\n${jsonBlock(questions)}`;
+}
+
 /** A writing session's answer, as `WRITE_OUTPUT` in `./schemas.ts` describes it. */
 export const WriteAnswer = z.object({
   status: z.enum(["done", "needs_input", "blocked"]),
@@ -203,7 +263,7 @@ export const WriteAnswer = z.object({
   checks: z
     .array(z.object({ command: z.string(), passed: z.boolean() }))
     .optional(),
-  question: z.string().optional()
+  questions: SessionQuestions.optional()
 });
 
 export type WriteAnswer = z.infer<typeof WriteAnswer>;
@@ -232,8 +292,8 @@ export function answerText(answer: WriteAnswer): string {
   const question =
     answer.status !== "needs_input"
       ? ""
-      : answer.question?.trim()
-        ? `**Question for the person:** ${answer.question.trim()}`
+      : answer.questions
+        ? questionsText(answer.questions)
         : "**It named no question.** Its summary above is what it stopped on: ask the person what it leaves open, or send it back to say what it needs.";
   return [`${status}${pr}`, answer.summary.trim(), checks, question]
     .filter(Boolean)
@@ -582,8 +642,8 @@ export function planBrief(
         editing.asked
           ? `## Their answer
 
-Above is the person's answer to what you asked. Carry on from where you stopped: ask again
-if something is still open, and answer with the plan once nothing is.`
+Above are the person's answers to what you asked. Carry on from where you stopped: ask
+again if something is still open, and answer with the plan once nothing is.`
           : `## Revising your plan
 
 The person read the plan you wrote and asked for the changes above. Revise it, and answer
@@ -613,8 +673,9 @@ impertinent.
 
 Ask the person whenever you need them, as you would check a dependency or read the docs
 before relying on them: which way in they prefer, a trade-off only they can rank, a
-constraint you suspect but cannot read. Asking is \`needs_input\` with your question: you
-carry on from here with their answer, so asking costs you nothing you have found. Hand the
+constraint you suspect but cannot read. Asking is \`needs_input\` with everything you need
+from them at once, each question with its options: you carry on from here with their
+answers, so asking costs you nothing you have found. Hand the
 plan over only when you believe it is ready — the alternatives worth weighing put to them,
 and their choice made — because it goes to them to approve as it stands, and a question
 left in it is one they approve past.`
@@ -639,7 +700,7 @@ left in it is one they approve past.`
 /**
  * What the parent is told of a planning session: the plan's id and title, and
  * what the session had to say about it — never the plan, which the parent hands
- * on by its id — or the question it stopped on, before there is a plan to read.
+ * on by its id — or the questions it stopped on, before there is a plan to read.
  */
 export function planReport(
   outcome: SessionOutcome,
@@ -650,7 +711,12 @@ export function planReport(
         title: string;
         lastReply: string;
       }
-    | { kind: "asked"; id: string; question: string; lastReply: string }
+    | {
+        kind: "asked";
+        id: string;
+        questions: SessionQuestions;
+        lastReply: string;
+      }
     | { kind: "unanswered" }
     | { kind: "locked"; id: string; lastReply: string }
 ): string {
@@ -665,7 +731,7 @@ export function planReport(
     return [
       `**The planning session for \`${filed.id}\` stopped to ask the person before it plans.**`,
       filed.lastReply,
-      `**Question for the person:** ${filed.question}`,
+      questionsText(filed.questions),
       footer
     ]
       .filter(Boolean)

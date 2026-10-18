@@ -6,6 +6,7 @@ import {
 import { CLAUDE_CODE_WRITE_INPUT } from "@dynamicagents/plugins/claude-code";
 import { z } from "zod";
 import type { SessionNote } from "./sandbox";
+import { SessionQuestions } from "./session";
 
 /**
  * A plan, as `claude-coordinator` keeps one: an artifact of its own, which a
@@ -33,13 +34,13 @@ export const PLAN_INPUT = z.object({
   task: z
     .string()
     .describe(
-      "What to plan: the change and why, what the plan must respect, and what you already know. On an edit, what to change about the plan — the caller's comment, whole. Answering the session's question, the person's answer whole, with the request it was about in a line: a session that cannot carry on starts from what you give it."
+      "What to plan: the change and why, what the plan must respect, and what you already know. On an edit, what to change about the plan — the caller's comment, whole. Answering the session's questions, the person's answers whole, with the request they were about in a line: a session that cannot carry on starts from what you give it."
     ),
   plan: z
     .string()
     .optional()
     .describe(
-      "The id of a plan to edit, or whose session's question you are answering — one claude_code_plan returned. Omit to write a new one."
+      "The id of a plan to edit, or whose session's questions you are answering — one claude_code_plan returned. Omit to write a new one."
     )
 });
 
@@ -76,7 +77,7 @@ export const WRITER_DESCRIPTION = [
   "where you know it. It is expensive to start and cheap to let run, so 'add the",
   "endpoint, its tests and wire it up' is one session, not three.",
   "",
-  "It asks by stopping, with a question for you to put to the person — a decision",
+  "It asks by stopping, with questions for you to put to the person — a decision",
   "only they can make, or a deviation of design, shape or scope it will not take on",
   "its own. A stop like that is the session doing its job: it is answered, not",
   "re-briefed into the simpler path.",
@@ -170,8 +171,8 @@ export const PLANNER_DESCRIPTION = [
   "",
   "It asks before it delivers. While something only the person can settle is open —",
   "which way in they prefer, a better approach than the one asked for — it stops",
-  "with its question instead of a plan, and none of it is yours to resolve. Call",
-  "this again with `plan` set to the id and their answer, and the session carries",
+  "with its questions instead of a plan, and none of it is yours to resolve. Call",
+  "this again with `plan` set to the id and their answers, and the session carries",
   "on from where it stopped. A plan it hands back is ready, with nothing left open.",
   "",
   "To change a plan, call this again with `plan` set to its id, and say what",
@@ -197,7 +198,7 @@ export const PlanAnswer = z.discriminatedUnion("status", [
   }),
   z.object({
     status: z.literal("needs_input"),
-    question: z.string().trim().min(1),
+    questions: SessionQuestions,
     lastReply: z.string()
   })
 ]);

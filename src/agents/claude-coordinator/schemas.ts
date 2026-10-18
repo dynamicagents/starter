@@ -7,6 +7,69 @@
  */
 
 /**
+ * What a session that stops asks the person, in the shape core's `ask_user`
+ * takes: the agent puts these to the person as they stand, so the gate renders
+ * the form they are — each question with its options, what each means, a sample
+ * of what it produces, and room for the person's own words.
+ */
+const QUESTIONS = {
+  type: "array",
+  minItems: 1,
+  items: {
+    type: "object",
+    properties: {
+      question: {
+        type: "string",
+        minLength: 1,
+        description:
+          "The question, as the person will read it — away from everything you have read, so say what is being decided and why it matters."
+      },
+      header: {
+        type: "string",
+        description:
+          "A word or two naming the question, shown where room is short."
+      },
+      options: {
+        type: "array",
+        // `MAX_ASK_OPTIONS`, from `@dynamicagents/core/agent`.
+        minItems: 2,
+        maxItems: 6,
+        items: {
+          type: "object",
+          properties: {
+            label: {
+              type: "string",
+              minLength: 1,
+              description:
+                'What they pick, in a few words. The one you recommend comes first, its label ending "(Recommended)".'
+            },
+            description: {
+              type: "string",
+              description: "What picking it means, and what it costs."
+            },
+            example: {
+              type: "string",
+              description:
+                "A concrete sample of what picking it produces — a snippet, a shape, a draft — in Markdown, when seeing it helps them choose."
+            }
+          },
+          required: ["label"],
+          additionalProperties: false
+        },
+        description:
+          "The answers to pick from, when there are a few; they can always answer in their own words instead. Leave it out to have them type an answer."
+      },
+      multiple: {
+        type: "boolean",
+        description: "Whether they may pick more than one of `options`."
+      }
+    },
+    required: ["question"],
+    additionalProperties: false
+  }
+} as const;
+
+/**
  * What a planning session must answer, as `--json-schema`. The descriptions are
  * the session's instructions for each field — the CLI puts them in front of the
  * model as the `StructuredOutput` tool's schema.
@@ -35,10 +98,10 @@ export const PLAN_OUTPUT = {
       description:
         "What you tell the agent that asked for the plan, which does not read the plan itself: what it does in two or three sentences, the assumptions you made, and what you could not check — or, stopping to ask, where the plan stands."
     },
-    question: {
-      type: "string",
+    questions: {
+      ...QUESTIONS,
       description:
-        "Required with `needs_input`: what you need from the person, as they will read it — each question with the options you see, what each costs, and the one you recommend."
+        "Required with `needs_input`: everything you need from the person, all at once — each a question of its own."
     }
   },
   required: ["status", "lastReply"],
@@ -57,7 +120,7 @@ export const WRITE_OUTPUT = {
       type: "string",
       enum: ["done", "needs_input", "blocked"],
       description:
-        "`done`: the work is finished, or there was nothing to change. `needs_input`: you stopped on a question for the person — a decision only they can make, or a deviation of design, shape or scope that is theirs to approve. `blocked`: you could not finish, and `summary` says where you stopped and why."
+        "`done`: the work is finished, or there was nothing to change. `needs_input`: you stopped on questions for the person — a decision only they can make, or a deviation of design, shape or scope that is theirs to approve. `blocked`: you could not finish, and `summary` says where you stopped and why."
     },
     summary: {
       type: "string",
@@ -92,10 +155,10 @@ export const WRITE_OUTPUT = {
       description:
         "What you ran to check the work, each with whether it passed. Only what you ran."
     },
-    question: {
-      type: "string",
+    questions: {
+      ...QUESTIONS,
       description:
-        "Required with `needs_input`: what you need from the person, as they will read it — each question with the options you see. For a deviation, say what you were going to do, what you would do instead, and what each costs."
+        "Required with `needs_input`: everything you need from the person, all at once — each a question of its own. For a deviation, the question says what you were going to do and what you would do instead, and its options what each costs."
     }
   },
   required: ["status", "summary"],

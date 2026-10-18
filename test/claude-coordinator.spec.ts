@@ -4,6 +4,7 @@ import { runInDurableObject } from "cloudflare:test";
 import type { TurnConfig, TurnContext } from "@cloudflare/think";
 import type { PluginContext } from "@dynamicagents/core";
 import { makeDoHelpers } from "@dynamicagents/core/testing";
+import { askUserInputSchema, MAX_ASK_OPTIONS } from "@dynamicagents/core/agent";
 import {
   credentialPool,
   type CredentialState
@@ -52,9 +53,11 @@ import { SOUL } from "@/agents/claude-coordinator/soul";
 import {
   notResumable,
   planBrief,
+  questionsText,
   revisionNote,
   sessionBrief,
   sessionFooter,
+  SessionQuestions,
   sessionReport,
   unresumableReport,
   warningPrompt,
@@ -407,6 +410,23 @@ describe("a plan", () => {
     }
   });
 
+  /** What a session stops to ask: two questions, one with options and examples. */
+  const QUESTIONS = [
+    {
+      question: "Keep the old flag working?",
+      header: "Old flag",
+      options: [
+        {
+          label: "Alias it (Recommended)",
+          description: "One more line to keep.",
+          example: "```sh\nlist --format json\n```"
+        },
+        { label: "Drop it", description: "Breaks scripts that use it." }
+      ]
+    },
+    { question: "Anything the output must keep for your scripts?" }
+  ];
+
   const ANSWER = {
     status: "ready",
     title: "Add a --json flag",
@@ -560,7 +580,7 @@ describe("a plan", () => {
    * filed, and the session is recorded as having asked, which is what lets the
    * answer carry its conversation on.
    */
-  it("files nothing for a session that stopped to ask, and hands the parent its question", async () => {
+  it("files nothing for a session that stopped to ask, and hands the parent its questions whole", async () => {
     const id = await requireArtifactsStub(env).createArtifact("plan");
     const recorded: unknown[] = [];
     const report = await reportPlan(
@@ -569,8 +589,7 @@ describe("a plan", () => {
       "run-1",
       outcome({
         status: "needs_input",
-        question:
-          "Keep the old flag working? Alias it (recommended) or drop it.",
+        questions: QUESTIONS,
         lastReply: "Read the CLI; two ways in."
       }) as never,
       async (sessionId, filed) => {
@@ -579,9 +598,10 @@ describe("a plan", () => {
     );
 
     expect(report).toContain("stopped to ask the person before it plans");
-    expect(report).toContain(
-      "**Question for the person:** Keep the old flag working?"
-    );
+    // As `ask_user` takes them, under a fence the example's own cannot close.
+    const json = /(`{3,})json\n([\s\S]*?)\n\1/.exec(report);
+    expect(json?.[1]).toBe("````");
+    expect(JSON.parse(json![2]!)).toEqual(QUESTIONS);
     expect(report).toContain(`\`${id}\``);
     expect(recorded).toEqual([["s1", { asked: true }]]);
     expect((await requireArtifactsStub(env).readArtifact(id))?.entries).toEqual(
@@ -605,7 +625,7 @@ describe("a plan", () => {
       "run-1",
       outcome({
         status: "needs_input",
-        question: "Which?",
+        questions: [{ question: "Which?" }],
         lastReply: ""
       }) as never,
       async (_sessionId, filed) => {
@@ -625,7 +645,7 @@ describe("a plan", () => {
         "run-1",
         outcome({
           status: "needs_input",
-          question: "Which?",
+          questions: [{ question: "Which?" }],
           lastReply: ""
         }) as never,
         () => Promise.reject(new Error("sandbox unreachable"))
@@ -870,16 +890,46 @@ describe("a plan", () => {
    * it goes to the person to approve as it stands.
    */
   it("asks whenever it needs the person, and hands a plan over only when it is ready", () => {
-    const { status, plan, question } = PLAN_OUTPUT.properties;
+    const { status, plan, questions } = PLAN_OUTPUT.properties;
     expect(status.enum).toEqual(["ready", "needs_input"]);
     expect(status.description).toMatch(/nothing in it is open/);
-    expect(question.description).toMatch(/Required with `needs_input`/);
+    expect(questions.description).toMatch(
+      /Required with `needs_input`: everything you need from the person, all at once/
+    );
     expect(plan.description).toMatch(/Never an open-questions section/);
     expect(JSON.stringify(PLAN_OUTPUT)).not.toMatch(/cannot stop to ask/);
     const brief = planBrief(TASK);
     expect(brief).toMatch(/Ask the person whenever you need them/);
     expect(brief).toMatch(
       /Hand the\s+plan over only when you believe it is ready/
+    );
+  });
+
+  /**
+   * The parent passes a session's questions to `ask_user` whole, so they must
+   * be what it takes: the gate renders them as the form they are.
+   */
+  it("asks in the shape `ask_user` takes, from either session", () => {
+    for (const schema of [PLAN_OUTPUT, WRITE_OUTPUT]) {
+      expect(
+        schema.properties.questions.items.properties.options.maxItems
+      ).toBe(MAX_ASK_OPTIONS);
+    }
+    const parsed = SessionQuestions.parse([
+      ...QUESTIONS,
+      {
+        question: "Which?",
+        header: "  ",
+        options: [{ label: "A", description: "" }, { label: "B" }]
+      }
+    ]);
+    // Words left blank read as left out, rather than refuse the whole answer.
+    expect(parsed[2]).toEqual({
+      question: "Which?",
+      options: [{ label: "A" }, { label: "B" }]
+    });
+    expect(askUserInputSchema.safeParse({ questions: parsed }).success).toBe(
+      true
     );
   });
 
@@ -2524,12 +2574,12 @@ describe("a writing session's answer", () => {
    * decision alone is a session that builds a shape it was going to ask about.
    */
   it("describes a stop as a deviation too, and asks the summary for the rest", () => {
-    const { status, summary, question } = WRITE_OUTPUT.properties;
+    const { status, summary, questions } = WRITE_OUTPUT.properties;
     expect(status.description).toMatch(
       /a deviation of design, shape or scope that is theirs to approve/
     );
-    expect(question.description).toMatch(
-      /what you would do instead, and what each costs/
+    expect(questions.description).toMatch(
+      /what you would do instead, and its options what each costs/
     );
     // What was too small to stop for still has to reach the person.
     expect(summary.description).toMatch(
@@ -2576,19 +2626,28 @@ describe("a writing session's answer", () => {
     );
   });
 
-  it("carries the question a session stopped on", () => {
+  it("carries the questions a session stopped on, as `ask_user` takes them", () => {
+    const questions = [
+      {
+        question: "Nested or flat JSON?",
+        options: [{ label: "Nested (Recommended)" }, { label: "Flat" }]
+      },
+      {
+        question: "Which fields?",
+        options: [{ label: "id" }, { label: "name" }],
+        multiple: true
+      }
+    ];
     const report = sessionReport(
       ended({
         status: "needs_input",
         summary: "Two output shapes would work.",
-        question: "Nested or flat JSON?"
+        questions
       })
     );
 
     expect(report).toContain("**Stopped for the person's decision.**");
-    expect(report).toContain(
-      "**Question for the person:** Nested or flat JSON?"
-    );
+    expect(report).toContain(questionsText(questions));
   });
 
   it("says so when a session stopped for a decision and named none", () => {
@@ -2609,6 +2668,10 @@ describe("a writing session's answer", () => {
 describe("what the coordinator does with a session's question", () => {
   it("relays it rather than settling it, and does not re-brief the simpler path", () => {
     expect(SOUL).toContain("nothing softened and nothing dropped");
+    // Every question at once, as the session wrote them: one form.
+    expect(SOUL).toContain(
+      "They are `ask_user`'s questions already: pass them to it whole, in one call"
+    );
     expect(SOUL).toContain("re-briefing the session to take the simpler path");
   });
 

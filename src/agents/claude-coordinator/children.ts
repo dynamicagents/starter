@@ -531,6 +531,8 @@ interface CarryOn {
    * same page. A fork is a session of its own, with a page of its own.
    */
   transcript?: string;
+  /** The conversation stopped to ask: what carries it on is the answer. */
+  asked?: true;
 }
 
 /**
@@ -551,7 +553,8 @@ function carryOn(
     fromRun: planned.runId,
     ...(options.fork
       ? { fork: true as const }
-      : { transcript: planned.transcript })
+      : { transcript: planned.transcript }),
+    ...(planned.asked ? { asked: true as const } : {})
   };
 }
 
@@ -588,7 +591,8 @@ function carryOnOf(
  *
  * An edit carries on from the conversation that wrote the plan, in the
  * worktree that holds it, without a fork: revising is one conversation
- * accumulating. See {@link prepareWriter} for where else it ends up.
+ * accumulating — and so does answering a session that stopped to ask. See
+ * {@link prepareWriter} for where else it ends up.
  */
 export async function preparePlanner(
   ctx: SubAgentPrepareContext<PlanInput, Env>,
@@ -609,7 +613,8 @@ export async function preparePlanner(
       storage,
       { id: edits, version: latestVersion(found.page) },
       sessionLookup(env),
-      ctx.runId
+      ctx.runId,
+      { asked: true }
     );
   }
   const run = { taskId: ctx.taskId, runId: ctx.runId };
@@ -646,7 +651,8 @@ export async function preparePlanner(
  * A planning session's end. A new plan its session never wrote is locked as
  * `failed`, so its page says so rather than waiting on a plan nobody will write
  * — whether or not stopping the session worked; an edit that failed leaves the
- * plan as it was.
+ * plan as it was. A session that stopped to ask has not written it yet, and
+ * answering it carries it on, so its plan stays open.
  */
 export async function settlePlanner(
   ctx: SubAgentSettleContext<Env>,
@@ -666,6 +672,13 @@ export async function settlePlanner(
 async function closeUnwritten(ctx: SubAgentSettleContext<Env>): Promise<void> {
   const plan = planPlaceOf(ctx.runtime);
   if (!plan?.isNew) return;
+  const workspaceName = sandboxNameFromRuntime(ctx.runtime);
+  const note = workspaceName
+    ? await sessionLookup(ctx.parent.env)(workspaceName, ctx.runId).catch(
+        () => undefined
+      )
+    : undefined;
+  if (note?.asked) return;
   const artifacts = requireArtifactsStub(ctx.parent.env);
   const page = await artifacts.readArtifact(plan.id);
   if (page && !page.locked && latestPlan(page.entries) === undefined) {
@@ -675,20 +688,45 @@ async function closeUnwritten(ctx: SubAgentSettleContext<Env>): Promise<void> {
 
 /**
  * What the parent is told of a planning session, having filed its plan: the
- * plan's id and title, and the session's account — see `./plans.ts`.
+ * plan's id and title, and the session's account — see `./plans.ts`. One that
+ * stopped to ask files nothing, and its question goes to the parent instead.
  * The session answers through `--json-schema`; one that did not files nothing.
+ *
+ * `onSession` records the session against the plan — the version it filed, or
+ * the one it asked on — which is what lets an edit, an answer or a build carry
+ * this conversation on: see `plannedSession` in `./plans.ts`.
  */
 export async function reportPlan(
   env: Env,
   plan: PlanPlace,
   runId: string,
   outcome: SessionOutcome,
-  onFiled?: (sessionId: string, version: number) => Promise<void>
+  onSession?: (
+    sessionId: string,
+    filed: { version?: number; asked?: true }
+  ) => Promise<void>
 ): Promise<string> {
   const result = outcome.session.result;
   const answer = PlanAnswer.safeParse(result?.structured);
   if (!result || result.isError || !answer.success) {
     return planReport(outcome, { kind: "unanswered" });
+  }
+  const sessionId = result.sessionId || outcome.session.sessionId;
+  if (answer.data.status === "needs_input") {
+    if (onSession && sessionId) {
+      const page = await requireArtifactsStub(env).readArtifact(plan.id);
+      const version = page ? latestVersion(page.entries) : undefined;
+      await onSession(sessionId, {
+        ...(version !== undefined ? { version } : {}),
+        asked: true
+      });
+    }
+    return planReport(outcome, {
+      kind: "asked",
+      id: plan.id,
+      question: answer.data.question,
+      lastReply: answer.data.lastReply
+    });
   }
   const filed = await requireArtifactsStub(env).addEntry(plan.id, {
     label: PLAN_LABEL,
@@ -702,16 +740,14 @@ export async function reportPlan(
       lastReply: answer.data.lastReply
     });
   }
-  // What lets an edit or a build carry on from this conversation: see
-  // `plannedSession` in `./plans.ts`.
-  const sessionId = result.sessionId || outcome.session.sessionId;
-  if (onFiled && sessionId) await onFiled(sessionId, filed.sequence);
+  if (onSession && sessionId) {
+    await onSession(sessionId, { version: filed.sequence });
+  }
   return planReport(outcome, {
     kind: "filed",
     id: plan.id,
     title: answer.data.title.trim(),
-    lastReply: answer.data.lastReply,
-    ...(answer.data.questions ? { questions: answer.data.questions } : {})
+    lastReply: answer.data.lastReply
   });
 }
 
@@ -791,7 +827,7 @@ abstract class ClaudeCodeRun extends SubAgent<Env> {
         this.#noteSession(place, { sessionId: record.sessionId, transcript }),
       brief: (task) =>
         plan
-          ? this.#planBrief(task, place, plan, resume !== undefined)
+          ? this.#planBrief(task, place, plan, resume)
           : this.#brief(
               task,
               place,
@@ -809,18 +845,13 @@ abstract class ClaudeCodeRun extends SubAgent<Env> {
           return unresumableReport(plan ? "plan" : "write");
         }
         return plan
-          ? reportPlan(
-              this.env,
-              plan,
-              this.name,
-              outcome,
-              (sessionId, version) =>
-                this.#noteSession(place, {
-                  sessionId,
-                  transcript,
-                  plan: plan.id,
-                  version
-                })
+          ? reportPlan(this.env, plan, this.name, outcome, (sessionId, filed) =>
+              this.#noteSession(place, {
+                sessionId,
+                transcript,
+                plan: plan.id,
+                ...filed
+              })
             )
           : this.#report(outcome, place, writes, revisions);
       }
@@ -926,8 +957,9 @@ abstract class ClaudeCodeRun extends SubAgent<Env> {
     task: string,
     place: SessionPlace,
     plan: PlanPlace,
-    resumed: boolean
+    resume: CarryOn | undefined
   ): Promise<string> {
+    const resumed = resume !== undefined;
     const note = sessionAdvisory(
       await this.#stub(place.workspaceName).advisories()
     );
@@ -942,7 +974,8 @@ abstract class ClaudeCodeRun extends SubAgent<Env> {
       said: since
         .filter((entry) => entry.label !== PLAN_LABEL)
         .map((entry) => entry.text),
-      resumed
+      resumed,
+      ...(resume?.asked ? { asked: true } : {})
     });
   }
 

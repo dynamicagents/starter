@@ -4,8 +4,6 @@ import { runInDurableObject } from "cloudflare:test";
 import type { TurnConfig, TurnContext } from "@cloudflare/think";
 import type { PluginContext } from "@dynamicagents/core";
 import { makeDoHelpers } from "@dynamicagents/core/testing";
-import { askUserInputSchema, MAX_ASK_OPTIONS } from "@dynamicagents/core/agent";
-import type { z } from "zod";
 import {
   credentialPool,
   type CredentialState
@@ -47,9 +45,7 @@ import {
   ownsPlan,
   PLAN_LABEL,
   PLAN_OUTPUT,
-  PlanAnswer,
   revisionsText,
-  type PlanQuestion,
   type ReviseInput
 } from "@/agents/claude-coordinator/plans";
 import { SOUL } from "@/agents/claude-coordinator/soul";
@@ -412,6 +408,7 @@ describe("a plan", () => {
   });
 
   const ANSWER = {
+    status: "ready",
     title: "Add a --json flag",
     plan: "Change `cli.ts` to print JSON when `--json` is given, and test it.",
     lastReply:
@@ -531,20 +528,20 @@ describe("a plan", () => {
 
   it("files the session's answer as the plan, and tells the parent its id, not its text", async () => {
     const id = await requireArtifactsStub(env).createArtifact("plan");
-    const recorded: [string, number][] = [];
+    const recorded: unknown[] = [];
     const report = await reportPlan(
       env,
       { id, isNew: true },
       "run-1",
       outcome(ANSWER) as never,
-      async (sessionId, version) => {
-        recorded.push([sessionId, version]);
+      async (sessionId, filed) => {
+        recorded.push([sessionId, filed]);
       }
     );
 
     // The session that filed it, and which version, for an edit or a build to
     // carry on from.
-    expect(recorded).toEqual([["s1", 1]]);
+    expect(recorded).toEqual([["s1", { version: 1 }]]);
 
     expect(report).toContain(`\`${id}\``);
     expect(report).toContain(ANSWER.title);
@@ -559,50 +556,37 @@ describe("a plan", () => {
   });
 
   /**
-   * The questions are `ask_user`'s already, so the parent asks them as they
-   * stand rather than retelling them — and the report says the plan is a draft,
-   * which is what keeps it from being put to the person to approve.
+   * A session asks before it delivers, so a question is not a plan: nothing is
+   * filed, and the session is recorded as having asked, which is what lets the
+   * answer carry its conversation on.
    */
-  it("reports the questions a session left open, whole, on a draft", async () => {
+  it("files nothing for a session that stopped to ask, and hands the parent its question", async () => {
     const id = await requireArtifactsStub(env).createArtifact("plan");
-    const questions: PlanQuestion[] = [
-      {
-        question: "Keep the old flag working?",
-        options: [
-          {
-            label: "Alias it (Recommended)",
-            description: "One more line to keep.",
-            example: "```sh\nlist --format json\n```"
-          },
-          { label: "Drop it", description: "Breaks scripts that use it." }
-        ]
-      }
-    ];
+    const recorded: unknown[] = [];
     const report = await reportPlan(
       env,
       { id, isNew: true },
       "run-1",
-      outcome({ ...ANSWER, questions }) as never
+      outcome({
+        status: "needs_input",
+        question:
+          "Keep the old flag working? Alias it (recommended) or drop it.",
+        lastReply: "Read the CLI; two ways in."
+      }) as never,
+      async (sessionId, filed) => {
+        recorded.push([sessionId, filed]);
+      }
     );
 
-    expect(report).toContain("a draft, not yet one to approve");
-    const json = /(`{3,})json\n([\s\S]*?)\n\1/.exec(report);
-    // A fence longer than the example's own, which would close a shorter one.
-    expect(json?.[1]).toBe("````");
-    expect(JSON.parse(json![2]!)).toEqual(questions);
-    // The plan is filed all the same: revising it carries on from this version.
-    expect(
-      (await requireArtifactsStub(env).readArtifact(id))?.entries
-    ).toHaveLength(1);
-
-    const settled = await reportPlan(
-      env,
-      { id, isNew: false },
-      "run-2",
-      outcome(ANSWER) as never
+    expect(report).toContain("stopped to ask the person before it plans");
+    expect(report).toContain(
+      "**Question for the person:** Keep the old flag working?"
     );
-    expect(settled).not.toContain("draft");
-    expect(settled).not.toContain("open questions");
+    expect(report).toContain(`\`${id}\``);
+    expect(recorded).toEqual([["s1", { asked: true }]]);
+    expect((await requireArtifactsStub(env).readArtifact(id))?.entries).toEqual(
+      []
+    );
   });
 
   it("files nothing for a session that did not answer through the schema", async () => {
@@ -668,6 +652,18 @@ describe("a plan", () => {
     await artifacts.addEntry(written, { label: PLAN_LABEL, text: "a plan" });
     await settle(written, true);
     expect(await artifacts.artifactState(written)).toMatchObject({
+      locked: false
+    });
+
+    // Not written yet because its session stopped to ask: answered, it goes on.
+    const asking = await artifacts.createArtifact("plan");
+    await sandboxAt("w").noteSession("run-1", {
+      sessionId: "s1",
+      plan: asking,
+      asked: true
+    });
+    await settle(asking, true);
+    expect(await artifacts.artifactState(asking)).toMatchObject({
       locked: false
     });
   });
@@ -751,7 +747,7 @@ describe("a plan", () => {
     expect(brief).toMatch(
       /Where the request names an approach and a different one would serve it better/
     );
-    expect(brief).toMatch(/goes to them as a question/);
+    expect(brief).toMatch(/Ask the person whenever you need them/);
   });
 
   it("is edited with its latest version and what was said about it in the brief", () => {
@@ -791,7 +787,7 @@ describe("a plan", () => {
     expect(brief).toMatch(
       /Where what they asked for would make the plan worse/
     );
-    expect(brief).toMatch(/put the better way to them in `questions`/);
+    expect(brief).toMatch(/ask them before you revise/);
     // Answered once, it is settled: asking again would never let the plan
     // reach its approval.
     expect(brief).toMatch(/unless\s+they already chose theirs over it/);
@@ -811,42 +807,33 @@ describe("a plan", () => {
   });
 
   /**
-   * A plan approved with a question still in it settles that question by
-   * default, so what is open never rides in the plan's prose or its account:
-   * it has a field of its own, and while it holds anything the plan is a draft.
+   * The planner checks with the person as it would check a dependency: asking
+   * is encouraged, and a plan is handed over only once nothing in it is open —
+   * it goes to the person to approve as it stands.
    */
-  it("keeps what is open out of the plan, in questions that hold its approval", () => {
-    const { plan, lastReply, questions } = PLAN_OUTPUT.properties;
+  it("asks whenever it needs the person, and hands a plan over only when it is ready", () => {
+    const { status, plan, question } = PLAN_OUTPUT.properties;
+    expect(status.enum).toEqual(["ready", "needs_input"]);
+    expect(status.description).toMatch(/nothing in it is open/);
+    expect(question.description).toMatch(/Required with `needs_input`/);
     expect(plan.description).toMatch(/Never an open-questions section/);
-    expect(lastReply.description).toMatch(/goes in `questions`, never here/);
-    // The planner has no `needs_input`: `questions` is the whole channel.
-    expect(questions.description).toMatch(/cannot stop to ask mid-run/);
-    expect(questions.description).toMatch(
-      /a better approach than the one the request named/
+    expect(JSON.stringify(PLAN_OUTPUT)).not.toMatch(/cannot stop to ask/);
+    const brief = planBrief(TASK);
+    expect(brief).toMatch(/Ask the person whenever you need them/);
+    expect(brief).toMatch(
+      /Hand the\s+plan over only when you believe it is ready/
     );
-    expect(questions.description).toMatch(
-      /While any is open the plan is a draft/
-    );
-    expect(planBrief(TASK)).toMatch(/approve only once nothing is open/);
   });
 
-  /** The parent asks them as they stand, so `ask_user` must take them so. */
-  it("asks questions `ask_user` takes as they stand", () => {
-    const { options } = PLAN_OUTPUT.properties.questions.items.properties;
-    expect(options.maxItems).toBe(MAX_ASK_OPTIONS);
-    const asked: z.input<typeof askUserInputSchema>["questions"] =
-      PlanAnswer.parse({
-        ...ANSWER,
-        questions: [
-          {
-            question: "Which?",
-            options: [{ label: "A (Recommended)" }, { label: "B" }]
-          }
-        ]
-      }).questions!;
-    expect(askUserInputSchema.safeParse({ questions: asked }).success).toBe(
-      true
-    );
+  /** The conversation already holds the question it asked: only the answer is new. */
+  it("carries on with the answer after it stopped to ask", () => {
+    const brief = planBrief(TASK, undefined, {
+      said: [],
+      resumed: true,
+      asked: true
+    });
+    expect(brief).toContain("## Their answer");
+    expect(brief).not.toContain("## Revising your plan");
   });
 });
 
@@ -951,6 +938,83 @@ describe("carrying a plan on from the session that wrote it", () => {
 
     expect(asked[0]).not.toHaveProperty("near");
     expect(runtime).not.toHaveProperty("resume");
+  });
+
+  /** A planning run that stopped to ask on `plan`'s `version` — none on a new plan. */
+  function askedBy(
+    place: SessionPlace,
+    runId: string,
+    sessionId: string,
+    plan: { id: string; version?: number }
+  ) {
+    return sandboxAt(place.workspaceName).noteSession(runId, {
+      sessionId,
+      plan: plan.id,
+      ...(plan.version !== undefined ? { version: plan.version } : {}),
+      asked: true
+    });
+  }
+
+  /** A planning run on `id`, given `task` — an edit, or an answer. */
+  async function replan(
+    agent: Parent,
+    id: string,
+    task: string,
+    place: SessionPlace
+  ) {
+    const ctx = { ...planning(id), input: { task, plan: id } };
+    const runtime = await preparePlanner(
+      { ...ctx, parent: agent.pluginContext() },
+      placingPool(place).pool
+    );
+    return { runtime, runId: ctx.runId };
+  }
+
+  it("answers a new plan's session that stopped to ask in its own conversation", async () => {
+    const place = worktree(3);
+    const { runtime, first } = await onParent(async (agent) => {
+      const ctx = planning();
+      const opened = await preparePlanner(
+        { ...ctx, parent: agent.pluginContext() },
+        placingPool(place).pool
+      );
+      const id = (opened.plan as { id: string }).id;
+      await askedBy(place, ctx.runId, "s-ask", { id });
+      return {
+        runtime: (await replan(agent, id, "Alias it.", place)).runtime,
+        first: ctx.runId
+      };
+    });
+
+    expect(runtime).toMatchObject({
+      plan: { isNew: false },
+      resume: { sessionId: "s-ask", fromRun: first, asked: true }
+    });
+  });
+
+  it("carries a revision that stopped to ask on with the answer, and builds from the version it asked on", async () => {
+    const place = worktree(3);
+    const { answer, built, plan, asking } = await onParent(async (agent) => {
+      const plan = await planned(agent, place);
+      await filedBy(place, plan.runId, "s-plan", plan);
+      const revision = await replan(agent, plan.id, "Smaller, please.", place);
+      await askedBy(place, revision.runId, "s-ask", plan);
+      return {
+        answer: (await replan(agent, plan.id, "Drop the table.", place))
+          .runtime,
+        built: (await build(agent, plan.id, place)).runtime,
+        plan,
+        asking: revision.runId
+      };
+    });
+
+    expect(answer).toMatchObject({
+      resume: { sessionId: "s-ask", fromRun: asking, asked: true }
+    });
+    // A run that asked filed no version, so there is nothing of its to build.
+    expect(built).toMatchObject({
+      resume: { sessionId: "s-plan", fromRun: plan.runId, fork: true }
+    });
   });
 
   it("revises a plan in the conversation that wrote it, without a fork", async () => {
@@ -2466,22 +2530,23 @@ describe("what the coordinator does with a session's question", () => {
   });
 
   /**
-   * A planner cannot stop to ask, so its account is the only place its
-   * question exists — and the approval opt-out is the one path that would
-   * otherwise drop it on the way past.
+   * The approval opt-out is the one path that could drop a session's question
+   * on the way past: opting out of reading plans is not opting out of being
+   * asked.
    */
   it("still asks a caller who does not approve plans what only they can decide", () => {
     expect(SOUL).toContain("what they opted out of is reading a plan");
   });
 
   /**
-   * An approval beside an open question lets the person approve past it, and
-   * the plan then settles it by default: the questions are asked, and the
-   * plan revised, before any approval is.
+   * A planner asks before it delivers, so a plan that comes back is one to
+   * approve; its questions go back to it by its plan, like any session's.
    */
-  it("asks a plan's open questions before its approval, never beside it", () => {
-    expect(SOUL).toContain("is a draft, not a plan to approve");
-    expect(SOUL).toContain("until one comes back with no open question");
-    expect(SOUL).toContain("no open question beside it");
+  it("puts a plan to approval once its session hands it back, and answers a planner by its plan", () => {
+    expect(SOUL).toContain("A plan a session hands back is ready");
+    expect(SOUL).toContain(
+      "a planning session's, `claude_code_plan` with its plan's id"
+    );
+    expect(SOUL).toContain("not answering what a session asks");
   });
 });

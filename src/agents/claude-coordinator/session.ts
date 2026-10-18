@@ -5,7 +5,6 @@ import type {
 } from "@dynamicagents/plugins/claude-code";
 import { z } from "zod";
 import { CLAUDE_CODE_SESSION } from "@/config";
-import type { PlanQuestion } from "./plans";
 
 /**
  * What a Claude Code session is told, and what its parent is told back.
@@ -563,26 +562,35 @@ ${plan}`;
  * only what is new — what the person said — since the plan, the code it read
  * and these instructions are already in its context. Which is why the stance
  * below is on the other path only, and the revising note carries just the part
- * a comment puts in question: whether to comply with it.
+ * a comment puts in question: whether to comply with it. One carrying on after
+ * it stopped to ask is told only that the answer is above.
  */
 export function planBrief(
   task: string,
   note?: string,
-  editing?: { plan?: string; said: readonly string[]; resumed?: boolean }
+  editing?: {
+    plan?: string;
+    said: readonly string[];
+    resumed?: boolean;
+    asked?: boolean;
+  }
 ): string {
   const parts = editing?.resumed
     ? [
         task,
         "",
-        `## Revising your plan
+        editing.asked
+          ? `## Their answer
 
-Above is what the person said about the plan you wrote: answers to your questions, or
-changes they want. Revise it to that, and answer again through the StructuredOutput tool
-with the whole plan as it should now stand, and in \`questions\` only what is still open.
+Above is the person's answer to what you asked. Carry on from where you stopped: ask again
+if something is still open, and answer with the plan once nothing is.`
+          : `## Revising your plan
+
+The person read the plan you wrote and asked for the changes above. Revise it, and answer
+again through the StructuredOutput tool with the whole plan as it should now stand.
 
 Where what they asked for would make the plan worse, or there is a better way to get what
-they are after, revise to their ask and put the better way to them in \`questions\` — unless
-they already chose theirs over it.`
+they are after, ask them before you revise — unless they already chose theirs over it.`
       ]
     : [
         task,
@@ -601,11 +609,15 @@ Work out more than one way in before you write one down, and bring the person wi
 where a real choice exists, weigh it in the plan rather than presenting the one path you
 settled on. Where the request names an approach and a different one would serve it better,
 say so and why — "you asked for X; Z gets you that, because…" is wanted here, not
-impertinent. What you cannot settle from the code — which way in they prefer, a trade-off
-only they can rank, a constraint you suspect but cannot read — goes to them as a question
-in \`questions\` rather than into an assumption buried in the plan. Ask all of it now: the
-plan is put to them to approve only once nothing is open, and a question left in its prose
-is one they approve past.`
+impertinent.
+
+Ask the person whenever you need them, as you would check a dependency or read the docs
+before relying on them: which way in they prefer, a trade-off only they can rank, a
+constraint you suspect but cannot read. Asking is \`needs_input\` with your question: you
+carry on from here with their answer, so asking costs you nothing you have found. Hand the
+plan over only when you believe it is ready — the alternatives worth weighing put to them,
+and their choice made — because it goes to them to approve as it stands, and a question
+left in it is one they approve past.`
       ];
   if (editing?.plan && !editing.resumed) {
     parts.push("", "## The plan you are changing", "", editing.plan);
@@ -625,27 +637,9 @@ is one they approve past.`
 }
 
 /**
- * `value` as a fenced JSON block, its fence longer than any run of backticks
- * inside — an option's example is Markdown, and its own fence would close a
- * shorter one.
- */
-function jsonBlock(value: unknown): string {
-  const json = JSON.stringify(value, null, 2);
-  const longest = Math.max(
-    0,
-    ...(json.match(/`+/g) ?? []).map((run) => run.length)
-  );
-  const fence = "`".repeat(Math.max(3, longest + 1));
-  return `${fence}json\n${json}\n${fence}`;
-}
-
-/**
- * What the parent is told of a planning session: the plan's id and title, what
- * the session had to say about it, and the questions it left open — never the
- * plan, which the parent hands on by its id.
- *
- * The questions go as JSON because the parent asks them as they stand: they
- * are `ask_user` questions already, and retelling one is how it gets softened.
+ * What the parent is told of a planning session: the plan's id and title, and
+ * what the session had to say about it — never the plan, which the parent hands
+ * on by its id — or the question it stopped on, before there is a plan to read.
  */
 export function planReport(
   outcome: SessionOutcome,
@@ -655,19 +649,23 @@ export function planReport(
         id: string;
         title: string;
         lastReply: string;
-        questions?: readonly PlanQuestion[];
       }
+    | { kind: "asked"; id: string; question: string; lastReply: string }
     | { kind: "unanswered" }
     | { kind: "locked"; id: string; lastReply: string }
 ): string {
   const result = outcome.session.result;
   const footer = result ? `_${sessionFooter(result)}_` : "";
   if (filed.kind === "filed") {
-    const open = filed.questions ?? [];
+    return [`**Plan \`${filed.id}\`: ${filed.title}**`, filed.lastReply, footer]
+      .filter(Boolean)
+      .join("\n\n");
+  }
+  if (filed.kind === "asked") {
     return [
-      `**Plan \`${filed.id}\`: ${filed.title}**${open.length > 0 ? " — a draft, not yet one to approve" : ""}`,
+      `**The planning session for \`${filed.id}\` stopped to ask the person before it plans.**`,
       filed.lastReply,
-      open.length > 0 ? `**Its open questions:**\n\n${jsonBlock(open)}` : "",
+      `**Question for the person:** ${filed.question}`,
       footer
     ]
       .filter(Boolean)
@@ -709,7 +707,7 @@ export function notResumable(outcome: SessionOutcome): boolean {
  */
 export function unresumableReport(kind: "plan" | "write"): string {
   return kind === "plan"
-    ? "**The conversation that wrote this plan is gone from its workspace, so nothing was revised.** Nothing was spent. Call claude_code_plan again with the same plan and comment: the next session starts from the plan's text."
+    ? "**The conversation that wrote this plan is gone from its workspace, so nothing was revised.** Nothing was spent. Call claude_code_plan again with the same plan and comment: the next session starts from the plan's text, and what you give it."
     : "**The planning session's conversation is gone from its workspace, so nothing was built.** Nothing was spent and no branch has work on it. Delegate again with the same plan: the next session starts from the plan's text.";
 }
 

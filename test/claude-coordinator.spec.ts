@@ -46,6 +46,9 @@ import {
   PLAN_LABEL,
   PLAN_OUTPUT,
   revisionsText,
+  SESSION_SKILLS,
+  WRITE_INPUT,
+  WRITER_DESCRIPTION,
   type ReviseInput
 } from "@/agents/claude-coordinator/plans";
 import { SOUL } from "@/agents/claude-coordinator/soul";
@@ -1810,6 +1813,93 @@ describe("the sessions' GitHub token", () => {
     );
     expect(plan.env.GH_TOKEN).toBe(GITHUB_TOKEN_PLACEHOLDER);
     expect(sandboxEnv(env as never)).not.toHaveProperty("GH_TOKEN");
+  });
+});
+
+/**
+ * Which process a session follows is the caller's explicit choice, and this is
+ * the half of that path this repository owns: a validated name, carried into
+ * what `prepare` hands the run. What the launch does with it — the first line of
+ * stdin, and the refusal when the checkout has no such skill — is specified in
+ * `@dynamicagents/plugins`, against the CLI itself.
+ */
+describe("the discovery process a session is told to follow", () => {
+  const writing = (agent: Parent, input: Record<string, unknown>) =>
+    prepareWriter(
+      {
+        input: { task: TASK, ...input } as never,
+        taskId: "task-1",
+        runId: `detached:${crypto.randomUUID()}`,
+        parent: agent.pluginContext()
+      },
+      placingPool(worktree()).pool
+    );
+
+  /**
+   * The names are `dev-agents`' skill directories, and nothing in either
+   * repository can see both — so a rename there is caught by plugins' run-time
+   * checks, and a rename *here* is caught by this.
+   */
+  it("offers exactly the discovery skills, and rejects anything else", () => {
+    expect([...SESSION_SKILLS]).toEqual([
+      "security-audit-discovery",
+      "refactor-discovery",
+      "restructure-discovery"
+    ]);
+    for (const skill of SESSION_SKILLS) {
+      expect(WRITE_INPUT.safeParse({ task: TASK, skill }).success).toBe(true);
+    }
+    // A name nobody has is a rejected tool call rather than a session spent
+    // doing generic work under a process the caller thought they had chosen.
+    for (const skill of ["security-audit", "refactor", "", "simplify"]) {
+      expect(WRITE_INPUT.safeParse({ task: TASK, skill }).success).toBe(false);
+    }
+  });
+
+  /** The parent chooses from the tool schema, which is the only text it sees. */
+  it("tells the parent what each one is for, and that none of them edits code", () => {
+    const described = WRITE_INPUT.shape.skill.description ?? "";
+    for (const skill of SESSION_SKILLS) {
+      expect(described).toContain(skill);
+    }
+    expect(described).toContain("changes no code");
+    expect(WRITER_DESCRIPTION).toContain("skill");
+  });
+
+  it("carries the chosen skill into the run, and nothing when none was chosen", async () => {
+    const { chosen, none } = await onParent(async (agent) => ({
+      chosen: await writing(agent, { skill: "refactor-discovery" }),
+      none: await writing(agent, {})
+    }));
+
+    expect(chosen).toMatchObject({ skill: "refactor-discovery" });
+    expect(none).not.toHaveProperty("skill");
+  });
+
+  /**
+   * A skill is spent on the line that starts a conversation, so a session
+   * carrying one on cannot take one. Refused rather than ignored: a field that
+   * silently does nothing is how a caller gets generic work under the name of a
+   * process they chose.
+   */
+  it("refuses a skill together with a conversation to carry on", async () => {
+    const { withPlan, withContinue } = await onParent(async (agent) => {
+      const failing = (input: Record<string, unknown>) =>
+        writing(agent, input).then(
+          () => "",
+          (err: unknown) => String(err)
+        );
+      return {
+        withPlan: await failing({ skill: "refactor-discovery", plan: "pl_1" }),
+        withContinue: await failing({
+          skill: "refactor-discovery",
+          continue: "claude-coordinator/abcde"
+        })
+      };
+    });
+
+    expect(withPlan).toContain("cannot go with `plan`");
+    expect(withContinue).toContain("cannot go with `continue`");
   });
 });
 

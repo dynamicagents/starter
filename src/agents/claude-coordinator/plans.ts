@@ -45,6 +45,26 @@ export const PLAN_INPUT = z.object({
 
 export type PlanInput = z.infer<typeof PLAN_INPUT>;
 
+/**
+ * The skills a writing session may be told to follow, by the names the workspace's
+ * `.agents/skills/` gives them.
+ *
+ * **This list is the selection prompt.** The parent model chooses from the tool
+ * schema, not from the `SKILL.md` frontmatter it never sees, so what each one is
+ * for has to be said here. A `z.enum` is also what makes a name nobody has a
+ * rejected tool call rather than a session spent doing generic work.
+ *
+ * The names live in another repository — `dev-agents`' checkout, which the session
+ * works in — and no spec in either can see both. What catches a rename is the pair
+ * of run-time checks plugins makes: the launch refuses a skill with no `SKILL.md`
+ * behind it, and a session whose CLI does not report loading it is stopped.
+ */
+export const SESSION_SKILLS = [
+  "security-audit-discovery",
+  "refactor-discovery",
+  "restructure-discovery"
+] as const;
+
 /** The writer's input, the plan it carries out, and the name of a new branch. */
 export const WRITE_INPUT = CLAUDE_CODE_WRITE_INPUT.extend({
   plan: z
@@ -52,6 +72,24 @@ export const WRITE_INPUT = CLAUDE_CODE_WRITE_INPUT.extend({
     .optional()
     .describe(
       "The id of an approved plan to carry out — one claude_code_plan returned. The session carries on from the planning session's conversation where it can, and is given the plan whole either way, so brief it on the work rather than restating the plan or what the planner found."
+    ),
+  /**
+   * Only the writer takes one. A planning run answers a schema under `plan` and a
+   * revising run answers review threads on branches it is given; neither is a run
+   * that goes looking for candidates, so neither tool offers the field.
+   */
+  skill: z
+    .enum(SESSION_SKILLS)
+    .optional()
+    .describe(
+      [
+        "A discovery process for the session to follow, named only when the work is to go *looking* for candidates rather than to make a change:",
+        "`security-audit-discovery` sweeps the product for vulnerabilities and files each privately, with one public coverage record per run;",
+        "`refactor-discovery` looks for in-place reshaping — duplication, a dead export, a helper worth extracting;",
+        "`restructure-discovery` looks for code in the wrong place — a module in the wrong repository, an import against the dependency direction, a package surface that should split.",
+        "Each files its findings as issues or private advisories, ranks them, files at most a few, and **changes no code** — so brief it on where to look and what matters, not on what to change, and do not also ask it for a fix.",
+        "Omit this for ordinary work. It applies to a session that starts fresh, so it cannot go with `plan` or `continue`: a session carrying a conversation on already has the process it started under."
+      ].join(" ")
     ),
   branch: z
     .string()
@@ -85,6 +123,12 @@ export const WRITER_DESCRIPTION = [
   "no pull request yet — a session that stopped for a decision, or work a cancel",
   "kept — set `continue` to it: the session carries on the conversation that wrote",
   "it. To change an open pull request, use claude_code_revise instead.",
+  "",
+  "To send it looking for work rather than to do a change, name a discovery process",
+  "as `skill`: it finds candidates of that kind, establishes which are real, and",
+  "files the best few as issues or private advisories without touching the code.",
+  "Say where to look and what matters there; it decides what is worth filing, and",
+  "a run that files nothing is a normal run.",
   "",
   "To find something out rather than change it, say so and that it is to change",
   "nothing: it pushes nothing and opens nothing."

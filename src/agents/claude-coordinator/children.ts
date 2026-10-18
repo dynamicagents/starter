@@ -296,6 +296,18 @@ export async function prepareWriter(
   workspaces: SubtaskWorkspaces = sessionWorkspaces(ctx.parent)
 ): Promise<Record<string, unknown>> {
   const plan = ctx.input.plan;
+  const skill = ctx.input.skill;
+  // A skill is spent on the first line of the prompt that *starts* a
+  // conversation — plugins' run header is where that is explained — so a session
+  // carrying one on cannot take one: it is already running whatever process it
+  // started under, and asking again would re-run the skill mid-conversation.
+  // Refused here rather than ignored, because a field that silently does nothing
+  // is how a caller gets generic work under the name of a process they chose.
+  if (skill !== undefined && (plan !== undefined || ctx.input.continue)) {
+    throw new Error(
+      `claude_code: \`skill\` names the process a new session follows, so it cannot go with \`${plan !== undefined ? "plan" : "continue"}\` — that session carries a conversation on and already has the process it started under. Drop one of them.`
+    );
+  }
   let planned: PlannedSession | undefined;
   if (plan === undefined && ctx.input.continue) {
     if (ctx.input.branch) {
@@ -329,6 +341,7 @@ export async function prepareWriter(
   return {
     ...runtimeOf(place),
     ...(plan === undefined ? {} : { [PLAN_KEY]: plan }),
+    ...(skill === undefined ? {} : { [SKILL_KEY]: skill }),
     ...(resume ? { [RESUME_KEY]: resume } : {})
   };
 }
@@ -741,6 +754,17 @@ function writerPlanOf(
   return typeof plan === "string" ? plan : undefined;
 }
 
+/** Where a run's chosen skill is kept in what `prepare` hands it. */
+const SKILL_KEY = "skill";
+
+/** The discovery process a writing session was told to follow, if it was given one. */
+function skillOf(
+  runtime: Record<string, unknown> | undefined
+): string | undefined {
+  const skill = runtime?.[SKILL_KEY];
+  return typeof skill === "string" ? skill : undefined;
+}
+
 /** A Claude Code session as a sub-agent: the writer, the planner and the reader below. */
 abstract class ClaudeCodeRun extends SubAgent<Env> {
   protected abstract readonly kind: "write" | "revise" | "plan";
@@ -751,6 +775,9 @@ abstract class ClaudeCodeRun extends SubAgent<Env> {
     const writes = this.kind !== "plan" && place.branch !== undefined;
     const revisions = this.kind === "revise" ? revisionsOf(runtime) : undefined;
     const plan = this.kind === "plan" ? planPlaceOf(runtime) : undefined;
+    // The writer's alone: `claude_code_plan` and `claude_code_revise` offer no
+    // such field — see `skill` in `./plans.ts`'s `WRITE_INPUT`.
+    const skill = this.kind === "write" ? skillOf(runtime) : undefined;
     if (this.kind === "plan" && !plan) {
       throw new Error(
         "claude-coordinator: this planning run carries no plan; its spec's prepare opens one"
@@ -770,6 +797,10 @@ abstract class ClaudeCodeRun extends SubAgent<Env> {
       // A plan is a writing session under `plan`, answering as data: it reads,
       // changes nothing, and has nobody to approve its plan mid-run.
       schema,
+      // The process the caller chose, which the launch spends on the first line
+      // of the session's first prompt. Absent, the launch prepends nothing and
+      // the session is an ordinary one.
+      ...(skill ? { skill } : {}),
       ...(plan ? { permissionMode: "plan" as const } : {}),
       // The run that holds the conversation, in this same sandbox: `carryOn`
       // hands one over only where that is so.

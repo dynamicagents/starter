@@ -601,6 +601,7 @@ export async function preparePlanner(
   const { env, storage } = ctx.parent;
   const edits = ctx.input.plan;
   let planned: PlannedSession | undefined;
+  let version: number | undefined;
   if (edits !== undefined) {
     const found = await lookUpPlan(env, storage, edits);
     if (!found.ok) throw new Error(`claude_code_plan: ${found.reason}`);
@@ -609,9 +610,10 @@ export async function preparePlanner(
         `claude_code_plan: the plan \`${edits}\` is locked (${found.status ?? "locked"}), and a locked plan does not change. Write a new plan instead.`
       );
     }
+    version = latestVersion(found.page);
     planned = await plannedSession(
       storage,
-      { id: edits, version: latestVersion(found.page) },
+      { id: edits, version },
       sessionLookup(env),
       ctx.runId,
       { asked: true }
@@ -639,7 +641,11 @@ export async function preparePlanner(
     ...(place.slot ? { slot: place.slot } : {})
   });
   const resume = carryOn(planned, place, { fork: false });
-  const plan: PlanPlace = { id, isNew: edits === undefined };
+  const plan: PlanPlace = {
+    id,
+    isNew: edits === undefined,
+    ...(version !== undefined ? { version } : {})
+  };
   return {
     ...runtimeOf(place),
     [PLAN_KEY]: plan,
@@ -673,11 +679,17 @@ async function closeUnwritten(ctx: SubAgentSettleContext<Env>): Promise<void> {
   const plan = planPlaceOf(ctx.runtime);
   if (!plan?.isNew) return;
   const workspaceName = sandboxNameFromRuntime(ctx.runtime);
-  const note = workspaceName
-    ? await sessionLookup(ctx.parent.env)(workspaceName, ctx.runId).catch(
-        () => undefined
-      )
-    : undefined;
+  let note: SessionNote | undefined;
+  try {
+    note = workspaceName
+      ? await sessionLookup(ctx.parent.env)(workspaceName, ctx.runId)
+      : undefined;
+  } catch {
+    // Unreadable: left open, since closing it would refuse an answer to a
+    // question the session may have asked. An open page with nothing on it
+    // costs nothing.
+    return;
+  }
   if (note?.asked) return;
   const artifacts = requireArtifactsStub(ctx.parent.env);
   const page = await artifacts.readArtifact(plan.id);
@@ -694,7 +706,8 @@ async function closeUnwritten(ctx: SubAgentSettleContext<Env>): Promise<void> {
  *
  * `onSession` records the session against the plan — the version it filed, or
  * the one it asked on — which is what lets an edit, an answer or a build carry
- * this conversation on: see `plannedSession` in `./plans.ts`.
+ * this conversation on: see `plannedSession` in `./plans.ts`. A record of a
+ * version filed is best-effort; one of a question must land or fail the run.
  */
 export async function reportPlan(
   env: Env,
@@ -713,11 +726,11 @@ export async function reportPlan(
   }
   const sessionId = result.sessionId || outcome.session.sessionId;
   if (answer.data.status === "needs_input") {
+    // Recorded before the question is reported, and not best-effort: the
+    // record is what keeps the plan open for the answer — see `closeUnwritten`.
     if (onSession && sessionId) {
-      const page = await requireArtifactsStub(env).readArtifact(plan.id);
-      const version = page ? latestVersion(page.entries) : undefined;
       await onSession(sessionId, {
-        ...(version !== undefined ? { version } : {}),
+        ...(plan.version !== undefined ? { version: plan.version } : {}),
         asked: true
       });
     }
@@ -759,6 +772,13 @@ export interface PlanPlace {
   id: string;
   /** Opened for this run, rather than an edit of one that was there. */
   isNew: boolean;
+  /**
+   * The version the run starts from — what it carries on or is shown — and
+   * none on a plan with nothing on it yet. A run that asks is recorded against
+   * it, not against whatever is latest when it ends: another edit may have
+   * filed a newer one meanwhile, which this conversation never saw.
+   */
+  version?: number;
 }
 
 function planPlaceOf(
@@ -846,12 +866,11 @@ abstract class ClaudeCodeRun extends SubAgent<Env> {
         }
         return plan
           ? reportPlan(this.env, plan, this.name, outcome, (sessionId, filed) =>
-              this.#noteSession(place, {
-                sessionId,
-                transcript,
-                plan: plan.id,
-                ...filed
-              })
+              this.#noteSession(
+                place,
+                { sessionId, transcript, plan: plan.id, ...filed },
+                { required: filed.asked === true }
+              )
             )
           : this.#report(outcome, place, writes, revisions);
       }
@@ -861,12 +880,18 @@ abstract class ClaudeCodeRun extends SubAgent<Env> {
   /**
    * Record a run's session on the sandbox that holds its conversation.
    * Best-effort: a record lost is a later run starting fresh from the plan,
-   * which it always could.
+   * which it always could — unless `required`, for a record the run's result
+   * depends on, which then fails the run rather than report without it.
    */
-  async #noteSession(place: SessionPlace, note: SessionNote): Promise<void> {
+  async #noteSession(
+    place: SessionPlace,
+    note: SessionNote,
+    options: { required?: boolean } = {}
+  ): Promise<void> {
     try {
       await this.#stub(place.workspaceName).noteSession(this.name, note);
     } catch (err) {
+      if (options.required) throw err;
       console.warn("[claude-coordinator] could not record the session", {
         runId: this.name,
         err: String(err)

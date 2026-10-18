@@ -17,7 +17,7 @@ import {
 } from "@dynamicagents/plugins/sandbox";
 import type { AgentToolLifecycleResult, AgentToolRunInfo } from "agents";
 import type { ContextConfig } from "agents/context";
-import type { ClaudeCoordinatorSandbox } from "@/index";
+import { ClaudeCoordinatorSandbox } from "@/index";
 import { requireArtifactsStub } from "@dynamicagents/core/artifacts";
 import {
   ClaudeCoordinatorPlannerChild,
@@ -589,6 +589,50 @@ describe("a plan", () => {
     );
   });
 
+  /**
+   * Recorded against the version it started from: another edit filing a newer
+   * one meanwhile does not make this conversation one that saw it.
+   */
+  it("records a question against the version the session started from", async () => {
+    const artifacts = requireArtifactsStub(env);
+    const id = await artifacts.createArtifact("plan");
+    await artifacts.addEntry(id, { label: PLAN_LABEL, text: "v1" });
+    await artifacts.addEntry(id, { label: PLAN_LABEL, text: "v2" });
+    const recorded: unknown[] = [];
+    await reportPlan(
+      env,
+      { id, isNew: false, version: 1 },
+      "run-1",
+      outcome({
+        status: "needs_input",
+        question: "Which?",
+        lastReply: ""
+      }) as never,
+      async (_sessionId, filed) => {
+        recorded.push(filed);
+      }
+    );
+    expect(recorded).toEqual([{ version: 1, asked: true }]);
+  });
+
+  /** Without its record the plan would not stay open for the answer. */
+  it("fails rather than report a question it could not record", async () => {
+    const id = await requireArtifactsStub(env).createArtifact("plan");
+    await expect(
+      reportPlan(
+        env,
+        { id, isNew: true },
+        "run-1",
+        outcome({
+          status: "needs_input",
+          question: "Which?",
+          lastReply: ""
+        }) as never,
+        () => Promise.reject(new Error("sandbox unreachable"))
+      )
+    ).rejects.toThrow("sandbox unreachable");
+  });
+
   it("files nothing for a session that did not answer through the schema", async () => {
     const id = await requireArtifactsStub(env).createArtifact("plan");
     const recorded: string[] = [];
@@ -664,6 +708,20 @@ describe("a plan", () => {
     });
     await settle(asking, true);
     expect(await artifacts.artifactState(asking)).toMatchObject({
+      locked: false
+    });
+
+    // A record that cannot be read may be one of a question: left open.
+    const unread = await artifacts.createArtifact("plan");
+    const spy = vi
+      .spyOn(ClaudeCoordinatorSandbox.prototype, "sessionOf")
+      .mockRejectedValue(new Error("unreadable"));
+    try {
+      await settle(unread, true);
+    } finally {
+      spy.mockRestore();
+    }
+    expect(await artifacts.artifactState(unread)).toMatchObject({
       locked: false
     });
   });
@@ -1015,6 +1073,39 @@ describe("carrying a plan on from the session that wrote it", () => {
     expect(built).toMatchObject({
       resume: { sessionId: "s-plan", fromRun: plan.runId, fork: true }
     });
+  });
+
+  /**
+   * Two edits from one version: one files the next, the other asks. Its
+   * conversation never saw the newer version, so the answer goes to the one
+   * that filed it rather than carry the older plan on.
+   */
+  it("answers in the conversation of the latest version once the plan has moved past the question", async () => {
+    const place = worktree(3);
+    const { answer, newer } = await onParent(async (agent) => {
+      const plan = await planned(agent, place);
+      await filedBy(place, plan.runId, "s-plan", plan);
+      const asking = await replan(agent, plan.id, "Smaller, please.", place);
+      const filing = await replan(agent, plan.id, "Rename it.", place);
+      const newer = await file(plan.id, "# The plan\n\nRenamed.");
+      await filedBy(place, filing.runId, "s-newer", {
+        id: plan.id,
+        version: newer
+      });
+      await askedBy(place, asking.runId, "s-ask", plan);
+      return {
+        answer: (await replan(agent, plan.id, "Drop the table.", place))
+          .runtime,
+        newer: filing.runId
+      };
+    });
+
+    expect(answer).toMatchObject({
+      resume: { sessionId: "s-newer", fromRun: newer }
+    });
+    expect(
+      (answer as { resume: Record<string, unknown> }).resume
+    ).not.toHaveProperty("asked");
   });
 
   it("revises a plan in the conversation that wrote it, without a fork", async () => {

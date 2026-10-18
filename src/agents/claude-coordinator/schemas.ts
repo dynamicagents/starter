@@ -10,7 +10,7 @@
  * What a session that stops asks the person, in the shape core's `ask_user`
  * takes: the agent puts these to the person as they stand, so the gate renders
  * the form they are — each question with its options, what each means, a sample
- * of what it produces, and room for the person's own words.
+ * of what it produces, and a box for an answer of their own.
  */
 const QUESTIONS = {
   type: "array",
@@ -57,7 +57,7 @@ const QUESTIONS = {
           additionalProperties: false
         },
         description:
-          "The answers to pick from, when there are a few; they can always answer in their own words instead. Leave it out to have them type an answer."
+          "The answers to pick from, when there are a few. The form always has a box for an answer of their own beside them, so list no 'Other' option. Leave it out to have them type an answer."
       },
       multiple: {
         type: "boolean",

@@ -911,9 +911,10 @@ describe("a plan", () => {
    */
   it("asks in the shape `ask_user` takes, from either session", () => {
     for (const schema of [PLAN_OUTPUT, WRITE_OUTPUT]) {
-      expect(
-        schema.properties.questions.items.properties.options.maxItems
-      ).toBe(MAX_ASK_OPTIONS);
+      const { options } = schema.properties.questions.items.properties;
+      expect(options.maxItems).toBe(MAX_ASK_OPTIONS);
+      // The gate gives every choice a box of its own for another answer.
+      expect(options.description).toMatch(/list no 'Other' option/);
     }
     const parsed = SessionQuestions.parse([
       ...QUESTIONS,

@@ -336,6 +336,9 @@ const DiscoveryAnswer = z.object({
   questions: SessionQuestions.optional()
 });
 
+/** How much of the CLI's `API Error: …` sentence the parent is told. */
+const API_ERROR_KEPT = 300;
+
 /**
  * File what a discovery session answered, and tell the parent what became of it.
  *
@@ -362,17 +365,21 @@ export async function reportDiscovery(
   const footer = `_${sessionFooter(result)}_`;
   const answer = DiscoveryAnswer.safeParse(result.structured);
   if (result.isError || !answer.success) {
-    // Named from the CLI's own fields, as `sessionReport` does only once
-    // `result.text` is empty. A parent that is not given a report is not given
-    // a broken one either.
+    // Named from the CLI's own fields, or its own `API Error: …` sentence, and
+    // never from anything else in `result.text`: a parent that is not given a
+    // report is not given a broken one either.
     const how = result.isError
-      ? `it ended as \`${result.subtype}\`` +
-        (result.apiErrorStatus === null
-          ? ""
-          : ` after an API ${result.apiErrorStatus}`)
+      ? result.text.startsWith("API Error")
+        ? result.text.slice(0, API_ERROR_KEPT)
+        : `it ended as \`${result.subtype}\`` +
+          (result.apiErrorStatus === null
+            ? ""
+            : ` after an API ${result.apiErrorStatus}`)
       : "its answer was not in the shape this agent reads";
+    // A run can file in the repository before it fails — an advisory, say — and
+    // none of that is in an answer it never made.
     return [
-      `**The discovery run filed nothing**: ${how}. Nothing it found reached here, so brief a new run if it is still wanted.`,
+      `**The discovery run filed no report**: ${how}. What it did in the repository before it ended stands but is not listed here, so look there before briefing a new run.`,
       footer
     ].join("\n\n");
   }

@@ -1652,6 +1652,34 @@ describe("a discovery run", () => {
     );
   });
 
+  /** The CLI ends a session the API failed as `success`, with its error as the answer. */
+  it("names the API error a session ended on, and what it may have left in the repository", async () => {
+    const id =
+      await requireArtifactsStub(env).createArtifact("discovery-report");
+    const error =
+      'API Error: ZlibError fetching "http://anthropic.harness.internal/v1/messages?beta=true".';
+    const failed = outcome(undefined);
+    failed.session.result = {
+      ...failed.session.result,
+      isError: true,
+      text: error,
+      structured: undefined
+    };
+    const told = await reportDiscovery(
+      env,
+      { id, line: SKILL },
+      "run-1",
+      failed as never
+    );
+
+    expect(told).toContain(error);
+    expect(told).not.toMatch(/ended as `success`/);
+    expect(told).toMatch(/stands but is not listed here/);
+    expect((await requireArtifactsStub(env).readArtifact(id))?.entries).toEqual(
+      []
+    );
+  });
+
   it("passes a session's questions to the parent as they were asked", async () => {
     const id =
       await requireArtifactsStub(env).createArtifact("discovery-report");

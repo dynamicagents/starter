@@ -55,6 +55,17 @@ import {
   type WriteInput
 } from "./plans";
 import { sessionWorkspaces } from "./plugins";
+import {
+  DISCOVER_INPUT,
+  DISCOVERER_DESCRIPTION,
+  discoveryLine,
+  fileReport,
+  forgetReport,
+  openReport,
+  reportDiscovery,
+  reportWasFiled,
+  type DiscoverInput
+} from "./reports";
 import type { SessionNote } from "./sandbox";
 import type { SessionSchema } from "./schemas";
 import {
@@ -64,6 +75,7 @@ import {
   READ_HEADS,
   RETURN_TO_START,
   STOPPED_EXIT,
+  discoveryBrief,
   needsWarning,
   notResumable,
   planBrief,
@@ -798,14 +810,112 @@ function writerPlanOf(
   return typeof plan === "string" ? plan : undefined;
 }
 
-/** A Claude Code session as a sub-agent: the writer, the planner and the reader below. */
+/**
+ * A discovery session works in a checkout of its own, on a page opened for the
+ * report it will file.
+ *
+ * The page is opened here, before the session runs, for the reason a plan's is:
+ * the run needs an id to file onto, and no model may choose one. The skill it
+ * runs under is read from the task, which is where the model named it, and it
+ * is what the page is filed under so a later run of the same skill is handed
+ * it. See `./reports.ts`.
+ */
+export async function prepareDiscoverer(
+  ctx: SubAgentPrepareContext<DiscoverInput, Env>,
+  workspaces: SubtaskWorkspaces = sessionWorkspaces(ctx.parent)
+): Promise<Record<string, unknown>> {
+  const run = { taskId: ctx.taskId, runId: ctx.runId };
+  const place = await claimPlace(workspaces, run);
+  const line = discoveryLine(ctx.input.task);
+  let id: string;
+  try {
+    id = await openReport(ctx.parent.env, ctx.parent.storage, {
+      ...(line ? { line } : {}),
+      runId: ctx.runId,
+      sourceKey: `${ctx.taskId}:${ctx.runId}`
+    });
+  } catch (err) {
+    // Given up here, with its branch, for the reason {@link preparePlanner}
+    // gives where it does the same.
+    await releaseUnused(workspaces, run, { forgetBranch: true });
+    throw err;
+  }
+  const report: ReportPlace = { id, ...(line ? { line } : {}) };
+  return { ...runtimeOf(place), [REPORT_KEY]: report };
+}
+
+/**
+ * A discovery session's end. Its worktree goes back without its branch, as a
+ * planning session's does: it commits nothing, and a branch with no work on it
+ * is nothing for the parent to review.
+ *
+ * Then the record of the page it was given becomes history, or goes. A page
+ * with no report on it is not history: left listed, it would be handed to a
+ * later run as an earlier attempt and read as a blank one.
+ */
+export async function settleDiscoverer(
+  ctx: SubAgentSettleContext<Env>,
+  workspaces: SubtaskWorkspaces = sessionWorkspaces(ctx.parent)
+): Promise<void> {
+  try {
+    await settleSession(workspaces, ctx.parent.storage, ctx, {
+      forgetBranch: true
+    });
+  } finally {
+    await settleRecord(ctx);
+  }
+}
+
+async function settleRecord(ctx: SubAgentSettleContext<Env>): Promise<void> {
+  const report = reportPlaceOf(ctx.runtime);
+  if (!report) return;
+  let filed = true;
+  try {
+    filed = await reportWasFiled(ctx.parent.env, report.id);
+  } catch (err) {
+    // Unreadable is not unfiled: a record is dropped on an answer, never on a
+    // failure to get one. A page that is there with a report on it would
+    // otherwise be lost to every later run.
+    console.warn("[claude-coordinator] could not read a report's page", {
+      err: String(err)
+    });
+  }
+  if (filed) fileReport(ctx.parent.storage, report.id);
+  else forgetReport(ctx.parent.storage, report.id);
+}
+
+/** Where a discovery run's report page is kept in what `prepare` hands it. */
+const REPORT_KEY = "report";
+
+/** The page a discovery run files on, as `prepare` hands it over. */
+export interface ReportPlace {
+  id: string;
+  /** The skill the task named, which the page is filed under. */
+  line?: string;
+}
+
+function reportPlaceOf(
+  runtime: Record<string, unknown> | undefined
+): ReportPlace | undefined {
+  const report = runtime?.[REPORT_KEY];
+  return report && typeof report === "object" && "id" in report
+    ? (report as ReportPlace)
+    : undefined;
+}
+
+/** A Claude Code session as a sub-agent: every kind below runs one. */
 abstract class ClaudeCodeRun extends SubAgent<Env> {
-  protected abstract readonly kind: "write" | "revise" | "plan";
+  protected abstract readonly kind: "write" | "revise" | "plan" | "discover";
 
   override getModel(): ThinkModel {
     const runtime = this.pluginContext().runtime();
     const place = placeOf(runtime);
-    const writes = this.kind !== "plan" && place.branch !== undefined;
+    // Named by the kinds that commit rather than by the ones that do not: a
+    // kind added here writes nothing until somebody says it does, and what
+    // `writes` turns on is a brief about a branch and the accounting after it.
+    const writes =
+      (this.kind === "write" || this.kind === "revise") &&
+      place.branch !== undefined;
     const revisions = this.kind === "revise" ? revisionsOf(runtime) : undefined;
     const plan = this.kind === "plan" ? planPlaceOf(runtime) : undefined;
     if (this.kind === "plan" && !plan) {
@@ -813,10 +923,21 @@ abstract class ClaudeCodeRun extends SubAgent<Env> {
         "claude-coordinator: this planning run carries no plan; its spec's prepare opens one"
       );
     }
+    const report =
+      this.kind === "discover" ? reportPlaceOf(runtime) : undefined;
+    if (this.kind === "discover" && !report) {
+      throw new Error(
+        "claude-coordinator: this discovery run carries no report page; its spec's prepare opens one"
+      );
+    }
     const resume = carryOnOf(runtime);
     // Recorded with the session, so a run carrying it on finds the page.
     const transcript = resume?.transcript ?? this.name;
-    const schema: SessionSchema = plan ? "plan" : "write";
+    const schema: SessionSchema = plan
+      ? "plan"
+      : report
+        ? "discovery"
+        : "write";
     return claudeCodeModel({
       // A new stub per call: a call that failed may have been its stub's last.
       sandbox: () => this.#stub(place.workspaceName) as unknown as SandboxRuns,
@@ -848,14 +969,16 @@ abstract class ClaudeCodeRun extends SubAgent<Env> {
       brief: (task) =>
         plan
           ? this.#planBrief(task, place, plan, resume)
-          : this.#brief(
-              task,
-              place,
-              writes,
-              writerPlanOf(runtime),
-              resume !== undefined,
-              revisions !== undefined
-            ),
+          : report
+            ? this.#discoveryBrief(task, place)
+            : this.#brief(
+                task,
+                place,
+                writes,
+                writerPlanOf(runtime),
+                resume !== undefined,
+                revisions !== undefined
+              ),
       ...(writes
         ? { followUp: (session: SessionEnd) => this.#followUp(session, place) }
         : {}),
@@ -864,15 +987,22 @@ abstract class ClaudeCodeRun extends SubAgent<Env> {
           await this.#forgetSession(place, resume.fromRun);
           return unresumableReport(plan ? "plan" : "write");
         }
-        return plan
-          ? reportPlan(this.env, plan, this.name, outcome, (sessionId, filed) =>
+        if (plan) {
+          return reportPlan(
+            this.env,
+            plan,
+            this.name,
+            outcome,
+            (sessionId, filed) =>
               this.#noteSession(
                 place,
                 { sessionId, transcript, plan: plan.id, ...filed },
                 { required: filed.asked === true }
               )
-            )
-          : this.#report(outcome, place, writes, revisions);
+          );
+        }
+        if (report) return this.#discoveryReport(outcome, place, report);
+        return this.#report(outcome, place, writes, revisions);
       }
     });
   }
@@ -1002,6 +1132,66 @@ abstract class ClaudeCodeRun extends SubAgent<Env> {
       resumed,
       ...(resume?.asked ? { asked: true } : {})
     });
+  }
+
+  /**
+   * A discovery session's prompt: the task, whose first line names the skill,
+   * and the repositories this checkout holds.
+   *
+   * The repositories are recorded as a writing session's are, and for a second
+   * reason here: the same list is what the discard in {@link #discoveryReport}
+   * runs over, so it has to be read before the session starts rather than after
+   * it has had a chance to add one.
+   *
+   * A branch is what says the checkout is this session's, so it is also what
+   * says the tree will be cleaned after it: see {@link #discoveryReport}.
+   */
+  async #discoveryBrief(task: string, place: SessionPlace): Promise<string> {
+    const note = sessionAdvisory(
+      await this.#stub(place.workspaceName).advisories()
+    );
+    const submodules = await this.#submodules(place);
+    await this.#recordStarts(place, [".", ...submodules]);
+    return discoveryBrief(
+      task,
+      note,
+      place.branch !== undefined ? { submodules } : undefined
+    );
+  }
+
+  /**
+   * What the parent receives from a discovery run: the session's account, what
+   * became of its report, and a checkout left as it was found.
+   *
+   * **Only a checkout that is this session's.** A scratchpad has no worktree to
+   * hand out, so the place resolves to the parent's own workspace with no
+   * branch, and what is uncommitted there is the parent's and may be older than
+   * this run. A session with no branch keeps what it leaves, which is the rule
+   * a writing session in a scratchpad works under too: see `sessionBrief` in
+   * `./session.ts`.
+   *
+   * **The discard is not reported**, and that is the difference from a writing
+   * session's. There, what is uncommitted may be the work; here the run changes
+   * nothing by construction, so anything in the tree is scratch, and naming
+   * deleted scratch gives the parent something it cannot act on. A delete that
+   * fails is logged where {@link #discard} logs it.
+   *
+   * Nothing is discarded for a session stopped from outside, for the reason
+   * {@link #report} gives: it did not choose what it left, and whoever stopped
+   * it decides.
+   */
+  async #discoveryReport(
+    outcome: SessionOutcome,
+    place: SessionPlace,
+    report: ReportPlace
+  ): Promise<string> {
+    if (
+      place.branch !== undefined &&
+      outcome.session.exitCode !== STOPPED_EXIT
+    ) {
+      await this.#discard(place, await this.#starts());
+    }
+    return reportDiscovery(this.env, report, this.name, outcome);
   }
 
   /**
@@ -1311,4 +1501,26 @@ export class ClaudeCoordinatorPlannerChild extends ClaudeCodeRun {
     transcriptKey: carriedTranscript
   } as SubAgentSpec<never, never>;
   protected readonly kind = "plan";
+}
+
+/**
+ * A discovery session: one following a skill its task names on the first line,
+ * which reads, files what it finds where that skill says, changes nothing, and
+ * answers with one report that is filed on a page of its own.
+ *
+ * The writer's spec under another name, description and input, as the planner
+ * is, since what makes it a discovery run is how it is launched and what it
+ * answers. Which skill it follows is not this agent's to know: see
+ * `./reports.ts`.
+ */
+export class ClaudeCoordinatorDiscoveryChild extends ClaudeCodeRun {
+  static override spec = {
+    ...CLAUDE_CODE_AGENT,
+    name: "claude_code_discover",
+    description: DISCOVERER_DESCRIPTION,
+    inputSchema: DISCOVER_INPUT,
+    prepare: prepareDiscoverer,
+    settle: (ctx: SubAgentSettleContext<Env>) => settleDiscoverer(ctx)
+  } as SubAgentSpec<never, never>;
+  protected readonly kind = "discover";
 }

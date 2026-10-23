@@ -6,6 +6,7 @@ import type {
 } from "@cloudflare/think";
 import type { AgentPlugin } from "@dynamicagents/core";
 import { StepAgent } from "@dynamicagents/core/agent";
+import { artifactViewerUrl } from "@dynamicagents/core/artifacts";
 import type { SubAgentClass } from "@dynamicagents/core/subagent";
 import type { StepJob } from "@dynamicagents/core/workflow";
 import { computerWorkspace } from "@dynamicagents/plugins/computer";
@@ -28,6 +29,7 @@ import {
   sqlPoolStore
 } from "@/workspace/worktree-pool";
 import {
+  ClaudeCoordinatorDiscoveryChild,
   ClaudeCoordinatorPlannerChild,
   ClaudeCoordinatorReviserChild,
   ClaudeCoordinatorWriterChild,
@@ -37,6 +39,7 @@ import {
 import { claudeCoordinator } from "./definition";
 import { parentPlugins, place, sessionWorkspaces } from "./plugins";
 import { ownsPlan } from "./plans";
+import { reportOfRun, reportsTool } from "./reports";
 import { MEMORY, RETRY_WORK, SOUL } from "./soul";
 
 /** This agent's log prefix and workspace label. */
@@ -120,12 +123,16 @@ export class ClaudeCoordinatorAgent extends StepAgent<Env> {
     );
   }
 
-  /** Building, revising, then planning: the order the delegating model is shown them. */
+  /**
+   * Building, revising, planning, then discovery: the order the delegating
+   * model is shown them.
+   */
   override getSubAgents(): SubAgentClass[] {
     return [
       ClaudeCoordinatorWriterChild,
       ClaudeCoordinatorReviserChild,
-      ClaudeCoordinatorPlannerChild
+      ClaudeCoordinatorPlannerChild,
+      ClaudeCoordinatorDiscoveryChild
     ];
   }
 
@@ -137,9 +144,25 @@ export class ClaudeCoordinatorAgent extends StepAgent<Env> {
     return ownsPlan(this.ctx.storage, id) && (await super.mayAskApproval(id));
   }
 
-  /** `check_back`, for the wait between a pull request opening and its review and CI landing. */
+  /**
+   * `check_back`, for the wait between a pull request opening and its review
+   * and CI landing, and `discovery_reports`, the pages earlier discovery runs
+   * filed.
+   *
+   * The second one is here rather than in a plugin because it answers **links**,
+   * and a link needs this deployment's own origin: that arrives with a turn and
+   * is the agent's, so a plugin's context has none to build one from. Read per
+   * call for the same reason: a tool is built before the turn that carries it.
+   */
   override getTools(): ToolSet {
-    return { ...super.getTools(), check_back: this.checkBackTool() };
+    return {
+      ...super.getTools(),
+      check_back: this.checkBackTool(),
+      discovery_reports: reportsTool({
+        storage: this.ctx.storage,
+        origin: () => this.selfOrigin()
+      })
+    };
   }
 
   /**
@@ -174,14 +197,42 @@ export class ClaudeCoordinatorAgent extends StepAgent<Env> {
       : job.input;
   }
 
-  /** A failed run's report, with where its work was kept — see `./children.ts`. */
+  /**
+   * A failed run's report, with where its work was kept (see `./children.ts`),
+   * and a discovery run's with the link to the report it filed.
+   *
+   * The link is added here because this is the only place that has both: the
+   * run's id, which the record is found by, and this deployment's own origin.
+   * A run whose settle dropped the record filed nothing, so there is nothing to
+   * link, and nothing is added.
+   */
   protected override formatDetachedCompletion(
     run: AgentToolRunInfo,
     result: AgentToolLifecycleResult
   ): string {
     const text = super.formatDetachedCompletion(run, result);
     const kept = keptNote(this.ctx.storage, run.runId);
-    return kept ? `${text}\n\n${kept}` : text;
+    return [text, kept, this.#reportLink(run.runId)]
+      .filter(Boolean)
+      .join("\n\n");
+  }
+
+  /**
+   * Where a discovery run's report is, for the parent to pass on.
+   *
+   * A run with no record filed nothing and is passed over in silence. One with
+   * a record is named either way: without an origin there is no link to build,
+   * and saying so sends the parent to `discovery_reports`, which answers links
+   * on a turn that knows what this deployment is called.
+   */
+  #reportLink(runId: string): string | undefined {
+    const report = reportOfRun(this.ctx.storage, runId);
+    if (!report) return undefined;
+    const origin = this.selfOrigin();
+    if (!origin) {
+      return "Its report was filed. This deployment's own name is not known on this instance yet, so there is no link here: call `discovery_reports` for it.";
+    }
+    return `Its report is at ${artifactViewerUrl(origin, report)}. Give the person this link; do not open it.`;
   }
 
   /**

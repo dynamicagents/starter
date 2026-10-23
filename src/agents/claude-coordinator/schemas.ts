@@ -165,10 +165,48 @@ export const WRITE_OUTPUT = {
   additionalProperties: false
 } as const;
 
+/**
+ * What a discovery session must answer, as `--json-schema`.
+ *
+ * A discovery run follows a skill named in its prompt, and what it looks for is
+ * that skill's. What is the same whichever skill it is, and so is said here: the
+ * run produces one report, the report is filed on a page of its own, and the
+ * agent that briefed the run does not read it.
+ */
+export const DISCOVERY_OUTPUT = {
+  type: "object",
+  properties: {
+    status: {
+      type: "string",
+      enum: ["done", "needs_input", "blocked"],
+      description:
+        "`done`: the run finished and `report` carries its report, including when it found nothing. `needs_input`: you stopped on questions for the person, which can be before the run proper if something it depends on was refused. `blocked`: you could not run, and `lastReply` says where you stopped and why."
+    },
+    report: {
+      type: "string",
+      description:
+        "Required with `done`: the report your skill says to write, whole, in Markdown, exactly as it should stand. It is filed on a page of its own, and that page is both what the person reads and what the next run of this skill is given as its history, so write it to be read on its own by someone who was not here. Whatever your skill keeps out of a report stays out of this: the page is reached by a link alone."
+    },
+    lastReply: {
+      type: "string",
+      description:
+        "What you tell the agent that briefed you, which does not read the report: what you did and what came of it in two or three sentences, and anything it has to act on. Never the report itself."
+    },
+    questions: {
+      ...QUESTIONS,
+      description:
+        "Required with `needs_input`: everything you need from the person, all at once, each a question of its own."
+    }
+  },
+  required: ["status", "lastReply"],
+  additionalProperties: false
+} as const;
+
 /** Each schema by the name a run's header gives it. */
 export const SESSION_SCHEMAS = {
   plan: PLAN_OUTPUT,
-  write: WRITE_OUTPUT
+  write: WRITE_OUTPUT,
+  discovery: DISCOVERY_OUTPUT
 } as const;
 
 export type SessionSchema = keyof typeof SESSION_SCHEMAS;

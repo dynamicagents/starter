@@ -698,6 +698,124 @@ left in it is one they approve past.`
 }
 
 /**
+ * Where a **discovery** session works, and what it may leave there.
+ *
+ * With a checkout of its own it has no branch, as a writing session in that
+ * place does: it commits nothing and pushes nothing, so the only thing worth
+ * saying about the place is that nothing written in it is kept. In a scratchpad
+ * there is no checkout to hand out and the tree is the parent's, so nothing is
+ * cleaned after the session and what is already uncommitted there is somebody
+ * else's.
+ *
+ * **What it may not do on GitHub is bounded, and filing is outside that bound.**
+ * A run files a record, which for a skill of this kind may be the whole point
+ * of it, and where it goes is the skill's: a brief that read as "change nothing
+ * on GitHub" would contradict the skill loaded in the same prompt. What no
+ * discovery run does is alter a record that is already there, and that holds
+ * whichever skill it follows, which is why it is said here rather than left to
+ * one of them.
+ */
+function discoveryPlaceNote(own?: { submodules: readonly string[] }): string {
+  const note = `## Where you are
+
+${
+  own
+    ? "You have a checkout of your own, in a workspace nobody else is working in while you are."
+    : "You are in the workspace this conversation shares rather than a checkout of your own, and what is already uncommitted here is somebody else's."
+}
+This session opens no branch, commits nothing, pushes nothing and opens no pull request. ${
+    own
+      ? "Anything you write in the checkout is deleted when you finish."
+      : "Nothing is deleted after you, so write under `/tmp` rather than in the tree."
+  }
+Leave every repository here as you found it.
+
+Filing is not changing. File what you find wherever your skill says to, and leave what is
+already on GitHub as it stands: never close, reopen, edit or comment on an issue, a pull
+request or an advisory, your own records included.`;
+  if (!own || own.submodules.length === 0) return note;
+  return `${note}
+
+${submodulesNote(
+  own.submodules,
+  "Each is a repository of its own. Only one level of submodules is checked out."
+)}`;
+}
+
+/**
+ * How a discovery session reads a report an earlier run filed, and what to do
+ * when it cannot.
+ *
+ * The links are in the task, put there by the agent that briefed this run. The
+ * page is served two ways from one URL: a browser gets a rendered page, and a
+ * plain request gets the report as Markdown, which is what `curl` sends. So the
+ * failure worth naming is the one that reads like success: markup coming back
+ * instead of the report, which is not an empty history but an unread one.
+ */
+const EARLIER_REPORTS_NOTE = `## Earlier reports
+
+The task above may link to reports earlier runs of this kind filed. Read one with
+\`curl -s <link>\`, which answers it as Markdown.
+
+If what comes back is an HTML page rather than the report, or the link does not resolve,
+then you did not read it: say so, and treat what it would have told you as **unknown**
+rather than as nothing to find. A history you could not read is not an empty one.`;
+
+/**
+ * What a discovery session does with what it produces.
+ *
+ * The channel only. What belongs in the report, and what must stay out of it,
+ * is the skill's and is not restated here: this says where it goes and who
+ * reads it, which is the part the skill cannot know.
+ */
+const DISCOVERY_REPORT_NOTE = `## Your report
+
+Answer with your report whole, in \`report\`. It is filed on a page of its own, and that
+page is what the person is given and what the next run of this skill is handed as its
+history. Nobody retells it on the way: what you answer is what they read.
+
+\`lastReply\` is for the agent that briefed you, which does not read the report.
+
+If the first line of the task named a skill that is not installed, nothing loaded and you
+are following none: answer \`blocked\` saying which name it was, rather than improvising a
+run of it. Your report would be filed under a name nothing ran.`;
+
+/**
+ * What a **discovery** session is told: the task with its skill named on the
+ * first line, where it is, how to read the reports it was linked to, and what
+ * to do with its own.
+ *
+ * The task comes first, as it does for every session here, and for this one
+ * that ordering is load-bearing rather than conventional: the skill is loaded
+ * by a `/<name>` line at the very start of the prompt, so anything put above
+ * the task would leave the session with no skill at all.
+ *
+ * `own` is the checkout when the session has one of its own, and absent in a
+ * scratchpad, where the tree it works in is the parent's.
+ */
+export function discoveryBrief(
+  task: string,
+  note?: string,
+  own?: { submodules: readonly string[] }
+): string {
+  const parts = [
+    task,
+    "",
+    GITHUB_NOTE,
+    "",
+    discoveryPlaceNote(own),
+    "",
+    EARLIER_REPORTS_NOTE,
+    "",
+    DISCOVERY_REPORT_NOTE
+  ];
+  if (note) {
+    parts.push("", "## The state of this workspace", "", note);
+  }
+  return parts.join("\n");
+}
+
+/**
  * What the parent is told of a planning session: the plan's id and title, and
  * what the session had to say about it — never the plan, which the parent hands
  * on by its id — or the questions it stopped on, before there is a plan to read.

@@ -30,8 +30,19 @@ import testWorker, { type TestEnv } from "./worker";
  * `wrangler.jsonc`, so a spec here passing means that file declared it.
  */
 
-const get = (path: string) =>
-  worker.fetch(new Request(`${AGENT_ORIGIN}${path}`), env);
+/**
+ * A GET through this Worker, carrying what the client asks for. `Accept` is a
+ * parameter because `/a/<token>` answers two representations from it, and a
+ * request that names nothing is the one every non-browser reader sends.
+ */
+const get = (path: string, accept?: string) =>
+  worker.fetch(
+    new Request(
+      `${AGENT_ORIGIN}${path}`,
+      accept === undefined ? undefined : { headers: { accept } }
+    ),
+    env
+  );
 
 /** The deployment's one artifacts object, addressed the way the routes do. */
 const artifacts = () =>
@@ -51,15 +62,44 @@ const framesOf = <T>(body: string, event: string): T[] =>
     .map((frame) => JSON.parse(frame.slice(frame.indexOf("data: ") + 6)) as T);
 
 describe("the artifact routes answer", () => {
-  it("serves the viewer page on a well-formed token path", async () => {
+  it("serves the viewer page to a client that asked for HTML", async () => {
     // A token this deployment never minted, deliberately: the page is the same
     // bytes for every artifact and is served without consulting the object, so
-    // a 200 here is about the route being mounted and the binding resolving —
-    // which is the whole of what this repo owns.
-    const res = await get(`/a/${mintArtifactToken()}`);
+    // a 200 here is about the route being mounted, which is what this repo
+    // owns. HTML is the opt-in, so the header is what selects this branch and a
+    // request without it is the one below.
+    const res = await get(
+      `/a/${mintArtifactToken()}`,
+      "text/html,application/xhtml+xml,*/*;q=0.8"
+    );
 
     expect(res.status).toBe(200);
     expect(res.headers.get("content-type")).toMatch(/^text\/html/);
+  });
+
+  it("serves the artifact itself to a reader that is not a browser", async () => {
+    // The same URL, and the only branch that reads the store, so this is where
+    // the route's own address for the object is checked: the page renders for
+    // any token without asking, and the stream below is reached by a path of its
+    // own, so a document here is what says the two agree.
+    //
+    // `*/*` is what `curl` sends, and `curl -s <link>` is what the earlier-reports
+    // note in src/agents/claude-coordinator/session.ts tells a discovery session
+    // to read a report with. Markup coming back is the failure that reads like
+    // success: the brief covers it, and this is what keeps it covered.
+    const token = await artifacts().createArtifact("discovery-report-probe");
+    await artifacts().addEntry(token, {
+      label: "report",
+      text: "# What was attempted"
+    });
+
+    const res = await get(`/a/${token}`, "*/*");
+
+    expect(res.status).toBe(200);
+    expect(res.headers.get("content-type")).toMatch(/^text\/markdown/);
+    const document = await res.text();
+    expect(document).toContain('artifact: "discovery-report-probe"');
+    expect(document).toContain("# What was attempted");
   });
 
   it("streams an artifact on the events route", async () => {

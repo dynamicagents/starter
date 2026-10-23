@@ -21,6 +21,7 @@ import type { ContextConfig } from "agents/context";
 import { ClaudeCoordinatorSandbox } from "@/index";
 import { requireArtifactsStub } from "@dynamicagents/core/artifacts";
 import {
+  ClaudeCoordinatorDiscoveryChild,
   ClaudeCoordinatorPlannerChild,
   ClaudeCoordinatorReviserChild,
   ClaudeCoordinatorWriterChild,
@@ -32,11 +33,23 @@ import {
   preparePlanner,
   prepareReviser,
   prepareWriter,
+  prepareDiscoverer,
   reportPlan,
+  settleDiscoverer,
   settlePlanner,
   settleReviser,
-  settleSession
+  settleSession,
+  type ReportPlace
 } from "@/agents/claude-coordinator/children";
+import {
+  discoveryLine,
+  openReport,
+  recentReports,
+  reportDiscovery,
+  reportOfRun,
+  reportsTool,
+  REPORT_LABEL
+} from "@/agents/claude-coordinator/reports";
 import {
   branchSession,
   recordBranchRun
@@ -51,6 +64,7 @@ import {
 } from "@/agents/claude-coordinator/plans";
 import { SOUL } from "@/agents/claude-coordinator/soul";
 import {
+  discoveryBrief,
   notResumable,
   planBrief,
   questionsText,
@@ -64,6 +78,10 @@ import {
   WRITE_OUTPUT,
   writingNote
 } from "@/agents/claude-coordinator/session";
+import {
+  DISCOVERY_OUTPUT,
+  SESSION_SCHEMAS
+} from "@/agents/claude-coordinator/schemas";
 import { CLAUDE_CODE_SESSION } from "@/config";
 import {
   claudeCredentials,
@@ -154,8 +172,10 @@ describe("the parent's surface", () => {
       "browser_scrape",
       "check_back",
       "claude_code",
+      "claude_code_discover",
       "claude_code_plan",
       "claude_code_revise",
+      "discovery_reports",
       "grep",
       "repo_clone",
       "repo_issue_view",
@@ -290,14 +310,15 @@ describe("the parent's surface", () => {
     expect(options).toEqual({ openai: { reasoningEffort: "max" } });
   });
 
-  it("offers building, then revising, then planning", async () => {
+  it("offers building, then revising, then planning, then discovery", async () => {
     const names = await onParent((agent) =>
       agent.getSubAgents().map((Cls) => Cls.name)
     );
     expect(names).toEqual([
       "ClaudeCoordinatorWriterChild",
       "ClaudeCoordinatorReviserChild",
-      "ClaudeCoordinatorPlannerChild"
+      "ClaudeCoordinatorPlannerChild",
+      "ClaudeCoordinatorDiscoveryChild"
     ]);
   });
 });
@@ -307,12 +328,14 @@ describe("the sessions", () => {
     expect(ClaudeCoordinatorWriterChild.spec.detached).toBe(true);
     expect(ClaudeCoordinatorReviserChild.spec.detached).toBe(true);
     expect(ClaudeCoordinatorPlannerChild.spec.detached).toBe(true);
+    expect(ClaudeCoordinatorDiscoveryChild.spec.detached).toBe(true);
   });
 
   it.each([
     ["CLAUDE_COORDINATOR_WRITER_CHILD"],
     ["CLAUDE_COORDINATOR_REVISER_CHILD"],
-    ["CLAUDE_COORDINATOR_PLANNER_CHILD"]
+    ["CLAUDE_COORDINATOR_PLANNER_CHILD"],
+    ["CLAUDE_COORDINATOR_DISCOVERY_CHILD"]
   ])("install no tools on %s: the session brings its own", async (binding) => {
     const ns = (env as unknown as Record<string, DurableObjectNamespace>)[
       binding
@@ -1329,6 +1352,366 @@ describe("carrying a plan on from the session that wrote it", () => {
       /Delegate again with the same plan/
     );
     expect(unresumableReport("plan")).toMatch(/claude_code_plan again/);
+  });
+});
+
+/**
+ * A discovery run: a session following the skill its task names on the first
+ * line, whose one report is filed on a page of its own and reaches the next run
+ * of that skill as a link. Nothing here names a skill, which is the point:
+ * see `@/agents/claude-coordinator/reports`.
+ */
+describe("a discovery run", () => {
+  const SKILL = "security-audit-discovery";
+  const TASK_WITH_SKILL = `/${SKILL}\n\nGo over the train, floor \`high\`.`;
+  const REPORT = "# Security audit discovery\n\n| hypothesis | status |\n";
+
+  const discovering = (task = TASK_WITH_SKILL) =>
+    ({
+      input: { task },
+      taskId: "task-1",
+      runId: `detached:${crypto.randomUUID()}`
+    }) as const;
+
+  /** A discovery session's outcome: its answer through `--json-schema`. */
+  const outcome = (structured: unknown) => ({
+    session: {
+      exitCode: 0,
+      result: {
+        subtype: "success",
+        isError: false,
+        text: JSON.stringify(structured),
+        sessionId: "s1",
+        numTurns: 3,
+        durationMs: 12_000,
+        apiErrorStatus: null,
+        costUsd: 0.2,
+        usage: { input: 1, output: 2, cacheRead: 3, cacheWrite: 4 },
+        permissionDenials: 0,
+        structured
+      }
+    }
+  });
+
+  /**
+   * The line a report is filed under is read from the one string that loads a
+   * skill, so what counts here is exactly what the CLI dispatches: a prompt
+   * *beginning* with the slash command.
+   */
+  it.each([
+    ["the first line names it", TASK_WITH_SKILL, SKILL],
+    ["the line is the whole task", "/audit:deep", "audit:deep"],
+    [
+      "a leading space means the CLI never dispatched it",
+      " /audit\nx",
+      undefined
+    ],
+    ["a later line is not the prompt's first", "Audit it.\n/audit", undefined],
+    ["a bare slash names nothing", "/\nAudit it.", undefined],
+    ["an ordinary task names none", "Audit the train.", undefined]
+  ])("reads the skill from the task when %s", (_label, task, line) => {
+    expect(discoveryLine(task)).toBe(line);
+  });
+
+  it("opens a page for the report, under the skill the task named", async () => {
+    const { pool } = placingPool(worktree());
+    const ctx = discovering();
+    const { runtime, listed, ofRun } = await onParent(async (agent) => {
+      const runtime = await prepareDiscoverer(
+        { ...ctx, parent: agent.pluginContext() },
+        pool
+      );
+      return {
+        runtime,
+        listed: recentReports(agent.ctx.storage),
+        ofRun: reportOfRun(agent.ctx.storage, ctx.runId)
+      };
+    });
+
+    const report = runtime.report as ReportPlace;
+    expect(report.line).toBe(SKILL);
+    expect(listed).toMatchObject([{ id: report.id, line: SKILL }]);
+    // The run's own page, which is how its completion carries the link.
+    expect(ofRun).toBe(report.id);
+  });
+
+  it("opens one under no skill when the task names none, rather than refusing", async () => {
+    const { pool } = placingPool(worktree());
+    const { report, listed } = await onParent(async (agent) => {
+      const runtime = await prepareDiscoverer(
+        { ...discovering("Audit the train."), parent: agent.pluginContext() },
+        pool
+      );
+      return {
+        report: runtime.report as ReportPlace,
+        listed: recentReports(agent.ctx.storage)
+      };
+    });
+
+    expect(report.line).toBeUndefined();
+    expect(listed).toMatchObject([{ id: report.id }]);
+    expect(listed[0]).not.toHaveProperty("line");
+  });
+
+  it("opens the page it opened before when prepare runs again for the same run", async () => {
+    const { pool } = placingPool(worktree());
+    const ids = await onParent(async (agent) => {
+      const ctx = { ...discovering(), parent: agent.pluginContext() };
+      const first = await prepareDiscoverer(ctx, pool);
+      const again = await prepareDiscoverer(ctx, pool);
+      return [first, again].map((r) => (r.report as ReportPlace).id);
+    });
+
+    expect(ids[1]).toBe(ids[0]);
+  });
+
+  it("files the report on its page and closes it, naming the skill and not the report", async () => {
+    const id =
+      await requireArtifactsStub(env).createArtifact("discovery-report");
+    const answer = {
+      status: "done",
+      report: REPORT,
+      lastReply: "Three hypotheses, one filed privately."
+    };
+
+    const told = await reportDiscovery(
+      env,
+      { id, line: SKILL },
+      "run-1",
+      outcome(answer) as never
+    );
+
+    expect(told).toContain(`/${SKILL}`);
+    expect(told).toContain(answer.lastReply);
+    // The parent is told that it was filed, never what it says.
+    expect(told).not.toContain("| hypothesis |");
+    const page = await requireArtifactsStub(env).readArtifact(id);
+    expect(page?.entries).toMatchObject([
+      { label: REPORT_LABEL, text: REPORT.trim() }
+    ]);
+    // Locked with the note, so what was handed over cannot change and the
+    // page's event stream ends for whoever reads it.
+    expect(page).toMatchObject({ locked: true, status: "filed" });
+  });
+
+  it("says a report filed under no skill reaches no later run", async () => {
+    const id =
+      await requireArtifactsStub(env).createArtifact("discovery-report");
+    const told = await reportDiscovery(
+      env,
+      { id },
+      "run-1",
+      outcome({ status: "done", report: REPORT, lastReply: "Done." }) as never
+    );
+
+    expect(told).toMatch(/under no skill/);
+  });
+
+  it.each([
+    [
+      "it stopped to ask",
+      {
+        status: "needs_input",
+        lastReply: "The advisory route refused me.",
+        questions: [{ question: "Widen the token's scopes?" }]
+      },
+      /stopped for the person's decision/
+    ],
+    [
+      "it was blocked",
+      { status: "blocked", lastReply: "No checkout." },
+      /Blocked, and nothing was filed/
+    ],
+    [
+      "it answered with no report",
+      { status: "done", lastReply: "I read a lot." },
+      /no report, so nothing was filed/
+    ]
+  ])("files nothing when %s", async (_label, answer, expected) => {
+    const id =
+      await requireArtifactsStub(env).createArtifact("discovery-report");
+    const told = await reportDiscovery(
+      env,
+      { id, line: SKILL },
+      "run-1",
+      outcome(answer) as never
+    );
+
+    expect(told).toMatch(expected);
+    expect((await requireArtifactsStub(env).readArtifact(id))?.entries).toEqual(
+      []
+    );
+  });
+
+  it("passes a session's questions to the parent as they were asked", async () => {
+    const id =
+      await requireArtifactsStub(env).createArtifact("discovery-report");
+    const questions = [
+      { question: "Widen the token's scopes?", header: "Scopes" }
+    ];
+    const told = await reportDiscovery(
+      env,
+      { id, line: SKILL },
+      "run-1",
+      outcome({
+        status: "needs_input",
+        lastReply: "Refused at the probe.",
+        questions
+      }) as never
+    );
+
+    expect(told).toContain(questionsText(questions));
+  });
+
+  /**
+   * A page with no report on it is not history: handed to a later run it would
+   * read as an attempt that found nothing.
+   */
+  it("forgets a record when the run filed nothing on its page", async () => {
+    const { pool } = placingPool(worktree());
+    const ctx = discovering();
+    const left = await onParent(async (agent) => {
+      const runtime = await prepareDiscoverer(
+        { ...ctx, parent: agent.pluginContext() },
+        pool
+      );
+      await settleDiscoverer(
+        {
+          runId: ctx.runId,
+          taskId: ctx.taskId,
+          runtime,
+          result: { status: "completed" } as never,
+          parent: agent.pluginContext()
+        },
+        pool
+      );
+      return recentReports(agent.ctx.storage);
+    });
+
+    expect(left).toEqual([]);
+  });
+
+  it("keeps the record of a run that filed one, and frees its worktree without a branch", async () => {
+    const { pool, calls } = placingPool(worktree());
+    const ctx = discovering();
+    const left = await onParent(async (agent) => {
+      const runtime = await prepareDiscoverer(
+        { ...ctx, parent: agent.pluginContext() },
+        pool
+      );
+      await reportDiscovery(
+        agent.pluginContext().env,
+        runtime.report as ReportPlace,
+        ctx.runId,
+        outcome({ status: "done", report: REPORT, lastReply: "Done." }) as never
+      );
+      await settleDiscoverer(
+        {
+          runId: ctx.runId,
+          taskId: ctx.taskId,
+          runtime,
+          result: { status: "completed" } as never,
+          parent: agent.pluginContext()
+        },
+        pool
+      );
+      return recentReports(agent.ctx.storage);
+    });
+
+    expect(left).toHaveLength(1);
+    expect(calls).toEqual(["release, forgetting its branch"]);
+  });
+
+  /**
+   * The links, and nothing else: the Coordinator puts the ones it chooses into
+   * the next run's task, and never reads a report itself.
+   */
+  describe("discovery_reports", () => {
+    const list = async (
+      storage: DurableObjectStorage,
+      origin: () => string | undefined = () => "https://agent.example"
+    ) =>
+      (await reportsTool({ storage, origin }).execute!({}, {
+        toolCallId: "call_1",
+        messages: []
+      } as never)) as string;
+
+    it("answers this caller's pages, newest first, as links", async () => {
+      const listed = await onParent(async (agent) => {
+        const older = await openReport(env, agent.ctx.storage, {
+          line: SKILL,
+          runId: "run-1",
+          sourceKey: `s:${crypto.randomUUID()}`
+        });
+        const newer = await openReport(env, agent.ctx.storage, {
+          line: SKILL,
+          runId: "run-2",
+          sourceKey: `s:${crypto.randomUUID()}`
+        });
+        return { text: await list(agent.ctx.storage), older, newer };
+      });
+
+      expect(listed.text).toContain(`https://agent.example/a/${listed.newer}`);
+      expect(listed.text).toContain(`/${SKILL}`);
+      expect(listed.text.indexOf(listed.newer)).toBeLessThan(
+        listed.text.indexOf(listed.older)
+      );
+    });
+
+    it("says so when there is none, because that is not a clean window", async () => {
+      const text = await onParent((agent) => list(agent.ctx.storage));
+      expect(text).toMatch(/No report of yours is on record/);
+      expect(text).toMatch(/unknown/);
+    });
+
+    it("gives no link before a turn has said what this deployment is called", async () => {
+      const text = await onParent(async (agent) => {
+        await openReport(env, agent.ctx.storage, {
+          line: SKILL,
+          runId: "run-1",
+          sourceKey: `s:${crypto.randomUUID()}`
+        });
+        return list(agent.ctx.storage, () => undefined);
+      });
+
+      expect(text).toMatch(/not known on this instance yet/);
+      expect(text).not.toContain("/a/");
+    });
+  });
+
+  /**
+   * The task is first in the prompt, and for this session that is not a
+   * convention: the skill is loaded by a slash command at the very start, so
+   * anything above the task would leave the run with no skill at all.
+   */
+  it("briefs the session with the task first, and how to read a link it was given", () => {
+    const brief = discoveryBrief(TASK_WITH_SKILL, "the install failed", [
+      "core"
+    ]);
+
+    expect(brief.startsWith(TASK_WITH_SKILL)).toBe(true);
+    expect(brief).toContain("curl -s <link>");
+    expect(brief).toContain("`core`");
+    expect(brief).toContain("the install failed");
+    // It writes nothing that outlives it, so none of the writer's delivery.
+    expect(brief).not.toContain("pull request from it");
+  });
+
+  it("asks for the report whole, and for an account that is not it", () => {
+    const { status, report, lastReply } = DISCOVERY_OUTPUT.properties;
+
+    expect(status.enum).toEqual(["done", "needs_input", "blocked"]);
+    expect(DISCOVERY_OUTPUT.required).toEqual(["status", "lastReply"]);
+    expect(report.description).toMatch(/whole/);
+    expect(lastReply.description).toMatch(/Never the report itself/);
+    // The name a run's header gives it, which the image's daemon looks up.
+    expect(SESSION_SCHEMAS.discovery).toBe(DISCOVERY_OUTPUT);
+  });
+
+  it("tells the parent to name the skill first and to pass links rather than read them", () => {
+    expect(SOUL).toContain("`/<skill-name>`");
+    expect(SOUL).toContain("`discovery_reports`");
+    expect(SOUL).toContain("never open it yourself");
   });
 });
 

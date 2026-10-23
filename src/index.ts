@@ -51,7 +51,8 @@ export { ClaudeCoordinatorAgent } from "./agents/claude-coordinator/agent";
 export {
   ClaudeCoordinatorWriterChild,
   ClaudeCoordinatorReviserChild,
-  ClaudeCoordinatorPlannerChild
+  ClaudeCoordinatorPlannerChild,
+  ClaudeCoordinatorDiscoveryChild
 } from "./agents/claude-coordinator/children";
 
 /**

@@ -141,6 +141,10 @@ export default defineConfig({
             className: "ClaudeCoordinatorPlannerChild",
             useSQLite: true
           },
+          CLAUDE_COORDINATOR_DISCOVERY_CHILD: {
+            className: "ClaudeCoordinatorDiscoveryChild",
+            useSQLite: true
+          },
           TEST_GENERIC_CHILD: {
             className: "TestGenericChild",
             useSQLite: true

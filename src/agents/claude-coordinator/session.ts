@@ -698,6 +698,96 @@ left in it is one they approve past.`
 }
 
 /**
+ * Where a **discovery** session works, and what it may leave there.
+ *
+ * It has a checkout of its own, as a writing session does, and no branch: it
+ * commits nothing and pushes nothing, so the only thing worth saying about the
+ * place is that nothing written in it is kept. Whatever the run files, it files
+ * where its skill says to.
+ */
+function discoveryPlaceNote(submodules: readonly string[]): string {
+  const note = `## Where you are
+
+You have a checkout of your own, in a workspace nobody else is working in while you are.
+This session opens no branch, commits nothing, pushes nothing and opens no pull request,
+and anything you write in the checkout is deleted when you finish. Leave every repository
+here as you found it.`;
+  if (submodules.length === 0) return note;
+  return `${note}
+
+${submodulesNote(
+  submodules,
+  "Each is a repository of its own. Only one level of submodules is checked out."
+)}`;
+}
+
+/**
+ * How a discovery session reads a report an earlier run filed, and what to do
+ * when it cannot.
+ *
+ * The links are in the task, put there by the agent that briefed this run. The
+ * page is served two ways from one URL: a browser gets a rendered page, and a
+ * plain request gets the report as Markdown, which is what `curl` sends. So the
+ * failure worth naming is the one that reads like success: markup coming back
+ * instead of the report, which is not an empty history but an unread one.
+ */
+const EARLIER_REPORTS_NOTE = `## Earlier reports
+
+The task above may link to reports earlier runs of this kind filed. Read one with
+\`curl -s <link>\`, which answers it as Markdown.
+
+If what comes back is an HTML page rather than the report, or the link does not resolve,
+then you did not read it: say so, and treat what it would have told you as **unknown**
+rather than as nothing to find. A history you could not read is not an empty one.`;
+
+/**
+ * What a discovery session does with what it produces.
+ *
+ * The channel only. What belongs in the report, and what must stay out of it,
+ * is the skill's and is not restated here: this says where it goes and who
+ * reads it, which is the part the skill cannot know.
+ */
+const DISCOVERY_REPORT_NOTE = `## Your report
+
+Answer with your report whole, in \`report\`. It is filed on a page of its own, and that
+page is what the person is given and what the next run of this skill is handed as its
+history. Nobody retells it on the way: what you answer is what they read.
+
+\`lastReply\` is for the agent that briefed you, which does not read the report.`;
+
+/**
+ * What a **discovery** session is told: the task with its skill named on the
+ * first line, where it is, how to read the reports it was linked to, and what
+ * to do with its own.
+ *
+ * The task comes first, as it does for every session here, and for this one
+ * that ordering is load-bearing rather than conventional: the skill is loaded
+ * by a `/<name>` line at the very start of the prompt, so anything put above
+ * the task would leave the session with no skill at all.
+ */
+export function discoveryBrief(
+  task: string,
+  note?: string,
+  submodules: readonly string[] = []
+): string {
+  const parts = [
+    task,
+    "",
+    GITHUB_NOTE,
+    "",
+    discoveryPlaceNote(submodules),
+    "",
+    EARLIER_REPORTS_NOTE,
+    "",
+    DISCOVERY_REPORT_NOTE
+  ];
+  if (note) {
+    parts.push("", "## The state of this workspace", "", note);
+  }
+  return parts.join("\n");
+}
+
+/**
  * What the parent is told of a planning session: the plan's id and title, and
  * what the session had to say about it — never the plan, which the parent hands
  * on by its id — or the questions it stopped on, before there is a plan to read.

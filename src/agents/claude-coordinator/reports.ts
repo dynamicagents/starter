@@ -90,7 +90,7 @@ function ensure(storage: DurableObjectStorage): void {
 /** One record, as {@link recentReports} answers it. */
 export interface ReportRecord {
   id: string;
-  /** The skill it was filed under, or none when the task named one. */
+  /** The skill it was filed under, or none when the task named none. */
   line?: string;
   at: number;
 }
@@ -147,7 +147,13 @@ export function reportOfRun(
     .toArray()[0]?.id;
 }
 
-/** This caller's records, newest first. */
+/**
+ * This caller's records, newest first, and none retention has taken.
+ *
+ * Age is read here as well as swept in {@link openReport}, because the sweep
+ * runs on an open: a caller who has not started a run since would otherwise be
+ * answered with links to pages that are gone.
+ */
 export function recentReports(storage: DurableObjectStorage): ReportRecord[] {
   ensure(storage);
   return storage.sql
@@ -156,7 +162,8 @@ export function recentReports(storage: DurableObjectStorage): ReportRecord[] {
       line: string | null;
       created_at: number;
     }>(
-      `SELECT id, line, created_at FROM ${TABLE} ORDER BY created_at DESC, rowid DESC LIMIT ?`,
+      `SELECT id, line, created_at FROM ${TABLE} WHERE created_at >= ? ORDER BY created_at DESC, rowid DESC LIMIT ?`,
+      Date.now() - ARTIFACT_RETENTION_MS,
       MAX_LISTED
     )
     .toArray()
@@ -346,7 +353,7 @@ export async function reportDiscovery(
   );
   if (filed === null) {
     return [
-      "**The report could not be filed**: its page is gone or was already closed. What the session found is in its account below and nowhere else.",
+      "**The report could not be filed**: its page is gone or was already closed. Nothing but the account below is left of what the session found, and the account is not the report: brief a new run if it is still wanted.",
       lastReply,
       footer
     ]

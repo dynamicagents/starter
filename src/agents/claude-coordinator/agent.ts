@@ -217,12 +217,21 @@ export class ClaudeCoordinatorAgent extends StepAgent<Env> {
       .join("\n\n");
   }
 
-  /** Where a discovery run's report is, for the parent to pass on. */
+  /**
+   * Where a discovery run's report is, for the parent to pass on.
+   *
+   * A run with no record filed nothing and is passed over in silence. One with
+   * a record is named either way: without an origin there is no link to build,
+   * and saying so sends the parent to `discovery_reports`, which answers links
+   * on a turn that knows what this deployment is called.
+   */
   #reportLink(runId: string): string | undefined {
-    const origin = this.selfOrigin();
-    if (!origin) return undefined;
     const report = reportOfRun(this.ctx.storage, runId);
     if (!report) return undefined;
+    const origin = this.selfOrigin();
+    if (!origin) {
+      return "Its report was filed. This deployment's own name is not known on this instance yet, so there is no link here: call `discovery_reports` for it.";
+    }
     return `Its report is at ${artifactViewerUrl(origin, report)}. Give the person this link; do not open it.`;
   }
 

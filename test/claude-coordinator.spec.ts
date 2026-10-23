@@ -1680,6 +1680,36 @@ describe("a discovery run", () => {
   });
 
   /**
+   * A finished run's completion is where the report reaches the parent. On an
+   * instance no turn has reached there is no origin to build a link from, so
+   * the run is still named and the parent is sent to the tool that can.
+   */
+  it("names the report on a finished run's completion, and nothing for a run with none", async () => {
+    const run = (runId: string) =>
+      ({
+        runId,
+        agentType: "ClaudeCoordinatorDiscoveryChild",
+        displayOrder: 1
+      }) as unknown as AgentToolRunInfo;
+    const done = { status: "completed" } as AgentToolLifecycleResult;
+
+    const told = await onParent(async (agent) => {
+      await openReport(env, agent.ctx.storage, {
+        line: SKILL,
+        runId: "detached:call_1",
+        sourceKey: `s:${crypto.randomUUID()}`
+      });
+      return {
+        filed: agent.formatDetachedCompletion(run("detached:call_1"), done),
+        none: agent.formatDetachedCompletion(run("detached:call_2"), done)
+      };
+    });
+
+    expect(told.filed).toContain("`discovery_reports`");
+    expect(told.none).not.toContain("`discovery_reports`");
+  });
+
+  /**
    * The task is first in the prompt, and for this session that is not a
    * convention: the skill is loaded by a slash command at the very start, so
    * anything above the task would leave the run with no skill at all.

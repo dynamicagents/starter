@@ -228,6 +228,13 @@ function ensure(storage: DurableObjectStorage): void {
  * artifact lives for {@link ARTIFACT_RETENTION_MS} from when it was opened, and
  * so does its row here.
  *
+ * `owner` is the verified caller, stamped on the artifact itself, and it is what
+ * core's approval gate reads: a plan opened without it can be read by whoever
+ * holds its link and put to nobody for approval. Required rather than optional
+ * so no call site can leave a plan unapprovable by forgetting it. The row below
+ * is a second record of the same fact, kept because its rows predate the
+ * artifact's own column.
+ *
  * `sourceKey` names what opens it — a planning run — so opening it again for
  * the same one, as a replayed `prepare` does, finds the plan it opened rather
  * than a second one.
@@ -235,11 +242,13 @@ function ensure(storage: DurableObjectStorage): void {
 export async function createPlan(
   env: Env,
   storage: DurableObjectStorage,
+  owner: string,
   sourceKey?: string
 ): Promise<string> {
   const id = await requireArtifactsStub(env).createArtifact(
     PLAN_KIND,
-    sourceKey
+    sourceKey,
+    owner
   );
   ensure(storage);
   const now = Date.now();

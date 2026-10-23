@@ -140,6 +140,8 @@ interface Parent {
     run: AgentToolRunInfo,
     result: AgentToolLifecycleResult
   ): string;
+  /** The verified caller, which is what a page this agent opens is owned by. */
+  callerKey(): string;
   ctx: DurableObjectState;
 }
 
@@ -556,7 +558,7 @@ describe("a plan", () => {
       const id =
         which === "foreign"
           ? await requireArtifactsStub(env).createArtifact("plan")
-          : await createPlan(env, agent.ctx.storage);
+          : await createPlan(env, agent.ctx.storage, agent.callerKey());
       if (which === "locked") {
         await requireArtifactsStub(env).lock(id, "approved");
       }
@@ -783,7 +785,7 @@ describe("a plan", () => {
         const id =
           which === "foreign"
             ? await requireArtifactsStub(env).createArtifact("plan")
-            : await createPlan(env, agent.ctx.storage);
+            : await createPlan(env, agent.ctx.storage, agent.callerKey());
         return prepareWriter({
           ...planning(id),
           parent: agent.pluginContext()
@@ -1760,11 +1762,13 @@ describe("a discovery run", () => {
       } as never)) as string;
 
     /** A page this caller filed on, which is what a record becomes history on. */
-    const filed = async (storage: DurableObjectStorage, runId: string) => {
+    const filed = async (agent: Parent, runId: string) => {
+      const storage = agent.ctx.storage;
       const id = await openReport(env, storage, {
         line: SKILL,
         runId,
-        sourceKey: `s:${crypto.randomUUID()}`
+        sourceKey: `s:${crypto.randomUUID()}`,
+        owner: agent.callerKey()
       });
       fileReport(storage, id);
       return id;
@@ -1772,8 +1776,8 @@ describe("a discovery run", () => {
 
     it("answers this caller's pages, newest first, as links", async () => {
       const listed = await onParent(async (agent) => {
-        const older = await filed(agent.ctx.storage, "run-1");
-        const newer = await filed(agent.ctx.storage, "run-2");
+        const older = await filed(agent, "run-1");
+        const newer = await filed(agent, "run-2");
         return { text: await list(agent.ctx.storage), older, newer };
       });
 
@@ -1792,7 +1796,7 @@ describe("a discovery run", () => {
 
     it("gives no link before a turn has said what this deployment is called", async () => {
       const text = await onParent(async (agent) => {
-        await filed(agent.ctx.storage, "run-1");
+        await filed(agent, "run-1");
         return list(agent.ctx.storage, () => undefined);
       });
 
@@ -1819,7 +1823,8 @@ describe("a discovery run", () => {
       const id = await openReport(env, agent.ctx.storage, {
         line: SKILL,
         runId: "detached:call_1",
-        sourceKey: `s:${crypto.randomUUID()}`
+        sourceKey: `s:${crypto.randomUUID()}`,
+        owner: agent.callerKey()
       });
       fileReport(agent.ctx.storage, id);
       return {

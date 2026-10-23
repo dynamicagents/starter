@@ -639,7 +639,13 @@ export async function preparePlanner(
   let id: string;
   try {
     id =
-      edits ?? (await createPlan(env, storage, `${ctx.taskId}:${ctx.runId}`));
+      edits ??
+      (await createPlan(
+        env,
+        storage,
+        ctx.parent.callerKey(),
+        `${ctx.taskId}:${ctx.runId}`
+      ));
   } catch (err) {
     // A `prepare` that throws gets no `settle`, so nothing else lets go —
     // and it lets go of the branch, as a planning session's settle does.
@@ -832,7 +838,8 @@ export async function prepareDiscoverer(
     id = await openReport(ctx.parent.env, ctx.parent.storage, {
       ...(line ? { line } : {}),
       runId: ctx.runId,
-      sourceKey: `${ctx.taskId}:${ctx.runId}`
+      sourceKey: `${ctx.taskId}:${ctx.runId}`,
+      owner: ctx.parent.callerKey()
     });
   } catch (err) {
     // Given up here, with its branch, for the reason {@link preparePlanner}

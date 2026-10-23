@@ -113,17 +113,22 @@ export interface ReportRecord {
  * lives for {@link ARTIFACT_RETENTION_MS} from when it was opened, and so does
  * its row here.
  *
+ * `owner` is the verified caller, stamped on the artifact itself, which is what
+ * makes the page this caller's to write on rather than anyone's who holds its
+ * link — see `createPlan` in `./plans.ts`, which stamps a plan the same way.
+ *
  * `sourceKey` names what opens it, so opening it again for the same run, as a
  * replayed `prepare` does, finds that run's page rather than a second one.
  */
 export async function openReport(
   env: Env,
   storage: DurableObjectStorage,
-  run: { line?: string; runId: string; sourceKey: string }
+  run: { line?: string; runId: string; sourceKey: string; owner: string }
 ): Promise<string> {
   const id = await requireArtifactsStub(env).createArtifact(
     DISCOVERY_REPORT_KIND,
-    run.sourceKey
+    run.sourceKey,
+    run.owner
   );
   ensure(storage);
   const now = Date.now();

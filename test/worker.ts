@@ -371,10 +371,19 @@ const PLANNER_SPEC = {
   ...ClaudeCoordinatorPlannerChild.spec,
   prepare: async (ctx: {
     input: { plan?: string };
-    parent: { env: Env; storage: DurableObjectStorage };
+    parent: {
+      env: Env;
+      storage: DurableObjectStorage;
+      callerKey: () => string;
+    };
   }) => {
     const id =
-      ctx.input.plan ?? (await createPlan(ctx.parent.env, ctx.parent.storage));
+      ctx.input.plan ??
+      (await createPlan(
+        ctx.parent.env,
+        ctx.parent.storage,
+        ctx.parent.callerKey()
+      ));
     return {
       workspaceName: "test-workspace",
       dir: "/workspace/t",
@@ -429,7 +438,7 @@ export class TestClaudeCoordinatorAgent extends ClaudeCoordinatorAgent {
 
   /** Open a plan for this caller, as a planning session's `prepare` does. */
   async openPlan(): Promise<string> {
-    return createPlan(this.env, this.ctx.storage);
+    return createPlan(this.env, this.ctx.storage, this.callerKey());
   }
 }
 

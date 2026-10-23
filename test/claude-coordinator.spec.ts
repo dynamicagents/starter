@@ -43,6 +43,7 @@ import {
 } from "@/agents/claude-coordinator/children";
 import {
   discoveryLine,
+  fileReport,
   openReport,
   recentReports,
   reportDiscovery,
@@ -932,8 +933,8 @@ describe("a plan", () => {
    * The parent passes a session's questions to `ask_user` whole, so they must
    * be what it takes: the gate renders them as the form they are.
    */
-  it("asks in the shape `ask_user` takes, from either session", () => {
-    for (const schema of [PLAN_OUTPUT, WRITE_OUTPUT]) {
+  it("asks in the shape `ask_user` takes, from every session", () => {
+    for (const schema of [PLAN_OUTPUT, WRITE_OUTPUT, DISCOVERY_OUTPUT]) {
       const { options } = schema.properties.questions.items.properties;
       expect(options.maxItems).toBe(MAX_ASK_OPTIONS);
       // The gate gives every choice a box of its own for another answer.
@@ -1401,6 +1402,7 @@ describe("a discovery run", () => {
   it.each([
     ["the first line names it", TASK_WITH_SKILL, SKILL],
     ["the line is the whole task", "/audit:deep", "audit:deep"],
+    ["the lines are separated with CRLF", "/audit\r\nGo on.", "audit"],
     [
       "a leading space means the CLI never dispatched it",
       " /audit\nx",
@@ -1413,39 +1415,100 @@ describe("a discovery run", () => {
     expect(discoveryLine(task)).toBe(line);
   });
 
+  /** A run end to end on one page: opened, answered, and its record settled. */
+  const ran = async (
+    agent: Parent,
+    pool: SubtaskWorkspaces,
+    ctx: ReturnType<typeof discovering>,
+    answer: unknown = { status: "done", report: REPORT, lastReply: "Done." }
+  ) => {
+    const runtime = await prepareDiscoverer(
+      { ...ctx, parent: agent.pluginContext() },
+      pool
+    );
+    await reportDiscovery(
+      agent.pluginContext().env,
+      runtime.report as ReportPlace,
+      ctx.runId,
+      outcome(answer) as never
+    );
+    await settleDiscoverer(
+      {
+        runId: ctx.runId,
+        taskId: ctx.taskId,
+        runtime,
+        result: { status: "completed" } as never,
+        parent: agent.pluginContext()
+      },
+      pool
+    );
+    return runtime.report as ReportPlace;
+  };
+
   it("opens a page for the report, under the skill the task named", async () => {
     const { pool } = placingPool(worktree());
     const ctx = discovering();
-    const { runtime, listed, ofRun } = await onParent(async (agent) => {
+    const { runtime, ofRun } = await onParent(async (agent) => {
       const runtime = await prepareDiscoverer(
         { ...ctx, parent: agent.pluginContext() },
         pool
       );
-      return {
-        runtime,
-        listed: recentReports(agent.ctx.storage),
-        ofRun: reportOfRun(agent.ctx.storage, ctx.runId)
-      };
+      return { runtime, ofRun: reportOfRun(agent.ctx.storage, ctx.runId) };
     });
 
     const report = runtime.report as ReportPlace;
     expect(report.line).toBe(SKILL);
-    expect(listed).toMatchObject([{ id: report.id, line: SKILL }]);
     // The run's own page, which is how its completion carries the link.
     expect(ofRun).toBe(report.id);
+  });
+
+  /**
+   * A page is opened before the run so it has an id to file onto, which leaves
+   * a window in which it holds nothing. Listed in that window it would be
+   * handed to the next run as an attempt that found nothing, and would push a
+   * real report out of the few links that run is briefed with.
+   */
+  it("lists a page only once a report is on it, never while its run is working", async () => {
+    const { pool } = placingPool(worktree());
+    const ctx = discovering();
+    const { working, filed } = await onParent(async (agent) => {
+      const runtime = await prepareDiscoverer(
+        { ...ctx, parent: agent.pluginContext() },
+        pool
+      );
+      const working = recentReports(agent.ctx.storage);
+      await reportDiscovery(
+        agent.pluginContext().env,
+        runtime.report as ReportPlace,
+        ctx.runId,
+        outcome({
+          status: "done",
+          report: REPORT,
+          lastReply: "Done."
+        }) as never
+      );
+      await settleDiscoverer(
+        {
+          runId: ctx.runId,
+          taskId: ctx.taskId,
+          runtime,
+          result: { status: "completed" } as never,
+          parent: agent.pluginContext()
+        },
+        pool
+      );
+      return { working, filed: recentReports(agent.ctx.storage) };
+    });
+
+    expect(working).toEqual([]);
+    expect(filed).toHaveLength(1);
   });
 
   it("opens one under no skill when the task names none, rather than refusing", async () => {
     const { pool } = placingPool(worktree());
     const { report, listed } = await onParent(async (agent) => {
-      const runtime = await prepareDiscoverer(
-        { ...discovering("Audit the train."), parent: agent.pluginContext() },
-        pool
-      );
-      return {
-        report: runtime.report as ReportPlace,
-        listed: recentReports(agent.ctx.storage)
-      };
+      const report = await ran(agent, pool, discovering("Audit the train."));
+      return { report, listed: recentReports(agent.ctx.storage) };
     });
 
     expect(report.line).toBeUndefined();
@@ -1543,6 +1606,28 @@ describe("a discovery run", () => {
     );
   });
 
+  /**
+   * The session's own last message is the answer it failed to make, report and
+   * all, so an answer this agent cannot read is named rather than quoted. The
+   * parent does not read a report, and a broken one is still a report.
+   */
+  it("quotes nothing a session said when its answer will not parse", async () => {
+    const id =
+      await requireArtifactsStub(env).createArtifact("discovery-report");
+    const told = await reportDiscovery(
+      env,
+      { id, line: SKILL },
+      "run-1",
+      outcome({ status: "finished", findings: REPORT }) as never
+    );
+
+    expect(told).toMatch(/not in the shape this agent reads/);
+    expect(told).not.toContain("| hypothesis |");
+    expect((await requireArtifactsStub(env).readArtifact(id))?.entries).toEqual(
+      []
+    );
+  });
+
   it("passes a session's questions to the parent as they were asked", async () => {
     const id =
       await requireArtifactsStub(env).createArtifact("discovery-report");
@@ -1585,36 +1670,22 @@ describe("a discovery run", () => {
         },
         pool
       );
-      return recentReports(agent.ctx.storage);
+      return {
+        listed: recentReports(agent.ctx.storage),
+        // Gone, rather than merely unfiled: the completion reads this one, and
+        // a row left behind would link the parent to an empty page.
+        ofRun: reportOfRun(agent.ctx.storage, ctx.runId)
+      };
     });
 
-    expect(left).toEqual([]);
+    expect(left.listed).toEqual([]);
+    expect(left.ofRun).toBeUndefined();
   });
 
   it("keeps the record of a run that filed one, and frees its worktree without a branch", async () => {
     const { pool, calls } = placingPool(worktree());
-    const ctx = discovering();
     const left = await onParent(async (agent) => {
-      const runtime = await prepareDiscoverer(
-        { ...ctx, parent: agent.pluginContext() },
-        pool
-      );
-      await reportDiscovery(
-        agent.pluginContext().env,
-        runtime.report as ReportPlace,
-        ctx.runId,
-        outcome({ status: "done", report: REPORT, lastReply: "Done." }) as never
-      );
-      await settleDiscoverer(
-        {
-          runId: ctx.runId,
-          taskId: ctx.taskId,
-          runtime,
-          result: { status: "completed" } as never,
-          parent: agent.pluginContext()
-        },
-        pool
-      );
+      await ran(agent, pool, discovering());
       return recentReports(agent.ctx.storage);
     });
 
@@ -1636,18 +1707,21 @@ describe("a discovery run", () => {
         messages: []
       } as never)) as string;
 
+    /** A page this caller filed on, which is what a record becomes history on. */
+    const filed = async (storage: DurableObjectStorage, runId: string) => {
+      const id = await openReport(env, storage, {
+        line: SKILL,
+        runId,
+        sourceKey: `s:${crypto.randomUUID()}`
+      });
+      fileReport(storage, id);
+      return id;
+    };
+
     it("answers this caller's pages, newest first, as links", async () => {
       const listed = await onParent(async (agent) => {
-        const older = await openReport(env, agent.ctx.storage, {
-          line: SKILL,
-          runId: "run-1",
-          sourceKey: `s:${crypto.randomUUID()}`
-        });
-        const newer = await openReport(env, agent.ctx.storage, {
-          line: SKILL,
-          runId: "run-2",
-          sourceKey: `s:${crypto.randomUUID()}`
-        });
+        const older = await filed(agent.ctx.storage, "run-1");
+        const newer = await filed(agent.ctx.storage, "run-2");
         return { text: await list(agent.ctx.storage), older, newer };
       });
 
@@ -1666,11 +1740,7 @@ describe("a discovery run", () => {
 
     it("gives no link before a turn has said what this deployment is called", async () => {
       const text = await onParent(async (agent) => {
-        await openReport(env, agent.ctx.storage, {
-          line: SKILL,
-          runId: "run-1",
-          sourceKey: `s:${crypto.randomUUID()}`
-        });
+        await filed(agent.ctx.storage, "run-1");
         return list(agent.ctx.storage, () => undefined);
       });
 
@@ -1694,11 +1764,12 @@ describe("a discovery run", () => {
     const done = { status: "completed" } as AgentToolLifecycleResult;
 
     const told = await onParent(async (agent) => {
-      await openReport(env, agent.ctx.storage, {
+      const id = await openReport(env, agent.ctx.storage, {
         line: SKILL,
         runId: "detached:call_1",
         sourceKey: `s:${crypto.randomUUID()}`
       });
+      fileReport(agent.ctx.storage, id);
       return {
         filed: agent.formatDetachedCompletion(run("detached:call_1"), done),
         none: agent.formatDetachedCompletion(run("detached:call_2"), done)
@@ -1715,16 +1786,36 @@ describe("a discovery run", () => {
    * anything above the task would leave the run with no skill at all.
    */
   it("briefs the session with the task first, and how to read a link it was given", () => {
-    const brief = discoveryBrief(TASK_WITH_SKILL, "the install failed", [
-      "core"
-    ]);
+    const brief = discoveryBrief(TASK_WITH_SKILL, "the install failed", {
+      submodules: ["core"]
+    });
 
     expect(brief.startsWith(TASK_WITH_SKILL)).toBe(true);
     expect(brief).toContain("curl -s <link>");
     expect(brief).toContain("`core`");
     expect(brief).toContain("the install failed");
     // It writes nothing that outlives it, so none of the writer's delivery.
-    expect(brief).not.toContain("pull request from it");
+    expect(brief).not.toContain("## Delivering it");
+  });
+
+  /**
+   * A scratchpad has no worktree to hand out, so the session is in the tree the
+   * parent is working in. Nothing is deleted after it there, and the brief says
+   * so rather than promising a clean-up that would take the parent's work with
+   * it: see `#discoveryReport` in `@/agents/claude-coordinator/children`.
+   */
+  it("tells a session in a shared tree that nothing is deleted after it", () => {
+    const brief = discoveryBrief(TASK_WITH_SKILL);
+
+    expect(brief).toContain("somebody else's");
+    expect(brief).toContain("write under `/tmp`");
+    expect(brief).not.toContain("is deleted when you finish");
+  });
+
+  it("tells a session whose first line loaded no skill to say so", () => {
+    expect(discoveryBrief(TASK_WITH_SKILL)).toContain(
+      "named a skill that is not installed"
+    );
   });
 
   it("asks for the report whole, and for an account that is not it", () => {

@@ -59,6 +59,7 @@ import {
   DISCOVER_INPUT,
   DISCOVERER_DESCRIPTION,
   discoveryLine,
+  fileReport,
   forgetReport,
   openReport,
   reportDiscovery,
@@ -848,9 +849,9 @@ export async function prepareDiscoverer(
  * planning session's does: it commits nothing, and a branch with no work on it
  * is nothing for the parent to review.
  *
- * Then the page it was given is forgotten if nothing was filed on it. A record
- * is history, and a page with no report on it is not: left listed, it would be
- * handed to a later run as an earlier attempt and read as a blank one.
+ * Then the record of the page it was given becomes history, or goes. A page
+ * with no report on it is not history: left listed, it would be handed to a
+ * later run as an earlier attempt and read as a blank one.
  */
 export async function settleDiscoverer(
   ctx: SubAgentSettleContext<Env>,
@@ -861,15 +862,16 @@ export async function settleDiscoverer(
       forgetBranch: true
     });
   } finally {
-    await forgetUnfiled(ctx);
+    await settleRecord(ctx);
   }
 }
 
-async function forgetUnfiled(ctx: SubAgentSettleContext<Env>): Promise<void> {
+async function settleRecord(ctx: SubAgentSettleContext<Env>): Promise<void> {
   const report = reportPlaceOf(ctx.runtime);
   if (!report) return;
+  let filed = true;
   try {
-    if (await reportWasFiled(ctx.parent.env, report.id)) return;
+    filed = await reportWasFiled(ctx.parent.env, report.id);
   } catch (err) {
     // Unreadable is not unfiled: a record is dropped on an answer, never on a
     // failure to get one. A page that is there with a report on it would
@@ -877,9 +879,9 @@ async function forgetUnfiled(ctx: SubAgentSettleContext<Env>): Promise<void> {
     console.warn("[claude-coordinator] could not read a report's page", {
       err: String(err)
     });
-    return;
   }
-  forgetReport(ctx.parent.storage, report.id);
+  if (filed) fileReport(ctx.parent.storage, report.id);
+  else forgetReport(ctx.parent.storage, report.id);
 }
 
 /** Where a discovery run's report page is kept in what `prepare` hands it. */
@@ -1140,6 +1142,9 @@ abstract class ClaudeCodeRun extends SubAgent<Env> {
    * reason here: the same list is what the discard in {@link #discoveryReport}
    * runs over, so it has to be read before the session starts rather than after
    * it has had a chance to add one.
+   *
+   * A branch is what says the checkout is this session's, so it is also what
+   * says the tree will be cleaned after it: see {@link #discoveryReport}.
    */
   async #discoveryBrief(task: string, place: SessionPlace): Promise<string> {
     const note = sessionAdvisory(
@@ -1147,12 +1152,23 @@ abstract class ClaudeCodeRun extends SubAgent<Env> {
     );
     const submodules = await this.#submodules(place);
     await this.#recordStarts(place, [".", ...submodules]);
-    return discoveryBrief(task, note, submodules);
+    return discoveryBrief(
+      task,
+      note,
+      place.branch !== undefined ? { submodules } : undefined
+    );
   }
 
   /**
    * What the parent receives from a discovery run: the session's account, what
    * became of its report, and a checkout left as it was found.
+   *
+   * **Only a checkout that is this session's.** A scratchpad has no worktree to
+   * hand out, so the place resolves to the parent's own workspace with no
+   * branch, and what is uncommitted there is the parent's and may be older than
+   * this run. A session with no branch keeps what it leaves, which is the rule
+   * a writing session in a scratchpad works under too: see `sessionBrief` in
+   * `./session.ts`.
    *
    * **The discard is not reported**, and that is the difference from a writing
    * session's. There, what is uncommitted may be the work; here the run changes
@@ -1169,7 +1185,10 @@ abstract class ClaudeCodeRun extends SubAgent<Env> {
     place: SessionPlace,
     report: ReportPlace
   ): Promise<string> {
-    if (outcome.session.exitCode !== STOPPED_EXIT) {
+    if (
+      place.branch !== undefined &&
+      outcome.session.exitCode !== STOPPED_EXIT
+    ) {
       await this.#discard(place, await this.#starts());
     }
     return reportDiscovery(this.env, report, this.name, outcome);

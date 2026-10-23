@@ -59,6 +59,12 @@ const MAX_LISTED = 12;
  *
  * `[\w:-]+` is the CLI's own command-name shape. Nothing is trimmed from the
  * front: a prompt that does not *start* with the slash is not dispatched either.
+ *
+ * What the line cannot tell is whether the name **resolves**. A first line
+ * naming no installed skill is not dispatched, and the session runs as an
+ * ordinary prompt under a line it was never following, so the session is the
+ * only party that can close that gap: `discoveryBrief` in `./session.ts` asks
+ * it to say so rather than improvise the run.
  */
 const COMMAND_LINE = /^\/([\w:-]+)(?:\s|$)/;
 
@@ -81,9 +87,16 @@ export function discoveryLine(task: string): string | undefined {
  */
 const TABLE = "claude_coordinator_discovery_reports";
 
+/**
+ * A row is the run's page from the moment `prepare` opens it, and **history
+ * only once `filed_at` is on it**: a run is given an id to file onto before it
+ * starts, so between those two moments its page holds nothing, and a page
+ * holding nothing handed to a later run reads as an attempt that found nothing.
+ * A run that is over and filed nothing has no row at all.
+ */
 function ensure(storage: DurableObjectStorage): void {
   storage.sql.exec(
-    `CREATE TABLE IF NOT EXISTS ${TABLE} (id TEXT PRIMARY KEY, line TEXT, run_id TEXT, created_at INTEGER NOT NULL)`
+    `CREATE TABLE IF NOT EXISTS ${TABLE} (id TEXT PRIMARY KEY, line TEXT, run_id TEXT, created_at INTEGER NOT NULL, filed_at INTEGER)`
   );
 }
 
@@ -134,7 +147,23 @@ export function forgetReport(storage: DurableObjectStorage, id: string): void {
   storage.sql.exec(`DELETE FROM ${TABLE} WHERE id = ?`, id);
 }
 
-/** The page a run opened, for the link its completion carries. */
+/** Make a record history, for a run whose page holds its report. */
+export function fileReport(storage: DurableObjectStorage, id: string): void {
+  ensure(storage);
+  storage.sql.exec(
+    `UPDATE ${TABLE} SET filed_at = ? WHERE id = ?`,
+    Date.now(),
+    id
+  );
+}
+
+/**
+ * The page a run opened, for the link its completion carries.
+ *
+ * Read once the run's settle has decided what becomes of the row, which is the
+ * ordering `formatDetachedCompletion` in `./agent.ts` already depends on: a run
+ * that filed nothing has no row left by then.
+ */
 export function reportOfRun(
   storage: DurableObjectStorage,
   runId: string
@@ -148,11 +177,13 @@ export function reportOfRun(
 }
 
 /**
- * This caller's records, newest first, and none retention has taken.
+ * This caller's history, newest first: the reports that are filed, and none
+ * retention has taken.
  *
- * Age is read here as well as swept in {@link openReport}, because the sweep
- * runs on an open: a caller who has not started a run since would otherwise be
- * answered with links to pages that are gone.
+ * Filtered before the limit, so a run still in flight cannot displace a report
+ * from what a later run is briefed with. Age is read here as well as swept in
+ * {@link openReport}, because the sweep runs on an open: a caller who has not
+ * started a run since would otherwise be answered links to pages that are gone.
  */
 export function recentReports(storage: DurableObjectStorage): ReportRecord[] {
   ensure(storage);
@@ -162,7 +193,9 @@ export function recentReports(storage: DurableObjectStorage): ReportRecord[] {
       line: string | null;
       created_at: number;
     }>(
-      `SELECT id, line, created_at FROM ${TABLE} WHERE created_at >= ? ORDER BY created_at DESC, rowid DESC LIMIT ?`,
+      `SELECT id, line, created_at FROM ${TABLE}
+       WHERE filed_at IS NOT NULL AND created_at >= ?
+       ORDER BY created_at DESC, rowid DESC LIMIT ?`,
       Date.now() - ARTIFACT_RETENTION_MS,
       MAX_LISTED
     )
@@ -226,7 +259,10 @@ const REPORTS_DESCRIPTION = [
   "`claude_code_discover` and put the links for the same skill into that",
   "session's task, newest first and at most four.",
   "",
-  "A page expires, so a run that is not listed is gone rather than never made.",
+  "A run appears here once it has filed, and a page expires, so a run missing",
+  "from this list is one still working, one that filed nothing, or one whose",
+  "page is past its keeping.",
+  "",
   "Do not open one yourself: a report is for the person and for the run you are",
   "briefing."
 ].join("\n");
@@ -307,6 +343,12 @@ const DiscoveryAnswer = z.object({
  * so no later note can change what was handed over. The parent is told that it
  * was filed and under which skill, never what it says: the link is appended by
  * the agent, which is the only place a URL can be built.
+ *
+ * **That holds on the paths where the answer is unreadable too**, which is why
+ * only a session with no result at all falls through to {@link sessionReport}.
+ * Its fallback is the session's own last message, and for a run answering
+ * through `--json-schema` that message is the answer it failed to make, report
+ * and all.
  */
 export async function reportDiscovery(
   env: Env,
@@ -315,10 +357,25 @@ export async function reportDiscovery(
   outcome: SessionOutcome
 ): Promise<string> {
   const result = outcome.session.result;
-  const answer = DiscoveryAnswer.safeParse(result?.structured);
-  if (!result || result.isError || !answer.success)
-    return sessionReport(outcome);
+  // Nothing of the session's own words: it reports stderr and an exit code.
+  if (!result) return sessionReport(outcome);
   const footer = `_${sessionFooter(result)}_`;
+  const answer = DiscoveryAnswer.safeParse(result.structured);
+  if (result.isError || !answer.success) {
+    // Named from the CLI's own fields, as `sessionReport` does only once
+    // `result.text` is empty. A parent that is not given a report is not given
+    // a broken one either.
+    const how = result.isError
+      ? `it ended as \`${result.subtype}\`` +
+        (result.apiErrorStatus === null
+          ? ""
+          : ` after an API ${result.apiErrorStatus}`)
+      : "its answer was not in the shape this agent reads";
+    return [
+      `**The discovery run filed nothing**: ${how}. Nothing it found reached here, so brief a new run if it is still wanted.`,
+      footer
+    ].join("\n\n");
+  }
   const { lastReply, questions, status } = answer.data;
 
   if (status === "needs_input") {

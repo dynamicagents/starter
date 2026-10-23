@@ -700,23 +700,33 @@ left in it is one they approve past.`
 /**
  * Where a **discovery** session works, and what it may leave there.
  *
- * It has a checkout of its own, as a writing session does, and no branch: it
- * commits nothing and pushes nothing, so the only thing worth saying about the
- * place is that nothing written in it is kept. Whatever the run files, it files
- * where its skill says to.
+ * With a checkout of its own it has no branch, as a writing session in that
+ * place does: it commits nothing and pushes nothing, so the only thing worth
+ * saying about the place is that nothing written in it is kept. In a scratchpad
+ * there is no checkout to hand out and the tree is the parent's, so nothing is
+ * cleaned after the session and what is already uncommitted there is somebody
+ * else's. Whatever the run files, it files where its skill says to.
  */
-function discoveryPlaceNote(submodules: readonly string[]): string {
+function discoveryPlaceNote(own?: { submodules: readonly string[] }): string {
   const note = `## Where you are
 
-You have a checkout of your own, in a workspace nobody else is working in while you are.
-This session opens no branch, commits nothing, pushes nothing and opens no pull request,
-and anything you write in the checkout is deleted when you finish. Leave every repository
-here as you found it.`;
-  if (submodules.length === 0) return note;
+${
+  own
+    ? "You have a checkout of your own, in a workspace nobody else is working in while you are."
+    : "You are in the workspace this conversation shares rather than a checkout of your own, and what is already uncommitted here is somebody else's."
+}
+This session opens no branch, commits nothing, pushes nothing, opens no pull request and
+changes nothing on GitHub. ${
+    own
+      ? "Anything you write in the checkout is deleted when you finish."
+      : "Nothing is deleted after you, so write under `/tmp` rather than in the tree."
+  }
+Leave every repository here as you found it.`;
+  if (!own || own.submodules.length === 0) return note;
   return `${note}
 
 ${submodulesNote(
-  submodules,
+  own.submodules,
   "Each is a repository of its own. Only one level of submodules is checked out."
 )}`;
 }
@@ -753,7 +763,11 @@ Answer with your report whole, in \`report\`. It is filed on a page of its own, 
 page is what the person is given and what the next run of this skill is handed as its
 history. Nobody retells it on the way: what you answer is what they read.
 
-\`lastReply\` is for the agent that briefed you, which does not read the report.`;
+\`lastReply\` is for the agent that briefed you, which does not read the report.
+
+If the first line of the task named a skill that is not installed, nothing loaded and you
+are following none: answer \`blocked\` saying which name it was, rather than improvising a
+run of it. Your report would be filed under a name nothing ran.`;
 
 /**
  * What a **discovery** session is told: the task with its skill named on the
@@ -764,18 +778,21 @@ history. Nobody retells it on the way: what you answer is what they read.
  * that ordering is load-bearing rather than conventional: the skill is loaded
  * by a `/<name>` line at the very start of the prompt, so anything put above
  * the task would leave the session with no skill at all.
+ *
+ * `own` is the checkout when the session has one of its own, and absent in a
+ * scratchpad, where the tree it works in is the parent's.
  */
 export function discoveryBrief(
   task: string,
   note?: string,
-  submodules: readonly string[] = []
+  own?: { submodules: readonly string[] }
 ): string {
   const parts = [
     task,
     "",
     GITHUB_NOTE,
     "",
-    discoveryPlaceNote(submodules),
+    discoveryPlaceNote(own),
     "",
     EARLIER_REPORTS_NOTE,
     "",

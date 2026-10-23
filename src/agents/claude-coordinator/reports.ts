@@ -297,7 +297,7 @@ export function reportsTool(ctx: {
       const origin = ctx.origin();
       if (origin === undefined) {
         return (
-          `${records.length} report${records.length === 1 ? "" : "s"} of yours are on record, but this ` +
+          `${records.length} ${records.length === 1 ? "report of yours is" : "reports of yours are"} on record, but this ` +
           "deployment's own name is not known on this instance yet, so there is " +
           "no link to give. Ask again on your next turn."
         );

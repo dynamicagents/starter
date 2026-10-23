@@ -705,7 +705,15 @@ left in it is one they approve past.`
  * saying about the place is that nothing written in it is kept. In a scratchpad
  * there is no checkout to hand out and the tree is the parent's, so nothing is
  * cleaned after the session and what is already uncommitted there is somebody
- * else's. Whatever the run files, it files where its skill says to.
+ * else's.
+ *
+ * **What it may not do on GitHub is bounded, and filing is outside that bound.**
+ * A run files a record, which for a skill of this kind may be the whole point
+ * of it, and where it goes is the skill's: a brief that read as "change nothing
+ * on GitHub" would contradict the skill loaded in the same prompt. What no
+ * discovery run does is alter a record that is already there, and that holds
+ * whichever skill it follows, which is why it is said here rather than left to
+ * one of them.
  */
 function discoveryPlaceNote(own?: { submodules: readonly string[] }): string {
   const note = `## Where you are
@@ -715,13 +723,16 @@ ${
     ? "You have a checkout of your own, in a workspace nobody else is working in while you are."
     : "You are in the workspace this conversation shares rather than a checkout of your own, and what is already uncommitted here is somebody else's."
 }
-This session opens no branch, commits nothing, pushes nothing, opens no pull request and
-changes nothing on GitHub. ${
+This session opens no branch, commits nothing, pushes nothing and opens no pull request. ${
     own
       ? "Anything you write in the checkout is deleted when you finish."
       : "Nothing is deleted after you, so write under `/tmp` rather than in the tree."
   }
-Leave every repository here as you found it.`;
+Leave every repository here as you found it.
+
+Filing is not changing. File what you find wherever your skill says to, and leave what is
+already on GitHub as it stands: never close, reopen, edit or comment on an issue, a pull
+request or an advisory, your own records included.`;
   if (!own || own.submodules.length === 0) return note;
   return `${note}
 

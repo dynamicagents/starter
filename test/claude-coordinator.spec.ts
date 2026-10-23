@@ -19,7 +19,10 @@ import {
 import type { AgentToolLifecycleResult, AgentToolRunInfo } from "agents";
 import type { ContextConfig } from "agents/context";
 import { ClaudeCoordinatorSandbox } from "@/index";
-import { requireArtifactsStub } from "@dynamicagents/core/artifacts";
+import {
+  ARTIFACT_RETENTION_MS,
+  requireArtifactsStub
+} from "@dynamicagents/core/artifacts";
 import {
   ClaudeCoordinatorDiscoveryChild,
   ClaudeCoordinatorPlannerChild,
@@ -1504,6 +1507,27 @@ describe("a discovery run", () => {
     expect(filed).toHaveLength(1);
   });
 
+  /**
+   * Age is read on the way out as well as swept on an open, because the sweep
+   * runs on an open: a caller who has not started a run since would otherwise
+   * be answered links to pages retention has taken. Backdated through the
+   * table because the cutoff is a wall clock the agent reads for itself.
+   */
+  it("drops a filed report once its page is past its keeping", async () => {
+    const { pool } = placingPool(worktree());
+    const listed = await onParent(async (agent) => {
+      const report = await ran(agent, pool, discovering());
+      agent.ctx.storage.sql.exec(
+        `UPDATE claude_coordinator_discovery_reports SET created_at = ? WHERE id = ?`,
+        Date.now() - ARTIFACT_RETENTION_MS - 1,
+        report.id
+      );
+      return recentReports(agent.ctx.storage);
+    });
+
+    expect(listed).toEqual([]);
+  });
+
   it("opens one under no skill when the task names none, rather than refusing", async () => {
     const { pool } = placingPool(worktree());
     const { report, listed } = await onParent(async (agent) => {
@@ -1816,6 +1840,23 @@ describe("a discovery run", () => {
     expect(discoveryBrief(TASK_WITH_SKILL)).toContain(
       "named a skill that is not installed"
     );
+  });
+
+  /**
+   * The brief bounds what a run may do on GitHub, and filing is outside that
+   * bound: a skill of this kind files a record, and a brief forbidding every
+   * change on GitHub would contradict the skill loaded in the same prompt.
+   * What it does forbid is altering a record already there.
+   */
+  it("forbids changing a GitHub record without forbidding filing one", () => {
+    const brief = discoveryBrief(TASK_WITH_SKILL, undefined, {
+      submodules: []
+    });
+
+    expect(brief).toContain("opens no pull request");
+    expect(brief).toContain("never close, reopen, edit or comment");
+    expect(brief).toContain("wherever your skill says to");
+    expect(brief).not.toContain("changes nothing on GitHub");
   });
 
   it("asks for the report whole, and for an account that is not it", () => {

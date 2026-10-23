@@ -65,7 +65,7 @@ describe("the artifact routes answer", () => {
   it("serves the viewer page to a client that asked for HTML", async () => {
     // A token this deployment never minted, deliberately: the page is the same
     // bytes for every artifact and is served without consulting the object, so
-    // a 200 here is about the route being mounted — which is what this repo
+    // a 200 here is about the route being mounted, which is what this repo
     // owns. HTML is the opt-in, so the header is what selects this branch and a
     // request without it is the one below.
     const res = await get(

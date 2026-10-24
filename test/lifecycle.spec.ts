@@ -73,13 +73,21 @@ function terminals(harness: AgentHarness, taskId: string): CapturedCallback[] {
   );
 }
 
+/** What the agent said while it worked: the progress lines, without questions. */
 function working(harness: AgentHarness, taskId: string): string[] {
   return harness.callbacks
-    .filter((c) => c.taskId === taskId && c.state === "TASK_STATE_WORKING")
+    .filter(
+      (c) =>
+        c.taskId === taskId &&
+        c.state === "TASK_STATE_WORKING" &&
+        !questionIn(c) &&
+        c.text
+    )
     .map((c) => c.text);
 }
 
-function questionOf(callback: CapturedCallback): HitlRequestData {
+/** The question a callback carries, on whatever status it rides, or `null`. */
+function questionIn(callback: CapturedCallback): HitlRequestData | null {
   const body = callback.body as {
     task?: { status?: { message?: { parts?: { data?: unknown }[] } } };
   };
@@ -87,7 +95,24 @@ function questionOf(callback: CapturedCallback): HitlRequestData {
     const data = part.data as HitlRequestData | undefined;
     if (data?.requestId) return data;
   }
-  throw new Error("the input-required callback carried no question");
+  return null;
+}
+
+/** The first question a task asked: it rides a `working` update. */
+function asked(
+  harness: AgentHarness,
+  taskId: string
+): Promise<HitlRequestData> {
+  return until(
+    `a question of task ${taskId}`,
+    () => {
+      const found = harness.callbacks.find(
+        (c) => c.taskId === taskId && questionIn(c)
+      );
+      return found ? (questionIn(found) ?? undefined) : undefined;
+    },
+    20_000
+  );
 }
 
 async function cancel(harness: AgentHarness, tenant: string, taskId: string) {
@@ -141,12 +166,37 @@ describe.each(TENANTS)("$tenant", ({ tenant, background }) => {
     using _ = harness.interceptGatekeeper();
 
     const accepted = await harness.send("ask:which one?");
-    const [parked] = await harness.waitForState(
-      accepted.id,
-      "TASK_STATE_INPUT_REQUIRED"
-    );
-    const question = questionOf(parked!);
+    const question = await asked(harness, accepted.id);
     expect(question.questions[0]?.prompt).toBe("which one?");
+
+    await harness.answer(accepted.id, question.requestId, {
+      q1: { optionIds: ["q1.o1"] }
+    });
+    const done = await harness.waitForTerminal(accepted.id);
+    expect(done.state).toBe("TASK_STATE_COMPLETED");
+    expect(terminals(harness, accepted.id)).toHaveLength(1);
+  });
+
+  it("takes a message that joins its task while a question waits", async () => {
+    const harness = harnessFor(tenant, "join");
+    using _ = harness.interceptGatekeeper();
+
+    const accepted = await harness.send("ask:which one?");
+    const question = await asked(harness, accepted.id);
+    await harness.waitForState(accepted.id, "TASK_STATE_INPUT_REQUIRED");
+
+    // Sent onto the open task, as the gatekeeper sends a thread's next message.
+    const joined = await harness.send("echo:any news?", {
+      taskId: accepted.id
+    });
+    expect(joined.id).toBe(accepted.id);
+    await until(
+      "the joined turn",
+      () =>
+        working(harness, accepted.id).includes("any news?") ? true : undefined,
+      20_000
+    );
+    expect(terminals(harness, accepted.id)).toHaveLength(0);
 
     await harness.answer(accepted.id, question.requestId, {
       q1: { optionIds: ["q1.o1"] }

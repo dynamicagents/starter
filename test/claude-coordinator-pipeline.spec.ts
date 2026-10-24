@@ -10,7 +10,6 @@ import {
 } from "@dynamicagents/core/testing";
 import { requireArtifactsStub } from "@dynamicagents/core/artifacts";
 import type { TaskResult } from "@dynamicagents/core/workflow";
-import { copy } from "@/copy";
 import worker, { type TestEnv } from "./worker";
 
 /**
@@ -59,12 +58,32 @@ function terminals(harness: AgentHarness, taskId: string): CapturedCallback[] {
   );
 }
 
+/** What the agent said while it worked: the progress lines, without questions. */
 function working(harness: AgentHarness, taskId: string): string[] {
   return harness.callbacks
-    .filter((c) => c.taskId === taskId && c.state === "TASK_STATE_WORKING")
+    .filter(
+      (c) =>
+        c.taskId === taskId &&
+        c.state === "TASK_STATE_WORKING" &&
+        !questionIn(c) &&
+        c.text
+    )
     .map((c) => c.text);
 }
 
+/** The question a callback carries, on whatever status it rides, or `null`. */
+function questionIn(callback: CapturedCallback): HitlRequestData | null {
+  const body = callback.body as {
+    task?: { status?: { message?: { parts?: { data?: unknown }[] } } };
+  };
+  for (const part of body.task?.status?.message?.parts ?? []) {
+    const data = part.data as HitlRequestData | undefined;
+    if (data?.requestId) return data;
+  }
+  return null;
+}
+
+/** The `count`th question a task asked. Questions ride `working` updates. */
 async function question(
   harness: AgentHarness,
   taskId: string,
@@ -72,20 +91,10 @@ async function question(
 ): Promise<HitlRequestData> {
   const asked = await until(
     `question ${count}`,
-    () =>
-      harness.callbacks.filter(
-        (c) => c.taskId === taskId && c.state === "TASK_STATE_INPUT_REQUIRED"
-      ),
+    () => harness.callbacks.filter((c) => c.taskId === taskId && questionIn(c)),
     (c) => c.length >= count
   );
-  const body = asked[asked.length - 1]!.body as {
-    task?: { status?: { message?: { parts?: { data?: unknown }[] } } };
-  };
-  for (const part of body.task?.status?.message?.parts ?? []) {
-    const data = part.data as HitlRequestData | undefined;
-    if (data?.requestId) return data;
-  }
-  throw new Error("the input-required callback carried no question");
+  return questionIn(asked[count - 1]!)!;
 }
 
 async function status(taskId: string) {
@@ -197,6 +206,36 @@ describe("a plan", () => {
     });
   });
 
+  it("takes a message that joins its task while the approval waits", async () => {
+    const { harness, coder } = setup("join");
+    using _ = harness.interceptGatekeeper();
+    const id = await coder.openPlan();
+    await requireArtifactsStub(testEnv).addEntry(id, {
+      label: "plan",
+      text: "# Plan\n\nthe plan"
+    });
+
+    const task = await harness.send(`approve:${id}`);
+    const asked = await question(harness, task.id);
+    await harness.waitForState(task.id, "TASK_STATE_INPUT_REQUIRED");
+
+    // Sent onto the open task, as the gatekeeper sends a thread's next message.
+    const joined = await harness.send("echo:any news?", { taskId: task.id });
+    expect(joined.id).toBe(task.id);
+    await until(
+      "the joined turn",
+      () => working(harness, task.id),
+      (lines) => lines.includes("any news?"),
+      20_000
+    );
+    expect(terminals(harness, task.id)).toHaveLength(0);
+
+    await harness.answer(task.id, asked.requestId, {
+      q1: { optionIds: ["approve"] }
+    });
+    expect((await harness.waitForTerminal(task.id)).text).toBe("Approved.");
+  });
+
   it("is not put to the caller when it is not theirs", async () => {
     const { harness } = setup("approve-foreign");
     using _ = harness.interceptGatekeeper();
@@ -256,7 +295,7 @@ describe("stopping", () => {
     expect(terminals(harness, task.id)).toHaveLength(0);
   });
 
-  it("fails the task in its words when an approval expires", async () => {
+  it("tells the agent an approval expired, and finishes on what it says", async () => {
     const { harness, coder } = setup("expire");
     using _ = harness.interceptGatekeeper();
     const id = await coder.openPlan();
@@ -264,7 +303,9 @@ describe("stopping", () => {
     const asked = await question(harness, task.id);
     await harness.timeout(task.id, asked.requestId);
     const done = await harness.waitForTerminal(task.id);
-    expect(done.state).toBe("TASK_STATE_FAILED");
-    expect(done.text).toBe(copy.questionExpired);
+    expect(done.state).toBe("TASK_STATE_COMPLETED");
+    expect(done.text).toMatch(
+      /^Nobody answered "Approve the plan\?" before it expired/
+    );
   });
 });

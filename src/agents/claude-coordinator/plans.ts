@@ -238,17 +238,21 @@ function ensure(storage: DurableObjectStorage): void {
  * `sourceKey` names what opens it — a planning run — so opening it again for
  * the same one, as a replayed `prepare` does, finds the plan it opened rather
  * than a second one.
+ *
+ * `owner` and `sourceKey` arrive as one argument because both are strings and
+ * either reads as the other, which is `FilingRun`'s reason in `./session.ts`:
+ * the swap opens one shared page per caller for every planning run, each owned
+ * by a run id and so writable and approvable by nobody.
  */
 export async function createPlan(
   env: Env,
   storage: DurableObjectStorage,
-  owner: string,
-  sourceKey?: string
+  plan: { owner: string; sourceKey?: string }
 ): Promise<string> {
   const id = await requireArtifactsStub(env).createArtifact(
     PLAN_KIND,
-    sourceKey,
-    owner
+    plan.sourceKey,
+    plan.owner
   );
   ensure(storage);
   const now = Date.now();

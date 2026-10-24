@@ -87,6 +87,7 @@ import {
   unresumableReport,
   warningPrompt,
   writingNote,
+  type FilingRun,
   type RepoStart,
   type Uncommitted,
   type WritingOutcome
@@ -640,12 +641,10 @@ export async function preparePlanner(
   try {
     id =
       edits ??
-      (await createPlan(
-        env,
-        storage,
-        ctx.parent.callerKey(),
-        `${ctx.taskId}:${ctx.runId}`
-      ));
+      (await createPlan(env, storage, {
+        owner: ctx.parent.callerKey(),
+        sourceKey: `${ctx.taskId}:${ctx.runId}`
+      }));
   } catch (err) {
     // A `prepare` that throws gets no `settle`, so nothing else lets go —
     // and it lets go of the branch, as a planning session's settle does.
@@ -727,20 +726,15 @@ async function closeUnwritten(ctx: SubAgentSettleContext<Env>): Promise<void> {
  * this conversation on: see `plannedSession` in `./plans.ts`. A record of a
  * version filed is best-effort; one of a question must land or fail the run.
  *
- * `run.owner` is the verified caller, which the version filed below asserts
- * against the plan's own: a page this caller did not open, and one opened
- * before an owner was recorded at all, take no version from it. Read at the
- * write rather than carried in {@link PlanPlace}, which is runtime a replay
- * hands back, so the authority for the write is established by the write.
- *
- * The caller and the run arrive as one argument because both are strings and
- * either reads as the other: an owner holding a run id matches no page, so the
- * swap would refuse every version this agent files.
+ * The version filed below asserts `run.owner` against the plan's own, so a
+ * page this caller did not open, and one owned by nobody, take no version from
+ * it. {@link ClaudeCodeRun.filingRun} is where that owner is read, and says
+ * why it is read there rather than carried in {@link PlanPlace}.
  */
 export async function reportPlan(
   env: Env,
   plan: PlanPlace,
-  run: { owner: string; runId: string },
+  run: FilingRun,
   outcome: SessionOutcome,
   onSession?: (
     sessionId: string,
@@ -928,6 +922,25 @@ function reportPlaceOf(
 abstract class ClaudeCodeRun extends SubAgent<Env> {
   protected abstract readonly kind: "write" | "revise" | "plan" | "discover";
 
+  /**
+   * This run, as a page it files on is asserted against: see {@link FilingRun}.
+   *
+   * The one place that decides which value is the owner, so no filing write
+   * can disagree with another about it. The owner is read here rather than
+   * carried in the {@link PlanPlace} or {@link ReportPlace} that `prepare`
+   * parked, because a parked place is runtime a replay hands back and the
+   * authority for a write is established by the write. `callerKey` answers off
+   * the turn and throws outside one, so this is callable only from within a
+   * turn, which is where a filing write runs.
+   *
+   * The suite reaches this directly, because nothing in it reaches the call
+   * sites: both sit in the `report` closure of the real {@link getModel}, and
+   * every child a spec runs replaces that model with a scripted one.
+   */
+  protected filingRun(): FilingRun {
+    return { owner: this.callerKey(), runId: this.name };
+  }
+
   override getModel(): ThinkModel {
     const runtime = this.pluginContext().runtime();
     const place = placeOf(runtime);
@@ -1012,7 +1025,7 @@ abstract class ClaudeCodeRun extends SubAgent<Env> {
           return reportPlan(
             this.env,
             plan,
-            { owner: this.callerKey(), runId: this.name },
+            this.filingRun(),
             outcome,
             (sessionId, filed) =>
               this.#noteSession(
@@ -1212,12 +1225,7 @@ abstract class ClaudeCodeRun extends SubAgent<Env> {
     ) {
       await this.#discard(place, await this.#starts());
     }
-    return reportDiscovery(
-      this.env,
-      report,
-      { owner: this.callerKey(), runId: this.name },
-      outcome
-    );
+    return reportDiscovery(this.env, report, this.filingRun(), outcome);
   }
 
   /**

@@ -80,7 +80,8 @@ import {
   unresumableReport,
   warningPrompt,
   WRITE_OUTPUT,
-  writingNote
+  writingNote,
+  type FilingRun
 } from "@/agents/claude-coordinator/session";
 import {
   DISCOVERY_OUTPUT,
@@ -466,9 +467,9 @@ describe("a plan", () => {
 
   /**
    * The caller a plan below is opened for, and the one its version is filed by.
-   * A literal because the store compares it verbatim: what makes it a caller
-   * key is where the agent reads it from, which `callerKey` in
-   * `@dynamicagents/core` owns and the pipeline specs exercise end to end.
+   * A literal because the store compares it verbatim, so these specs pin what
+   * the write does with an owner and never where the owner comes from: that is
+   * `filingRun`'s, under "files as the caller the run is for" below.
    */
   const PLAN_OWNER = "plan-spec-caller";
 
@@ -575,7 +576,9 @@ describe("a plan", () => {
       const id =
         which === "foreign"
           ? await requireArtifactsStub(env).createArtifact("plan")
-          : await createPlan(env, agent.ctx.storage, agent.callerKey());
+          : await createPlan(env, agent.ctx.storage, {
+              owner: agent.callerKey()
+            });
       if (which === "locked") {
         await requireArtifactsStub(env).lock(id, "approved");
       }
@@ -737,16 +740,17 @@ describe("a plan", () => {
   /**
    * The gate core's `mayAskApproval` applies at ask time, applied again at the
    * write: a page whose owner is not this caller takes no version from it. Each
-   * case below is the same rule, an owner that does not match, and `null` is
-   * where a plan opened before the column existed stands, so neither can be
-   * revised through this agent however its link travelled.
+   * case below is that one rule, an owner that does not match, and a page owned
+   * by nobody matches nobody, so neither can be revised through this agent
+   * however its link travelled.
    *
-   * `lookUpPlan` is untouched and reads `claude_coordinator_plans`, so a legacy
-   * plan of this caller's still passes `prepare` and is refused here instead.
+   * `lookUpPlan` is untouched and reads `claude_coordinator_plans`, so a plan
+   * of this caller's that carries no owner still passes `prepare` and is
+   * refused here instead.
    */
   it.each([
     ["one another caller opened", "someone-else"],
-    ["one opened before an owner was recorded", undefined]
+    ["one owned by nobody", undefined]
   ])("files no version on %s", async (_label, owner) => {
     const artifacts = requireArtifactsStub(env);
     const id = await artifacts.createArtifact("plan", undefined, owner);
@@ -767,6 +771,30 @@ describe("a plan", () => {
     const page = await artifacts.readArtifact(id);
     expect(page?.entries).toEqual([]);
     expect(page).toMatchObject({ owner: owner ?? null, locked: false });
+  });
+
+  /**
+   * Which value each filing write passes, which the specs above cannot see:
+   * they hand `reportPlan` an owner of their own, while production reads it
+   * from `filingRun` on the run. The owner and the run id are both strings, so
+   * a swap typechecks, and it would refuse every version and every report this
+   * agent files.
+   *
+   * The child's `callerKey` is stubbed, because a spec runs no turn and the
+   * real one answers off the dispatch that started one. What the stub makes
+   * visible is which field is which: the run id would pass as an owner against
+   * a stub that answered the name.
+   */
+  it("files as the caller the run is for, keyed by the run", async () => {
+    const ns = (env as unknown as Record<string, DurableObjectNamespace>)
+      .TEST_CLAUDE_COORDINATOR_PLANNER_CHILD!;
+    const runId = `claude-coordinator-spec:${crypto.randomUUID()}`;
+    const run = await runInDurableObject(
+      ns.get(ns.idFromName(runId)),
+      (instance) =>
+        (instance as unknown as { filingRun(): FilingRun }).filingRun()
+    );
+    expect(run).toEqual({ owner: `caller-of:${runId}`, runId });
   });
 
   it("marks a new plan its session never wrote as failed, and leaves a written one open", async () => {
@@ -837,7 +865,9 @@ describe("a plan", () => {
         const id =
           which === "foreign"
             ? await requireArtifactsStub(env).createArtifact("plan")
-            : await createPlan(env, agent.ctx.storage, agent.callerKey());
+            : await createPlan(env, agent.ctx.storage, {
+                owner: agent.callerKey()
+              });
         return prepareWriter({
           ...planning(id),
           parent: agent.pluginContext()
@@ -1657,7 +1687,7 @@ describe("a discovery run", () => {
    */
   it.each([
     ["one another caller opened", "someone-else"],
-    ["one opened before an owner was recorded", undefined]
+    ["one owned by nobody", undefined]
   ])("files no report on %s, and locks nothing", async (_label, owner) => {
     const artifacts = requireArtifactsStub(env);
     const id = await artifacts.createArtifact(

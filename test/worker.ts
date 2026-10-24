@@ -379,11 +379,9 @@ const PLANNER_SPEC = {
   }) => {
     const id =
       ctx.input.plan ??
-      (await createPlan(
-        ctx.parent.env,
-        ctx.parent.storage,
-        ctx.parent.callerKey()
-      ));
+      (await createPlan(ctx.parent.env, ctx.parent.storage, {
+        owner: ctx.parent.callerKey()
+      }));
     return {
       workspaceName: "test-workspace",
       dir: "/workspace/t",
@@ -399,6 +397,16 @@ export class TestClaudeCoordinatorPlannerChild extends ClaudeCoordinatorPlannerC
   }
   override getTools(): ToolSet {
     return { ...super.getTools(), child_sleep: sleepTool("child") };
+  }
+
+  /**
+   * A caller key answered without a turn: the real one is read off the dispatch
+   * that started one and throws between turns, which is where a spec calling
+   * `filingRun` stands. Distinct from `this.name` on purpose, so a `filingRun`
+   * answering the run id as its owner fails here rather than matching a stub.
+   */
+  protected override callerKey(): string {
+    return `caller-of:${this.name}`;
   }
 }
 
@@ -438,7 +446,9 @@ export class TestClaudeCoordinatorAgent extends ClaudeCoordinatorAgent {
 
   /** Open a plan for this caller, as a planning session's `prepare` does. */
   async openPlan(): Promise<string> {
-    return createPlan(this.env, this.ctx.storage, this.callerKey());
+    return createPlan(this.env, this.ctx.storage, {
+      owner: this.callerKey()
+    });
   }
 }
 

@@ -300,6 +300,26 @@ export function answerText(answer: WriteAnswer): string {
     .join("\n\n");
 }
 
+/**
+ * The run behind a filing write: whose page it may write on, and which write
+ * this is.
+ *
+ * One argument rather than two parameters because both are strings and either
+ * reads as the other, so a swap typechecks. It would ship a total failure: an
+ * `owner` holding a run id matches no page, so every version and every report
+ * this agent files is refused, and a `runId` holding a caller key is constant
+ * across runs, so the entry key starts catching unrelated writes as replays.
+ *
+ * `owner` is the verified caller, asserted by the write against the page's own
+ * so a page this caller did not open takes nothing from it. `runId` is the
+ * entry key, which is what makes a redelivered write a replay rather than a
+ * second note.
+ */
+export interface FilingRun {
+  owner: string;
+  runId: string;
+}
+
 /** One repository a writing session could commit in, and where it started. */
 export interface RepoStart {
   path: string;

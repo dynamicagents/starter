@@ -5,6 +5,7 @@ import {
   type TaskParams,
   type TaskStep
 } from "@dynamicagents/core/workflow";
+import { TASK_RECONCILE } from "@/config";
 
 /**
  * `claude-coordinator`'s pipeline: one step, the whole task, on the caller's own
@@ -29,7 +30,9 @@ export class ClaudeCoordinatorWorkflow extends TaskWorkflow<Env> {
   ): Promise<PipelineResult> {
     const reply = await step.agent("main", {
       agent: this.coder,
-      input: event.payload.text
+      input: event.payload.text,
+      joins: true,
+      reconcile: TASK_RECONCILE
     });
     return { reply };
   }

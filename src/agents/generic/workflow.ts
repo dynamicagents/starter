@@ -5,6 +5,7 @@ import {
   type TaskParams,
   type TaskStep
 } from "@dynamicagents/core/workflow";
+import { TASK_RECONCILE } from "@/config";
 
 /**
  * generic's pipeline: one step, the whole task, on the caller's own
@@ -24,7 +25,9 @@ export class GenericWorkflow extends TaskWorkflow<Env> {
   ): Promise<PipelineResult> {
     const reply = await step.agent("main", {
       agent: this.generic,
-      input: event.payload.text
+      input: event.payload.text,
+      joins: true,
+      reconcile: TASK_RECONCILE
     });
     return { reply };
   }

@@ -21,10 +21,7 @@ export const copy: A2ACopy = {
   failed: "Sorry — something went wrong handling that request.",
   /** A task that finished with nothing to say. */
   emptyReply:
-    "I finished, but had nothing to report. Ask again if you expected an answer.",
-  /** A question that went unanswered. Nothing failed: the agent stopped rather than guess. */
-  questionExpired:
-    "I stopped here: I asked you a question and didn't hear back in time. Send the request again whenever you're ready."
+    "I finished, but had nothing to report. Ask again if you expected an answer."
 };
 
 /**

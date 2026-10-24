@@ -5,6 +5,7 @@
 // literal types.
 import type { ClaudeCodeConfig } from "@dynamicagents/plugins/claude-code";
 import type { SandboxObjectConfig } from "@dynamicagents/plugins/sandbox";
+import type { Reconcile } from "@dynamicagents/core/workflow";
 
 /**
  * Every value this Worker tunes, in one file.
@@ -178,6 +179,19 @@ export const SANDBOX_ADAPTER = "da-claude";
  * is told this number, so a worktree's work is pushed or let go knowingly.
  */
 export const SANDBOX_RECLAIM_MS = 7 * 24 * 60 * 60 * 1000;
+
+/**
+ * How long a task's workflow waits for its job's next event before it pulls
+ * the agent and the host for what it has not read: the delay an event the
+ * platform accepts and never delivers costs, at worst `maxMs`. A wait that
+ * finds nothing doubles the next, so a question open for a week (the
+ * gatekeeper's expiry) costs about 340 wakes, two steps each, of the 10,000 a
+ * Workflow instance holds. Every tenant's pipeline waits by it.
+ */
+export const TASK_RECONCILE: Reconcile = {
+  afterMs: 5 * 60_000,
+  maxMs: 30 * 60_000
+};
 
 /**
  * What bounds one Claude Code session, and **this is the whole list**.

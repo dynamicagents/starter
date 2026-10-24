@@ -206,6 +206,36 @@ describe("a plan", () => {
     });
   });
 
+  it("takes a message that joins its task while the approval waits", async () => {
+    const { harness, coder } = setup("join");
+    using _ = harness.interceptGatekeeper();
+    const id = await coder.openPlan();
+    await requireArtifactsStub(testEnv).addEntry(id, {
+      label: "plan",
+      text: "# Plan\n\nthe plan"
+    });
+
+    const task = await harness.send(`approve:${id}`);
+    const asked = await question(harness, task.id);
+    await harness.waitForState(task.id, "TASK_STATE_INPUT_REQUIRED");
+
+    // Sent onto the open task, as the gatekeeper sends a thread's next message.
+    const joined = await harness.send("echo:any news?", { taskId: task.id });
+    expect(joined.id).toBe(task.id);
+    await until(
+      "the joined turn",
+      () => working(harness, task.id),
+      (lines) => lines.includes("any news?"),
+      20_000
+    );
+    expect(terminals(harness, task.id)).toHaveLength(0);
+
+    await harness.answer(task.id, asked.requestId, {
+      q1: { optionIds: ["approve"] }
+    });
+    expect((await harness.waitForTerminal(task.id)).text).toBe("Approved.");
+  });
+
   it("is not put to the caller when it is not theirs", async () => {
     const { harness } = setup("approve-foreign");
     using _ = harness.interceptGatekeeper();

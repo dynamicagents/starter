@@ -464,6 +464,18 @@ describe("a plan", () => {
       "Adds --json to the list command; assumes the output shape stays."
   };
 
+  /**
+   * The caller a plan below is opened for, and the one its version is filed by.
+   * A literal because the store compares it verbatim: what makes it a caller
+   * key is where the agent reads it from, which `callerKey` in
+   * `@dynamicagents/core` owns and the pipeline specs exercise end to end.
+   */
+  const PLAN_OWNER = "plan-spec-caller";
+
+  /** A plan of `PLAN_OWNER`'s, as `createPlan` opens one. */
+  const ownedPlan = () =>
+    requireArtifactsStub(env).createArtifact("plan", undefined, PLAN_OWNER);
+
   it("opens a new plan for this caller, once a workspace has admitted the run", async () => {
     const { pool } = placingPool(worktree());
     const { runtime, owned } = await onParent(async (agent) => {
@@ -576,11 +588,12 @@ describe("a plan", () => {
   });
 
   it("files the session's answer as the plan, and tells the parent its id, not its text", async () => {
-    const id = await requireArtifactsStub(env).createArtifact("plan");
+    const id = await ownedPlan();
     const recorded: unknown[] = [];
     const report = await reportPlan(
       env,
       { id, isNew: true },
+      PLAN_OWNER,
       "run-1",
       outcome(ANSWER) as never,
       async (sessionId, filed) => {
@@ -610,11 +623,12 @@ describe("a plan", () => {
    * answer carry its conversation on.
    */
   it("files nothing for a session that stopped to ask, and hands the parent its questions whole", async () => {
-    const id = await requireArtifactsStub(env).createArtifact("plan");
+    const id = await ownedPlan();
     const recorded: unknown[] = [];
     const report = await reportPlan(
       env,
       { id, isNew: true },
+      PLAN_OWNER,
       "run-1",
       outcome({
         status: "needs_input",
@@ -644,13 +658,14 @@ describe("a plan", () => {
    */
   it("records a question against the version the session started from", async () => {
     const artifacts = requireArtifactsStub(env);
-    const id = await artifacts.createArtifact("plan");
+    const id = await ownedPlan();
     await artifacts.addEntry(id, { label: PLAN_LABEL, text: "v1" });
     await artifacts.addEntry(id, { label: PLAN_LABEL, text: "v2" });
     const recorded: unknown[] = [];
     await reportPlan(
       env,
       { id, isNew: false, version: 1 },
+      PLAN_OWNER,
       "run-1",
       outcome({
         status: "needs_input",
@@ -666,11 +681,12 @@ describe("a plan", () => {
 
   /** Without its record the plan would not stay open for the answer. */
   it("fails rather than report a question it could not record", async () => {
-    const id = await requireArtifactsStub(env).createArtifact("plan");
+    const id = await ownedPlan();
     await expect(
       reportPlan(
         env,
         { id, isNew: true },
+        PLAN_OWNER,
         "run-1",
         outcome({
           status: "needs_input",
@@ -683,11 +699,12 @@ describe("a plan", () => {
   });
 
   it("files nothing for a session that did not answer through the schema", async () => {
-    const id = await requireArtifactsStub(env).createArtifact("plan");
+    const id = await ownedPlan();
     const recorded: string[] = [];
     const report = await reportPlan(
       env,
       { id, isNew: true },
+      PLAN_OWNER,
       "run-1",
       outcome() as never,
       async (sessionId) => {
@@ -703,18 +720,55 @@ describe("a plan", () => {
 
   it("does not change a plan that was approved while its session ran", async () => {
     const artifacts = requireArtifactsStub(env);
-    const id = await artifacts.createArtifact("plan");
+    const id = await ownedPlan();
     await artifacts.addEntry(id, { label: PLAN_LABEL, text: "the plan" });
     await artifacts.lock(id, "approved");
 
     const report = await reportPlan(
       env,
       { id, isNew: false },
+      PLAN_OWNER,
       "run-2",
       outcome(ANSWER) as never
     );
     expect(report).toMatch(/was not changed/);
     expect((await artifacts.readArtifact(id))?.entries).toHaveLength(1);
+  });
+
+  /**
+   * The gate core's `mayAskApproval` applies at ask time, applied again at the
+   * write: a page whose owner is not this caller takes no version from it. The
+   * two cases are one rule — an owner that does not match — and `null` is where
+   * a plan opened before the column existed stands, so neither can be revised
+   * through this agent however its link travelled.
+   *
+   * `lookUpPlan` is untouched and reads `claude_coordinator_plans`, so a legacy
+   * plan of this caller's still passes `prepare` and is refused here instead.
+   */
+  it.each([
+    ["one another caller opened", "someone-else"],
+    ["one opened before an owner was recorded", undefined]
+  ])("files no version on %s", async (_label, owner) => {
+    const artifacts = requireArtifactsStub(env);
+    const id = await artifacts.createArtifact("plan", undefined, owner);
+
+    const report = await reportPlan(
+      env,
+      { id, isNew: false },
+      PLAN_OWNER,
+      "run-1",
+      outcome(ANSWER) as never,
+      () => Promise.reject(new Error("recorded a version it never filed"))
+    );
+
+    expect(report).toMatch(/was not changed/);
+    expect(report).toContain(ANSWER.lastReply);
+    // Nothing of the plan reaches the page, and nothing of it reaches the
+    // parent either: the title names a version that was not filed.
+    expect(report).not.toContain(ANSWER.title);
+    const page = await artifacts.readArtifact(id);
+    expect(page?.entries).toEqual([]);
+    expect(page).toMatchObject({ owner: owner ?? null, locked: false });
   });
 
   it("marks a new plan its session never wrote as failed, and leaves a written one open", async () => {
@@ -1379,6 +1433,21 @@ describe("a discovery run", () => {
       runId: `detached:${crypto.randomUUID()}`
     }) as const;
 
+  /**
+   * The caller a page below is opened for, and the one that files on it. A
+   * literal because the store compares it verbatim, as `PLAN_OWNER` above is;
+   * where a spec runs on the agent it passes the agent's own `callerKey()`.
+   */
+  const RUN_OWNER = "discovery-spec-caller";
+
+  /** A report page of `RUN_OWNER`'s, as `openReport` opens one. */
+  const ownedPage = () =>
+    requireArtifactsStub(env).createArtifact(
+      "discovery-report",
+      undefined,
+      RUN_OWNER
+    );
+
   /** A discovery session's outcome: its answer through `--json-schema`. */
   const outcome = (structured: unknown) => ({
     session: {
@@ -1434,6 +1503,7 @@ describe("a discovery run", () => {
     await reportDiscovery(
       agent.pluginContext().env,
       runtime.report as ReportPlace,
+      agent.callerKey(),
       ctx.runId,
       outcome(answer) as never
     );
@@ -1485,6 +1555,7 @@ describe("a discovery run", () => {
       await reportDiscovery(
         agent.pluginContext().env,
         runtime.report as ReportPlace,
+        agent.callerKey(),
         ctx.runId,
         outcome({
           status: "done",
@@ -1555,8 +1626,7 @@ describe("a discovery run", () => {
   });
 
   it("files the report on its page and closes it, naming the skill and not the report", async () => {
-    const id =
-      await requireArtifactsStub(env).createArtifact("discovery-report");
+    const id = await ownedPage();
     const answer = {
       status: "done",
       report: REPORT,
@@ -1566,6 +1636,7 @@ describe("a discovery run", () => {
     const told = await reportDiscovery(
       env,
       { id, line: SKILL },
+      RUN_OWNER,
       "run-1",
       outcome(answer) as never
     );
@@ -1583,12 +1654,51 @@ describe("a discovery run", () => {
     expect(page).toMatchObject({ locked: true, status: "filed" });
   });
 
+  /**
+   * The filing write asserts the page is this run's, as a plan's version does
+   * — see "files no version on" above. A report is the half that would be read
+   * by whoever holds the link, so a page some other caller opened takes neither
+   * the report nor the lock that would close it to its own run.
+   */
+  it.each([
+    ["one another caller opened", "someone-else"],
+    ["one opened before an owner was recorded", undefined]
+  ])("files no report on %s, and locks nothing", async (_label, owner) => {
+    const artifacts = requireArtifactsStub(env);
+    const id = await artifacts.createArtifact(
+      "discovery-report",
+      undefined,
+      owner
+    );
+
+    const told = await reportDiscovery(
+      env,
+      { id, line: SKILL },
+      RUN_OWNER,
+      "run-1",
+      outcome({ status: "done", report: REPORT, lastReply: "Done." }) as never
+    );
+
+    expect(told).toMatch(/could not be filed/);
+    // The account, never the report: the parent is told what is left, and what
+    // is left is not what the run found.
+    expect(told).toContain("Done.");
+    expect(told).not.toContain("| hypothesis |");
+    const page = await artifacts.readArtifact(id);
+    expect(page?.entries).toEqual([]);
+    expect(page).toMatchObject({
+      owner: owner ?? null,
+      locked: false,
+      status: null
+    });
+  });
+
   it("says a report filed under no skill reaches no later run", async () => {
-    const id =
-      await requireArtifactsStub(env).createArtifact("discovery-report");
+    const id = await ownedPage();
     const told = await reportDiscovery(
       env,
       { id },
+      RUN_OWNER,
       "run-1",
       outcome({ status: "done", report: REPORT, lastReply: "Done." }) as never
     );
@@ -1617,11 +1727,11 @@ describe("a discovery run", () => {
       /no report, so nothing was filed/
     ]
   ])("files nothing when %s", async (_label, answer, expected) => {
-    const id =
-      await requireArtifactsStub(env).createArtifact("discovery-report");
+    const id = await ownedPage();
     const told = await reportDiscovery(
       env,
       { id, line: SKILL },
+      RUN_OWNER,
       "run-1",
       outcome(answer) as never
     );
@@ -1638,11 +1748,11 @@ describe("a discovery run", () => {
    * parent does not read a report, and a broken one is still a report.
    */
   it("quotes nothing a session said when its answer will not parse", async () => {
-    const id =
-      await requireArtifactsStub(env).createArtifact("discovery-report");
+    const id = await ownedPage();
     const told = await reportDiscovery(
       env,
       { id, line: SKILL },
+      RUN_OWNER,
       "run-1",
       outcome({ status: "finished", findings: REPORT }) as never
     );
@@ -1656,8 +1766,7 @@ describe("a discovery run", () => {
 
   /** The CLI ends a session the API failed as `success`, with its error as the answer. */
   it("names the API error a session ended on, and what it may have left in the repository", async () => {
-    const id =
-      await requireArtifactsStub(env).createArtifact("discovery-report");
+    const id = await ownedPage();
     const error =
       'API Error: ZlibError fetching "http://anthropic.harness.internal/v1/messages?beta=true".';
     const failed = outcome(undefined);
@@ -1670,6 +1779,7 @@ describe("a discovery run", () => {
     const told = await reportDiscovery(
       env,
       { id, line: SKILL },
+      RUN_OWNER,
       "run-1",
       failed as never
     );
@@ -1683,14 +1793,14 @@ describe("a discovery run", () => {
   });
 
   it("passes a session's questions to the parent as they were asked", async () => {
-    const id =
-      await requireArtifactsStub(env).createArtifact("discovery-report");
+    const id = await ownedPage();
     const questions = [
       { question: "Widen the token's scopes?", header: "Scopes" }
     ];
     const told = await reportDiscovery(
       env,
       { id, line: SKILL },
+      RUN_OWNER,
       "run-1",
       outcome({
         status: "needs_input",

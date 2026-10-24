@@ -836,7 +836,8 @@ export function planReport(
         lastReply: string;
       }
     | { kind: "unanswered" }
-    | { kind: "locked"; id: string; lastReply: string }
+    /** The version was written nowhere: the page refused it — see below. */
+    | { kind: "refused"; id: string; lastReply: string }
 ): string {
   const result = outcome.session.result;
   const footer = result ? `_${sessionFooter(result)}_` : "";
@@ -855,9 +856,9 @@ export function planReport(
       .filter(Boolean)
       .join("\n\n");
   }
-  if (filed.kind === "locked") {
+  if (filed.kind === "refused") {
     return [
-      `**The plan \`${filed.id}\` was not changed**: it was locked while the session ran, or it is gone. Write a new plan if it still needs one.`,
+      `**The plan \`${filed.id}\` was not changed**: it was locked while the session ran, it is gone, or it is not a page this agent may write on. Write a new plan if it still needs one.`,
       filed.lastReply,
       footer
     ]

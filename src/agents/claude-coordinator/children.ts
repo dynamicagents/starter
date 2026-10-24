@@ -726,10 +726,17 @@ async function closeUnwritten(ctx: SubAgentSettleContext<Env>): Promise<void> {
  * the one it asked on — which is what lets an edit, an answer or a build carry
  * this conversation on: see `plannedSession` in `./plans.ts`. A record of a
  * version filed is best-effort; one of a question must land or fail the run.
+ *
+ * `owner` is the verified caller, which the version filed below asserts against
+ * the plan's own: a page this caller did not open, and one opened before an
+ * owner was recorded at all, takes no version from it. Read at the write rather
+ * than carried in {@link PlanPlace}, which is runtime a replay hands back: the
+ * authority for the write is established by the write.
  */
 export async function reportPlan(
   env: Env,
   plan: PlanPlace,
+  owner: string,
   runId: string,
   outcome: SessionOutcome,
   onSession?: (
@@ -759,14 +766,18 @@ export async function reportPlan(
       lastReply: answer.data.lastReply
     });
   }
-  const filed = await requireArtifactsStub(env).addEntry(plan.id, {
-    label: PLAN_LABEL,
-    text: planText(answer.data),
-    key: runId
-  });
+  const filed = await requireArtifactsStub(env).addEntry(
+    plan.id,
+    {
+      label: PLAN_LABEL,
+      text: planText(answer.data),
+      key: runId
+    },
+    { owner }
+  );
   if (filed === null) {
     return planReport(outcome, {
-      kind: "locked",
+      kind: "refused",
       id: plan.id,
       lastReply: answer.data.lastReply
     });
@@ -998,6 +1009,7 @@ abstract class ClaudeCodeRun extends SubAgent<Env> {
           return reportPlan(
             this.env,
             plan,
+            this.callerKey(),
             this.name,
             outcome,
             (sessionId, filed) =>
@@ -1198,7 +1210,13 @@ abstract class ClaudeCodeRun extends SubAgent<Env> {
     ) {
       await this.#discard(place, await this.#starts());
     }
-    return reportDiscovery(this.env, report, this.name, outcome);
+    return reportDiscovery(
+      this.env,
+      report,
+      this.callerKey(),
+      this.name,
+      outcome
+    );
   }
 
   /**

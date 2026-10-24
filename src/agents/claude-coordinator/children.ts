@@ -694,6 +694,9 @@ export async function settlePlanner(
 
 async function closeUnwritten(ctx: SubAgentSettleContext<Env>): Promise<void> {
   const plan = planPlaceOf(ctx.runtime);
+  // `isNew` carries the authorization as well as the behaviour: core's `lock`
+  // takes no owner, and a new plan's page is one this run's `prepare` opened
+  // rather than one a model named.
   if (!plan?.isNew) return;
   const workspaceName = sandboxNameFromRuntime(ctx.runtime);
   let note: SessionNote | undefined;
@@ -923,7 +926,7 @@ abstract class ClaudeCodeRun extends SubAgent<Env> {
   protected abstract readonly kind: "write" | "revise" | "plan" | "discover";
 
   /**
-   * This run, as a page it files on is asserted against: see {@link FilingRun}.
+   * This run, as a filing write names it: see {@link FilingRun}.
    *
    * The one place that decides which value is the owner, so no filing write
    * can disagree with another about it. The owner is read here rather than
@@ -932,10 +935,6 @@ abstract class ClaudeCodeRun extends SubAgent<Env> {
    * authority for a write is established by the write. `callerKey` answers off
    * the turn and throws outside one, so this is callable only from within a
    * turn, which is where a filing write runs.
-   *
-   * The suite reaches this directly, because nothing in it reaches the call
-   * sites: both sit in the `report` closure of the real {@link getModel}, and
-   * every child a spec runs replaces that model with a scripted one.
    */
   protected filingRun(): FilingRun {
     return { owner: this.callerKey(), runId: this.name };

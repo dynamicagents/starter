@@ -232,8 +232,9 @@ function ensure(storage: DurableObjectStorage): void {
  * core's approval gate reads: a plan opened without it can be read by whoever
  * holds its link and put to nobody for approval. Required rather than optional
  * so no call site can leave a plan unapprovable by forgetting it. The row below
- * is a second record of the same fact, kept because its rows predate the
- * artifact's own column.
+ * records the same fact for {@link ownsPlan} and {@link lookUpPlan}, which read
+ * this table and not the artifact; folding the two into one is a change of its
+ * own.
  *
  * `sourceKey` names what opens it — a planning run — so opening it again for
  * the same one, as a replayed `prepare` does, finds the plan it opened rather

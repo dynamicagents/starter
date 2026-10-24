@@ -484,18 +484,32 @@ describe("a plan", () => {
 
   it("opens a new plan for this caller, once a workspace has admitted the run", async () => {
     const { pool } = placingPool(worktree());
-    const { runtime, owned } = await onParent(async (agent) => {
-      const runtime = await preparePlanner(
-        { ...planning(), parent: agent.pluginContext() },
-        pool
-      );
-      const plan = runtime.plan as { id: string };
-      return { runtime, owned: ownsPlan(agent.ctx.storage, plan.id) };
-    });
+    const { runtime, owned, stamped, caller } = await onParent(
+      async (agent) => {
+        const runtime = await preparePlanner(
+          { ...planning(), parent: agent.pluginContext() },
+          pool
+        );
+        const plan = runtime.plan as { id: string };
+        return {
+          runtime,
+          owned: ownsPlan(agent.ctx.storage, plan.id),
+          stamped: (await requireArtifactsStub(env).artifactState(plan.id))
+            ?.owner,
+          caller: agent.callerKey()
+        };
+      }
+    );
 
     expect(runtime).toMatchObject({ plan: { isNew: true } });
     expect(runtime).not.toHaveProperty("resume");
     expect(owned).toBe(true);
+    // Both records of whose plan it is: the table `lookUpPlan` reads, and the
+    // artifact's own column, which core's approval gate and every filing write
+    // assert against. The specs below show what a write does with a given
+    // owner and never which owner is stamped here, so a plan stamped with
+    // anything else passes them and is refused by both in production.
+    expect(stamped).toBe(caller);
   });
 
   /**
@@ -776,9 +790,8 @@ describe("a plan", () => {
   /**
    * Which value each filing write passes, which the specs above cannot see:
    * they hand `reportPlan` an owner of their own, while production reads it
-   * from `filingRun` on the run. The owner and the run id are both strings, so
-   * a swap typechecks, and it would refuse every version and every report this
-   * agent files.
+   * from `filingRun` on the run. A swap of the two typechecks, and
+   * {@link FilingRun} is where what it would cost is written down.
    *
    * The child's `callerKey` is stubbed, because a spec runs no turn and the
    * real one answers off the dispatch that started one. What the stub makes

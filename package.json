@@ -33,7 +33,7 @@
     "@a2a-js/sdk": "^1.2.0",
     "@cloudflare/sandbox": "^1.0.1",
     "@cloudflare/think": "0.20.2",
-    "@dynamicagents/core": "github:dynamicagents/core#feat/thread-tasks",
+    "@dynamicagents/core": "github:dynamicagents/core#main",
     "@dynamicagents/plugins": "^0.16.0",
     "agents": "^0.28.0",
     "ai": "^7.0.101",

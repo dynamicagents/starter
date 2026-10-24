@@ -472,7 +472,12 @@ describe("a plan", () => {
    */
   const PLAN_OWNER = "plan-spec-caller";
 
-  /** A plan of `PLAN_OWNER`'s, as `createPlan` opens one. */
+  /**
+   * A page owned by `PLAN_OWNER`, which is the artifact half of what
+   * `createPlan` opens. Its `claude_coordinator_plans` row is left out, because
+   * the specs below call `reportPlan` rather than reach the plan through
+   * `lookUpPlan`.
+   */
   const ownedPlan = () =>
     requireArtifactsStub(env).createArtifact("plan", undefined, PLAN_OWNER);
 
@@ -593,8 +598,7 @@ describe("a plan", () => {
     const report = await reportPlan(
       env,
       { id, isNew: true },
-      PLAN_OWNER,
-      "run-1",
+      { owner: PLAN_OWNER, runId: "run-1" },
       outcome(ANSWER) as never,
       async (sessionId, filed) => {
         recorded.push([sessionId, filed]);
@@ -628,8 +632,7 @@ describe("a plan", () => {
     const report = await reportPlan(
       env,
       { id, isNew: true },
-      PLAN_OWNER,
-      "run-1",
+      { owner: PLAN_OWNER, runId: "run-1" },
       outcome({
         status: "needs_input",
         questions: QUESTIONS,
@@ -665,8 +668,7 @@ describe("a plan", () => {
     await reportPlan(
       env,
       { id, isNew: false, version: 1 },
-      PLAN_OWNER,
-      "run-1",
+      { owner: PLAN_OWNER, runId: "run-1" },
       outcome({
         status: "needs_input",
         questions: [{ question: "Which?" }],
@@ -686,8 +688,7 @@ describe("a plan", () => {
       reportPlan(
         env,
         { id, isNew: true },
-        PLAN_OWNER,
-        "run-1",
+        { owner: PLAN_OWNER, runId: "run-1" },
         outcome({
           status: "needs_input",
           questions: [{ question: "Which?" }],
@@ -704,8 +705,7 @@ describe("a plan", () => {
     const report = await reportPlan(
       env,
       { id, isNew: true },
-      PLAN_OWNER,
-      "run-1",
+      { owner: PLAN_OWNER, runId: "run-1" },
       outcome() as never,
       async (sessionId) => {
         recorded.push(sessionId);
@@ -727,8 +727,7 @@ describe("a plan", () => {
     const report = await reportPlan(
       env,
       { id, isNew: false },
-      PLAN_OWNER,
-      "run-2",
+      { owner: PLAN_OWNER, runId: "run-2" },
       outcome(ANSWER) as never
     );
     expect(report).toMatch(/was not changed/);
@@ -737,10 +736,10 @@ describe("a plan", () => {
 
   /**
    * The gate core's `mayAskApproval` applies at ask time, applied again at the
-   * write: a page whose owner is not this caller takes no version from it. The
-   * two cases are one rule — an owner that does not match — and `null` is where
-   * a plan opened before the column existed stands, so neither can be revised
-   * through this agent however its link travelled.
+   * write: a page whose owner is not this caller takes no version from it. Each
+   * case below is the same rule, an owner that does not match, and `null` is
+   * where a plan opened before the column existed stands, so neither can be
+   * revised through this agent however its link travelled.
    *
    * `lookUpPlan` is untouched and reads `claude_coordinator_plans`, so a legacy
    * plan of this caller's still passes `prepare` and is refused here instead.
@@ -755,8 +754,7 @@ describe("a plan", () => {
     const report = await reportPlan(
       env,
       { id, isNew: false },
-      PLAN_OWNER,
-      "run-1",
+      { owner: PLAN_OWNER, runId: "run-1" },
       outcome(ANSWER) as never,
       () => Promise.reject(new Error("recorded a version it never filed"))
     );
@@ -1503,8 +1501,7 @@ describe("a discovery run", () => {
     await reportDiscovery(
       agent.pluginContext().env,
       runtime.report as ReportPlace,
-      agent.callerKey(),
-      ctx.runId,
+      { owner: agent.callerKey(), runId: ctx.runId },
       outcome(answer) as never
     );
     await settleDiscoverer(
@@ -1555,8 +1552,7 @@ describe("a discovery run", () => {
       await reportDiscovery(
         agent.pluginContext().env,
         runtime.report as ReportPlace,
-        agent.callerKey(),
-        ctx.runId,
+        { owner: agent.callerKey(), runId: ctx.runId },
         outcome({
           status: "done",
           report: REPORT,
@@ -1636,8 +1632,7 @@ describe("a discovery run", () => {
     const told = await reportDiscovery(
       env,
       { id, line: SKILL },
-      RUN_OWNER,
-      "run-1",
+      { owner: RUN_OWNER, runId: "run-1" },
       outcome(answer) as never
     );
 
@@ -1655,10 +1650,10 @@ describe("a discovery run", () => {
   });
 
   /**
-   * The filing write asserts the page is this run's, as a plan's version does
-   * — see "files no version on" above. A report is the half that would be read
-   * by whoever holds the link, so a page some other caller opened takes neither
-   * the report nor the lock that would close it to its own run.
+   * The filing write asserts the page is this caller's, as a plan's version
+   * does: see "files no version on" above. A report is the half a reader of the
+   * link would read, so a page some other caller opened takes neither the
+   * report nor the lock that would close it.
    */
   it.each([
     ["one another caller opened", "someone-else"],
@@ -1674,8 +1669,7 @@ describe("a discovery run", () => {
     const told = await reportDiscovery(
       env,
       { id, line: SKILL },
-      RUN_OWNER,
-      "run-1",
+      { owner: RUN_OWNER, runId: "run-1" },
       outcome({ status: "done", report: REPORT, lastReply: "Done." }) as never
     );
 
@@ -1698,8 +1692,7 @@ describe("a discovery run", () => {
     const told = await reportDiscovery(
       env,
       { id },
-      RUN_OWNER,
-      "run-1",
+      { owner: RUN_OWNER, runId: "run-1" },
       outcome({ status: "done", report: REPORT, lastReply: "Done." }) as never
     );
 
@@ -1731,8 +1724,7 @@ describe("a discovery run", () => {
     const told = await reportDiscovery(
       env,
       { id, line: SKILL },
-      RUN_OWNER,
-      "run-1",
+      { owner: RUN_OWNER, runId: "run-1" },
       outcome(answer) as never
     );
 
@@ -1752,8 +1744,7 @@ describe("a discovery run", () => {
     const told = await reportDiscovery(
       env,
       { id, line: SKILL },
-      RUN_OWNER,
-      "run-1",
+      { owner: RUN_OWNER, runId: "run-1" },
       outcome({ status: "finished", findings: REPORT }) as never
     );
 
@@ -1779,8 +1770,7 @@ describe("a discovery run", () => {
     const told = await reportDiscovery(
       env,
       { id, line: SKILL },
-      RUN_OWNER,
-      "run-1",
+      { owner: RUN_OWNER, runId: "run-1" },
       failed as never
     );
 
@@ -1800,8 +1790,7 @@ describe("a discovery run", () => {
     const told = await reportDiscovery(
       env,
       { id, line: SKILL },
-      RUN_OWNER,
-      "run-1",
+      { owner: RUN_OWNER, runId: "run-1" },
       outcome({
         status: "needs_input",
         lastReply: "Refused at the probe.",

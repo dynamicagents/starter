@@ -836,7 +836,6 @@ export function planReport(
         lastReply: string;
       }
     | { kind: "unanswered" }
-    /** The version was written nowhere: the page refused it — see below. */
     | { kind: "refused"; id: string; lastReply: string }
 ): string {
   const result = outcome.session.result;

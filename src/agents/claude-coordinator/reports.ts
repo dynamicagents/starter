@@ -358,16 +358,15 @@ const API_ERROR_KEPT = 300;
  * through `--json-schema` that message is the answer it failed to make, report
  * and all.
  *
- * `owner` is the verified caller, asserted against the page's own, so the filing
- * write lands only on a page this caller opened — see `reportPlan` in
- * `./children.ts`, which asserts a plan's the same way. Read at the write rather
- * than taken from the report place, which is runtime a replay hands back.
+ * `run.owner` is the verified caller, asserted against the page's own, so the
+ * filing write lands only on a page this caller opened. Why it is read at the
+ * write, and why it travels with the run id rather than beside it, are
+ * `reportPlan`'s in `./children.ts`, which asserts a plan's the same way.
  */
 export async function reportDiscovery(
   env: Env,
   report: { id: string; line?: string },
-  owner: string,
-  runId: string,
+  run: { owner: string; runId: string },
   outcome: SessionOutcome
 ): Promise<string> {
   const result = outcome.session.result;
@@ -423,12 +422,12 @@ export async function reportDiscovery(
 
   const filed = await requireArtifactsStub(env).addEntry(
     report.id,
-    { label: REPORT_LABEL, text: answer.data.report, key: runId },
-    { lock: FILED, owner }
+    { label: REPORT_LABEL, text: answer.data.report, key: run.runId },
+    { lock: FILED, owner: run.owner }
   );
   if (filed === null) {
     return [
-      "**The report could not be filed**: its page is gone, was already closed, or is not this run's to write on. Nothing but the account below is left of what the session found, and the account is not the report: brief a new run if it is still wanted.",
+      "**The report could not be filed**: its page is gone, was already closed, or is not a page this agent may write on. Nothing but the account below is left of what the session found, and the account is not the report: brief a new run if it is still wanted.",
       lastReply,
       footer
     ]

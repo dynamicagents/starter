@@ -20,6 +20,7 @@ import {
   sessionAdvisory
 } from "@dynamicagents/plugins/sandbox";
 import { CLAUDE_CODE_SESSION } from "@/config";
+import { transientChatError } from "@/model";
 import { sandboxShell } from "@/workspace/container";
 import {
   placementRepo,
@@ -961,6 +962,14 @@ abstract class ClaudeCodeRun extends SubAgent<Env> {
    */
   protected artifactWriteContext(): ArtifactWriteContext {
     return { owner: this.callerKey(), runId: this.name };
+  }
+
+  /**
+   * A turn the platform cut is continued rather than failed. `src/model.ts`
+   * holds the why, and what it costs.
+   */
+  override classifyChatError(error: unknown) {
+    return transientChatError(error) ?? super.classifyChatError(error);
   }
 
   override getModel(): ThinkModel {

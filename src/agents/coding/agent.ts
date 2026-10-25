@@ -14,7 +14,7 @@ import type { ContextConfig } from "agents/context";
 import type { LanguageModel, ToolSet } from "ai";
 import { CODING } from "@/config";
 import { RETRY_BRIEF } from "@/copy";
-import { agentModel } from "@/model";
+import { agentModel, transientChatError } from "@/model";
 import { activeRepo } from "@/workspace/active-repo";
 import { WORKSPACE_WRITERS } from "@/workspace/container";
 import { sweepIdleWorkspaces } from "@/workspace/lifecycle";
@@ -56,6 +56,14 @@ export class CodingAgent extends StepAgent<Env> {
    * same workspace and could write anything the file tools are kept from.
    */
   override workspaceBash = false as const;
+
+  /**
+   * A turn the platform cut is continued rather than failed. `src/model.ts`
+   * holds the why, and what it costs.
+   */
+  override classifyChatError(error: unknown) {
+    return transientChatError(error) ?? super.classifyChatError(error);
+  }
 
   override getModel(): ThinkModel {
     return agentModel(

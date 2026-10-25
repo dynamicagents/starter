@@ -7,7 +7,7 @@ import type { ContextConfig } from "agents/context";
 import type { LanguageModel } from "ai";
 import { GENERIC } from "@/config";
 import { RETRY_BRIEF } from "@/copy";
-import { agentModel } from "@/model";
+import { agentModel, transientChatError } from "@/model";
 import { GenericChild } from "./children";
 import { generic } from "./definition";
 import { plugins } from "./plugins";
@@ -25,6 +25,14 @@ import { MEMORY, SOUL } from "./soul";
 export class GenericAgent extends StepAgent<Env> {
   protected readonly compactAfterTokens = GENERIC.compactAfterTokens;
   protected readonly keepRecentTokens = GENERIC.keepRecentTokens;
+
+  /**
+   * A turn the platform cut is continued rather than failed. `src/model.ts`
+   * holds the why, and what it costs.
+   */
+  override classifyChatError(error: unknown) {
+    return transientChatError(error) ?? super.classifyChatError(error);
+  }
 
   override getModel(): ThinkModel {
     return agentModel(

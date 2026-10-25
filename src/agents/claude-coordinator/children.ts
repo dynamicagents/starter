@@ -87,6 +87,7 @@ import {
   unresumableReport,
   warningPrompt,
   writingNote,
+  type ArtifactWriteContext,
   type RepoStart,
   type Uncommitted,
   type WritingOutcome
@@ -639,7 +640,11 @@ export async function preparePlanner(
   let id: string;
   try {
     id =
-      edits ?? (await createPlan(env, storage, `${ctx.taskId}:${ctx.runId}`));
+      edits ??
+      (await createPlan(env, storage, {
+        owner: ctx.parent.callerKey(),
+        sourceKey: `${ctx.taskId}:${ctx.runId}`
+      }));
   } catch (err) {
     // A `prepare` that throws gets no `settle`, so nothing else lets go —
     // and it lets go of the branch, as a planning session's settle does.
@@ -689,6 +694,9 @@ export async function settlePlanner(
 
 async function closeUnwritten(ctx: SubAgentSettleContext<Env>): Promise<void> {
   const plan = planPlaceOf(ctx.runtime);
+  // `isNew` carries the authorization as well as the behaviour: core's `lock`
+  // takes no owner, and a new plan's page is one this run's `prepare` opened
+  // rather than one a model named.
   if (!plan?.isNew) return;
   const workspaceName = sandboxNameFromRuntime(ctx.runtime);
   let note: SessionNote | undefined;
@@ -720,11 +728,16 @@ async function closeUnwritten(ctx: SubAgentSettleContext<Env>): Promise<void> {
  * the one it asked on — which is what lets an edit, an answer or a build carry
  * this conversation on: see `plannedSession` in `./plans.ts`. A record of a
  * version filed is best-effort; one of a question must land or fail the run.
+ *
+ * The version filed below asserts `run.owner` against the plan's own, so a
+ * page this caller did not open, and one owned by nobody, take no version from
+ * it. {@link ClaudeCodeRun.artifactWriteContext} is where that owner is read,
+ * and says why it is read there rather than carried in {@link PlanPlace}.
  */
 export async function reportPlan(
   env: Env,
   plan: PlanPlace,
-  runId: string,
+  run: ArtifactWriteContext,
   outcome: SessionOutcome,
   onSession?: (
     sessionId: string,
@@ -753,14 +766,18 @@ export async function reportPlan(
       lastReply: answer.data.lastReply
     });
   }
-  const filed = await requireArtifactsStub(env).addEntry(plan.id, {
-    label: PLAN_LABEL,
-    text: planText(answer.data),
-    key: runId
-  });
+  const filed = await requireArtifactsStub(env).addEntry(
+    plan.id,
+    {
+      label: PLAN_LABEL,
+      text: planText(answer.data),
+      key: run.runId
+    },
+    { owner: run.owner }
+  );
   if (filed === null) {
     return planReport(outcome, {
-      kind: "locked",
+      kind: "refused",
       id: plan.id,
       lastReply: answer.data.lastReply
     });
@@ -832,7 +849,8 @@ export async function prepareDiscoverer(
     id = await openReport(ctx.parent.env, ctx.parent.storage, {
       ...(line ? { line } : {}),
       runId: ctx.runId,
-      sourceKey: `${ctx.taskId}:${ctx.runId}`
+      sourceKey: `${ctx.taskId}:${ctx.runId}`,
+      owner: ctx.parent.callerKey()
     });
   } catch (err) {
     // Given up here, with its branch, for the reason {@link preparePlanner}
@@ -906,6 +924,21 @@ function reportPlaceOf(
 /** A Claude Code session as a sub-agent: every kind below runs one. */
 abstract class ClaudeCodeRun extends SubAgent<Env> {
   protected abstract readonly kind: "write" | "revise" | "plan" | "discover";
+
+  /**
+   * This run, as an artifact write names it: see {@link ArtifactWriteContext}.
+   *
+   * The one place that decides which value is the owner, so no artifact write
+   * can disagree with another about it. The owner is read here rather than
+   * carried in the {@link PlanPlace} or {@link ReportPlace} that `prepare`
+   * parked, because a parked place is runtime a replay hands back and the
+   * authority for a write is established by the write. `callerKey` answers off
+   * the turn and throws outside one, so this is callable only from within a
+   * turn, which is where an artifact write runs.
+   */
+  protected artifactWriteContext(): ArtifactWriteContext {
+    return { owner: this.callerKey(), runId: this.name };
+  }
 
   override getModel(): ThinkModel {
     const runtime = this.pluginContext().runtime();
@@ -991,7 +1024,7 @@ abstract class ClaudeCodeRun extends SubAgent<Env> {
           return reportPlan(
             this.env,
             plan,
-            this.name,
+            this.artifactWriteContext(),
             outcome,
             (sessionId, filed) =>
               this.#noteSession(
@@ -1191,7 +1224,12 @@ abstract class ClaudeCodeRun extends SubAgent<Env> {
     ) {
       await this.#discard(place, await this.#starts());
     }
-    return reportDiscovery(this.env, report, this.name, outcome);
+    return reportDiscovery(
+      this.env,
+      report,
+      this.artifactWriteContext(),
+      outcome
+    );
   }
 
   /**

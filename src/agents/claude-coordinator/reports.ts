@@ -10,7 +10,8 @@ import {
   questionsText,
   sessionFooter,
   sessionReport,
-  SessionQuestions
+  SessionQuestions,
+  type ArtifactWriteContext
 } from "./session";
 
 /**
@@ -113,17 +114,21 @@ export interface ReportRecord {
  * lives for {@link ARTIFACT_RETENTION_MS} from when it was opened, and so does
  * its row here.
  *
+ * `owner` is stamped on the artifact itself, and `createPlan` in `./plans.ts`
+ * says what that buys and why no call site may leave it out.
+ *
  * `sourceKey` names what opens it, so opening it again for the same run, as a
  * replayed `prepare` does, finds that run's page rather than a second one.
  */
 export async function openReport(
   env: Env,
   storage: DurableObjectStorage,
-  run: { line?: string; runId: string; sourceKey: string }
+  run: { line?: string; runId: string; sourceKey: string; owner: string }
 ): Promise<string> {
   const id = await requireArtifactsStub(env).createArtifact(
     DISCOVERY_REPORT_KIND,
-    run.sourceKey
+    run.sourceKey,
+    run.owner
   );
   ensure(storage);
   const now = Date.now();
@@ -352,11 +357,16 @@ const API_ERROR_KEPT = 300;
  * Its fallback is the session's own last message, and for a run answering
  * through `--json-schema` that message is the answer it failed to make, report
  * and all.
+ *
+ * The artifact write asserts `run.owner` against the page's own, so it lands
+ * only on a page this caller opened. `reportPlan` in `./children.ts` asserts a
+ * plan's version the same way, and {@link ArtifactWriteContext} says what the
+ * pair is.
  */
 export async function reportDiscovery(
   env: Env,
   report: { id: string; line?: string },
-  runId: string,
+  run: ArtifactWriteContext,
   outcome: SessionOutcome
 ): Promise<string> {
   const result = outcome.session.result;
@@ -412,12 +422,12 @@ export async function reportDiscovery(
 
   const filed = await requireArtifactsStub(env).addEntry(
     report.id,
-    { label: REPORT_LABEL, text: answer.data.report, key: runId },
-    { lock: FILED }
+    { label: REPORT_LABEL, text: answer.data.report, key: run.runId },
+    { lock: FILED, owner: run.owner }
   );
   if (filed === null) {
     return [
-      "**The report could not be filed**: its page is gone or was already closed. Nothing but the account below is left of what the session found, and the account is not the report: brief a new run if it is still wanted.",
+      "**The report could not be filed**: its page is gone, was already closed, or is not a page this agent may write on. Nothing but the account below is left of what the session found, and the account is not the report: brief a new run if it is still wanted.",
       lastReply,
       footer
     ]

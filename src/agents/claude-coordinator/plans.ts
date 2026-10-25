@@ -228,18 +228,33 @@ function ensure(storage: DurableObjectStorage): void {
  * artifact lives for {@link ARTIFACT_RETENTION_MS} from when it was opened, and
  * so does its row here.
  *
+ * `owner` is the verified caller, stamped on the artifact itself, and it is what
+ * core's approval gate reads: a plan opened without it can be read by whoever
+ * holds its link and put to nobody for approval. Required rather than optional
+ * so no call site can leave a plan unapprovable by forgetting it. The row below
+ * records the same fact for {@link ownsPlan} and {@link lookUpPlan}, which read
+ * this table and not the artifact, and records it by being in this caller's own
+ * storage rather than in a column: the row is the id and when it was opened.
+ * Folding the two into one is a change of its own.
+ *
  * `sourceKey` names what opens it — a planning run — so opening it again for
  * the same one, as a replayed `prepare` does, finds the plan it opened rather
  * than a second one.
+ *
+ * `owner` and `sourceKey` arrive as one argument because both are strings and
+ * either reads as the other, which is `ArtifactWriteContext`'s reason in
+ * `./session.ts`: the swap opens one shared page per caller for every planning
+ * run, each owned by a run id and so writable and approvable by nobody.
  */
 export async function createPlan(
   env: Env,
   storage: DurableObjectStorage,
-  sourceKey?: string
+  plan: { owner: string; sourceKey?: string }
 ): Promise<string> {
   const id = await requireArtifactsStub(env).createArtifact(
     PLAN_KIND,
-    sourceKey
+    plan.sourceKey,
+    plan.owner
   );
   ensure(storage);
   const now = Date.now();

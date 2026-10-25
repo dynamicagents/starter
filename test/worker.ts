@@ -371,10 +371,17 @@ const PLANNER_SPEC = {
   ...ClaudeCoordinatorPlannerChild.spec,
   prepare: async (ctx: {
     input: { plan?: string };
-    parent: { env: Env; storage: DurableObjectStorage };
+    parent: {
+      env: Env;
+      storage: DurableObjectStorage;
+      callerKey: () => string;
+    };
   }) => {
     const id =
-      ctx.input.plan ?? (await createPlan(ctx.parent.env, ctx.parent.storage));
+      ctx.input.plan ??
+      (await createPlan(ctx.parent.env, ctx.parent.storage, {
+        owner: ctx.parent.callerKey()
+      }));
     return {
       workspaceName: "test-workspace",
       dir: "/workspace/t",
@@ -390,6 +397,27 @@ export class TestClaudeCoordinatorPlannerChild extends ClaudeCoordinatorPlannerC
   }
   override getTools(): ToolSet {
     return { ...super.getTools(), child_sleep: sleepTool("child") };
+  }
+
+  /**
+   * The real caller key wherever there is a turn to read it off, and a
+   * stand-in only where there is not: core reads it from the dispatch and
+   * throws between turns, which is where a spec calling `artifactWriteContext`
+   * stands. Answering the stand-in inside a turn as well would give this child
+   * an owner the parent's `prepare` never stamped, so a spec driving an
+   * artifact write through it would read a refused write as a session that
+   * could not file.
+   *
+   * The stand-in is distinct from `this.name` on purpose, so an
+   * `artifactWriteContext` answering the run id as its owner fails here rather
+   * than matching a stub.
+   */
+  protected override callerKey(): string {
+    try {
+      return super.callerKey();
+    } catch {
+      return `caller-of:${this.name}`;
+    }
   }
 }
 
@@ -429,7 +457,9 @@ export class TestClaudeCoordinatorAgent extends ClaudeCoordinatorAgent {
 
   /** Open a plan for this caller, as a planning session's `prepare` does. */
   async openPlan(): Promise<string> {
-    return createPlan(this.env, this.ctx.storage);
+    return createPlan(this.env, this.ctx.storage, {
+      owner: this.callerKey()
+    });
   }
 }
 

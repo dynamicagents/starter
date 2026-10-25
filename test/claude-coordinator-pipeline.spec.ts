@@ -29,8 +29,15 @@ function setup(label: string) {
     tenant: "claude-coordinator",
     identity: { key, name: "Spec Caller", kind: "custom", workspaceId: 1 }
   });
+  // Named by the caller's **scope** and never by the identity key, which is one
+  // half of it: the edge routes a turn to the scope, so a spec that opens a plan
+  // on this object has to be on the object the turn will run on. A plan opened on
+  // any other carries an owner the approval gate refuses, and the agent then
+  // reports and finishes on what "is not put to the caller when it is not
+  // theirs" pins below, so a spec waiting for the question times out rather than
+  // failing on the owner.
   const coder = testEnv.TEST_CLAUDE_COORDINATOR_AGENT.get(
-    testEnv.TEST_CLAUDE_COORDINATOR_AGENT.idFromName(key)
+    testEnv.TEST_CLAUDE_COORDINATOR_AGENT.idFromName(harness.callerScope)
   );
   return { harness, coder };
 }

@@ -80,7 +80,8 @@ import {
   unresumableReport,
   warningPrompt,
   WRITE_OUTPUT,
-  writingNote
+  writingNote,
+  type ArtifactWriteContext
 } from "@/agents/claude-coordinator/session";
 import {
   DISCOVERY_OUTPUT,
@@ -140,6 +141,8 @@ interface Parent {
     run: AgentToolRunInfo,
     result: AgentToolLifecycleResult
   ): string;
+  /** The verified caller, which is what a page this agent opens is owned by. */
+  callerKey(): string;
   ctx: DurableObjectState;
 }
 
@@ -462,20 +465,51 @@ describe("a plan", () => {
       "Adds --json to the list command; assumes the output shape stays."
   };
 
+  /**
+   * The caller a plan below is opened for, and the one its version is filed by.
+   * A literal because the store compares it verbatim, so these specs pin what
+   * the write does with an owner and never where the owner comes from: that is
+   * `artifactWriteContext`'s, under "files as the caller the run is for" below.
+   */
+  const PLAN_OWNER = "plan-spec-caller";
+
+  /**
+   * A page owned by `PLAN_OWNER`, which is the artifact half of what
+   * `createPlan` opens. Its `claude_coordinator_plans` row is left out, because
+   * the specs below call `reportPlan` rather than reach the plan through
+   * `lookUpPlan`.
+   */
+  const ownedPlan = () =>
+    requireArtifactsStub(env).createArtifact("plan", undefined, PLAN_OWNER);
+
   it("opens a new plan for this caller, once a workspace has admitted the run", async () => {
     const { pool } = placingPool(worktree());
-    const { runtime, owned } = await onParent(async (agent) => {
-      const runtime = await preparePlanner(
-        { ...planning(), parent: agent.pluginContext() },
-        pool
-      );
-      const plan = runtime.plan as { id: string };
-      return { runtime, owned: ownsPlan(agent.ctx.storage, plan.id) };
-    });
+    const { runtime, owned, stamped, caller } = await onParent(
+      async (agent) => {
+        const runtime = await preparePlanner(
+          { ...planning(), parent: agent.pluginContext() },
+          pool
+        );
+        const plan = runtime.plan as { id: string };
+        return {
+          runtime,
+          owned: ownsPlan(agent.ctx.storage, plan.id),
+          stamped: (await requireArtifactsStub(env).artifactState(plan.id))
+            ?.owner,
+          caller: agent.callerKey()
+        };
+      }
+    );
 
     expect(runtime).toMatchObject({ plan: { isNew: true } });
     expect(runtime).not.toHaveProperty("resume");
     expect(owned).toBe(true);
+    // Both records of whose plan it is: the table `lookUpPlan` reads, and the
+    // artifact's own column, which core's approval gate and every artifact
+    // write assert against. The specs below show what a write does with a given
+    // owner and never which owner is stamped here, so a plan stamped with
+    // anything else passes them and is refused by both in production.
+    expect(stamped).toBe(caller);
   });
 
   /**
@@ -556,7 +590,9 @@ describe("a plan", () => {
       const id =
         which === "foreign"
           ? await requireArtifactsStub(env).createArtifact("plan")
-          : await createPlan(env, agent.ctx.storage);
+          : await createPlan(env, agent.ctx.storage, {
+              owner: agent.callerKey()
+            });
       if (which === "locked") {
         await requireArtifactsStub(env).lock(id, "approved");
       }
@@ -574,12 +610,12 @@ describe("a plan", () => {
   });
 
   it("files the session's answer as the plan, and tells the parent its id, not its text", async () => {
-    const id = await requireArtifactsStub(env).createArtifact("plan");
+    const id = await ownedPlan();
     const recorded: unknown[] = [];
     const report = await reportPlan(
       env,
       { id, isNew: true },
-      "run-1",
+      { owner: PLAN_OWNER, runId: "run-1" },
       outcome(ANSWER) as never,
       async (sessionId, filed) => {
         recorded.push([sessionId, filed]);
@@ -608,12 +644,12 @@ describe("a plan", () => {
    * answer carry its conversation on.
    */
   it("files nothing for a session that stopped to ask, and hands the parent its questions whole", async () => {
-    const id = await requireArtifactsStub(env).createArtifact("plan");
+    const id = await ownedPlan();
     const recorded: unknown[] = [];
     const report = await reportPlan(
       env,
       { id, isNew: true },
-      "run-1",
+      { owner: PLAN_OWNER, runId: "run-1" },
       outcome({
         status: "needs_input",
         questions: QUESTIONS,
@@ -642,14 +678,14 @@ describe("a plan", () => {
    */
   it("records a question against the version the session started from", async () => {
     const artifacts = requireArtifactsStub(env);
-    const id = await artifacts.createArtifact("plan");
+    const id = await ownedPlan();
     await artifacts.addEntry(id, { label: PLAN_LABEL, text: "v1" });
     await artifacts.addEntry(id, { label: PLAN_LABEL, text: "v2" });
     const recorded: unknown[] = [];
     await reportPlan(
       env,
       { id, isNew: false, version: 1 },
-      "run-1",
+      { owner: PLAN_OWNER, runId: "run-1" },
       outcome({
         status: "needs_input",
         questions: [{ question: "Which?" }],
@@ -664,12 +700,12 @@ describe("a plan", () => {
 
   /** Without its record the plan would not stay open for the answer. */
   it("fails rather than report a question it could not record", async () => {
-    const id = await requireArtifactsStub(env).createArtifact("plan");
+    const id = await ownedPlan();
     await expect(
       reportPlan(
         env,
         { id, isNew: true },
-        "run-1",
+        { owner: PLAN_OWNER, runId: "run-1" },
         outcome({
           status: "needs_input",
           questions: [{ question: "Which?" }],
@@ -681,12 +717,12 @@ describe("a plan", () => {
   });
 
   it("files nothing for a session that did not answer through the schema", async () => {
-    const id = await requireArtifactsStub(env).createArtifact("plan");
+    const id = await ownedPlan();
     const recorded: string[] = [];
     const report = await reportPlan(
       env,
       { id, isNew: true },
-      "run-1",
+      { owner: PLAN_OWNER, runId: "run-1" },
       outcome() as never,
       async (sessionId) => {
         recorded.push(sessionId);
@@ -701,20 +737,94 @@ describe("a plan", () => {
 
   it("does not change a plan that was approved while its session ran", async () => {
     const artifacts = requireArtifactsStub(env);
-    const id = await artifacts.createArtifact("plan");
+    const id = await ownedPlan();
     await artifacts.addEntry(id, { label: PLAN_LABEL, text: "the plan" });
     await artifacts.lock(id, "approved");
 
     const report = await reportPlan(
       env,
       { id, isNew: false },
-      "run-2",
+      { owner: PLAN_OWNER, runId: "run-2" },
       outcome(ANSWER) as never
     );
     expect(report).toMatch(/was not changed/);
     expect((await artifacts.readArtifact(id))?.entries).toHaveLength(1);
   });
 
+  /**
+   * The gate core's `mayAskApproval` applies at ask time, applied again at the
+   * write: a page whose owner is not this caller takes no version from it. Each
+   * case below is that one rule, an owner that does not match, and a page owned
+   * by nobody matches nobody, so neither can be revised through this agent
+   * however its link travelled.
+   *
+   * `lookUpPlan` is untouched and reads `claude_coordinator_plans`, so a plan
+   * of this caller's that carries no owner still passes `prepare` and is
+   * refused here instead.
+   */
+  it.each([
+    ["one another caller opened", "someone-else"],
+    ["one owned by nobody", undefined]
+  ])("files no version on %s", async (_label, owner) => {
+    const artifacts = requireArtifactsStub(env);
+    const id = await artifacts.createArtifact("plan", undefined, owner);
+
+    const report = await reportPlan(
+      env,
+      { id, isNew: false },
+      { owner: PLAN_OWNER, runId: "run-1" },
+      outcome(ANSWER) as never,
+      () => Promise.reject(new Error("recorded a version it never filed"))
+    );
+
+    expect(report).toMatch(/was not changed/);
+    expect(report).toContain(ANSWER.lastReply);
+    // Nothing of the plan reaches the page, and nothing of it reaches the
+    // parent either: the title names a version that was not filed.
+    expect(report).not.toContain(ANSWER.title);
+    const page = await artifacts.readArtifact(id);
+    expect(page?.entries).toEqual([]);
+    expect(page).toMatchObject({ owner: owner ?? null, locked: false });
+  });
+
+  /**
+   * Which value each artifact write passes, which the specs above cannot see:
+   * they hand `reportPlan` an owner of their own, while production reads it
+   * from `artifactWriteContext` on the run. A swap of the two typechecks, and
+   * {@link ArtifactWriteContext} is where what it would cost is written down.
+   *
+   * The child's `callerKey` falls back to a stub here, because a spec runs no
+   * turn and the real one answers off the dispatch that started one. What the
+   * stub makes visible is which field is which: the run id would pass as an
+   * owner against a stub that answered the name.
+   *
+   * So what no spec here reaches is the equality the change rests on: that the
+   * owner a parent's `prepare` stamps is the one core puts on the dispatch the
+   * child reads back. Core owns both ends of that and pins it; a starter spec
+   * that drove it would be asserting core's envelope.
+   */
+  it("files as the caller the run is for, keyed by the run", async () => {
+    const ns = (env as unknown as Record<string, DurableObjectNamespace>)
+      .TEST_CLAUDE_COORDINATOR_PLANNER_CHILD!;
+    const runId = `claude-coordinator-spec:${crypto.randomUUID()}`;
+    const run = await runInDurableObject(
+      ns.get(ns.idFromName(runId)),
+      (instance) =>
+        (
+          instance as unknown as {
+            artifactWriteContext(): ArtifactWriteContext;
+          }
+        ).artifactWriteContext()
+    );
+    expect(run).toEqual({ owner: `caller-of:${runId}`, runId });
+  });
+
+  /**
+   * The pages below are opened under no owner on purpose. What settles a plan
+   * is the `isNew` guard, and core's `lock` asserts no owner, so an owned page
+   * would pass these the same way and show nothing: see `closeUnwritten` in
+   * `@/agents/claude-coordinator/children`.
+   */
   it("marks a new plan its session never wrote as failed, and leaves a written one open", async () => {
     const artifacts = requireArtifactsStub(env);
     const settle = (id: string, isNew: boolean) =>
@@ -783,7 +893,9 @@ describe("a plan", () => {
         const id =
           which === "foreign"
             ? await requireArtifactsStub(env).createArtifact("plan")
-            : await createPlan(env, agent.ctx.storage);
+            : await createPlan(env, agent.ctx.storage, {
+                owner: agent.callerKey()
+              });
         return prepareWriter({
           ...planning(id),
           parent: agent.pluginContext()
@@ -1377,6 +1489,21 @@ describe("a discovery run", () => {
       runId: `detached:${crypto.randomUUID()}`
     }) as const;
 
+  /**
+   * The caller a page below is opened for, and the one that files on it. A
+   * literal because the store compares it verbatim, as `PLAN_OWNER` above is;
+   * where a spec runs on the agent it passes the agent's own `callerKey()`.
+   */
+  const RUN_OWNER = "discovery-spec-caller";
+
+  /** A report page of `RUN_OWNER`'s, as `openReport` opens one. */
+  const ownedPage = () =>
+    requireArtifactsStub(env).createArtifact(
+      "discovery-report",
+      undefined,
+      RUN_OWNER
+    );
+
   /** A discovery session's outcome: its answer through `--json-schema`. */
   const outcome = (structured: unknown) => ({
     session: {
@@ -1432,7 +1559,7 @@ describe("a discovery run", () => {
     await reportDiscovery(
       agent.pluginContext().env,
       runtime.report as ReportPlace,
-      ctx.runId,
+      { owner: agent.callerKey(), runId: ctx.runId },
       outcome(answer) as never
     );
     await settleDiscoverer(
@@ -1483,7 +1610,7 @@ describe("a discovery run", () => {
       await reportDiscovery(
         agent.pluginContext().env,
         runtime.report as ReportPlace,
-        ctx.runId,
+        { owner: agent.callerKey(), runId: ctx.runId },
         outcome({
           status: "done",
           report: REPORT,
@@ -1553,8 +1680,7 @@ describe("a discovery run", () => {
   });
 
   it("files the report on its page and closes it, naming the skill and not the report", async () => {
-    const id =
-      await requireArtifactsStub(env).createArtifact("discovery-report");
+    const id = await ownedPage();
     const answer = {
       status: "done",
       report: REPORT,
@@ -1564,7 +1690,7 @@ describe("a discovery run", () => {
     const told = await reportDiscovery(
       env,
       { id, line: SKILL },
-      "run-1",
+      { owner: RUN_OWNER, runId: "run-1" },
       outcome(answer) as never
     );
 
@@ -1581,13 +1707,50 @@ describe("a discovery run", () => {
     expect(page).toMatchObject({ locked: true, status: "filed" });
   });
 
+  /**
+   * The artifact write asserts the page is this caller's, as a plan's version
+   * does: see "files no version on" above. A report is the half a reader of the
+   * link would read, so a page some other caller opened takes neither the
+   * report nor the lock that would close it.
+   */
+  it.each([
+    ["one another caller opened", "someone-else"],
+    ["one owned by nobody", undefined]
+  ])("files no report on %s, and locks nothing", async (_label, owner) => {
+    const artifacts = requireArtifactsStub(env);
+    const id = await artifacts.createArtifact(
+      "discovery-report",
+      undefined,
+      owner
+    );
+
+    const told = await reportDiscovery(
+      env,
+      { id, line: SKILL },
+      { owner: RUN_OWNER, runId: "run-1" },
+      outcome({ status: "done", report: REPORT, lastReply: "Done." }) as never
+    );
+
+    expect(told).toMatch(/could not be filed/);
+    // The account, never the report: the parent is told what is left, and what
+    // is left is not what the run found.
+    expect(told).toContain("Done.");
+    expect(told).not.toContain("| hypothesis |");
+    const page = await artifacts.readArtifact(id);
+    expect(page?.entries).toEqual([]);
+    expect(page).toMatchObject({
+      owner: owner ?? null,
+      locked: false,
+      status: null
+    });
+  });
+
   it("says a report filed under no skill reaches no later run", async () => {
-    const id =
-      await requireArtifactsStub(env).createArtifact("discovery-report");
+    const id = await ownedPage();
     const told = await reportDiscovery(
       env,
       { id },
-      "run-1",
+      { owner: RUN_OWNER, runId: "run-1" },
       outcome({ status: "done", report: REPORT, lastReply: "Done." }) as never
     );
 
@@ -1615,12 +1778,11 @@ describe("a discovery run", () => {
       /no report, so nothing was filed/
     ]
   ])("files nothing when %s", async (_label, answer, expected) => {
-    const id =
-      await requireArtifactsStub(env).createArtifact("discovery-report");
+    const id = await ownedPage();
     const told = await reportDiscovery(
       env,
       { id, line: SKILL },
-      "run-1",
+      { owner: RUN_OWNER, runId: "run-1" },
       outcome(answer) as never
     );
 
@@ -1636,12 +1798,11 @@ describe("a discovery run", () => {
    * parent does not read a report, and a broken one is still a report.
    */
   it("quotes nothing a session said when its answer will not parse", async () => {
-    const id =
-      await requireArtifactsStub(env).createArtifact("discovery-report");
+    const id = await ownedPage();
     const told = await reportDiscovery(
       env,
       { id, line: SKILL },
-      "run-1",
+      { owner: RUN_OWNER, runId: "run-1" },
       outcome({ status: "finished", findings: REPORT }) as never
     );
 
@@ -1654,8 +1815,7 @@ describe("a discovery run", () => {
 
   /** The CLI ends a session the API failed as `success`, with its error as the answer. */
   it("names the API error a session ended on, and what it may have left in the repository", async () => {
-    const id =
-      await requireArtifactsStub(env).createArtifact("discovery-report");
+    const id = await ownedPage();
     const error =
       'API Error: ZlibError fetching "http://anthropic.harness.internal/v1/messages?beta=true".';
     const failed = outcome(undefined);
@@ -1668,7 +1828,7 @@ describe("a discovery run", () => {
     const told = await reportDiscovery(
       env,
       { id, line: SKILL },
-      "run-1",
+      { owner: RUN_OWNER, runId: "run-1" },
       failed as never
     );
 
@@ -1681,15 +1841,14 @@ describe("a discovery run", () => {
   });
 
   it("passes a session's questions to the parent as they were asked", async () => {
-    const id =
-      await requireArtifactsStub(env).createArtifact("discovery-report");
+    const id = await ownedPage();
     const questions = [
       { question: "Widen the token's scopes?", header: "Scopes" }
     ];
     const told = await reportDiscovery(
       env,
       { id, line: SKILL },
-      "run-1",
+      { owner: RUN_OWNER, runId: "run-1" },
       outcome({
         status: "needs_input",
         lastReply: "Refused at the probe.",
@@ -1760,11 +1919,13 @@ describe("a discovery run", () => {
       } as never)) as string;
 
     /** A page this caller filed on, which is what a record becomes history on. */
-    const filed = async (storage: DurableObjectStorage, runId: string) => {
+    const filed = async (agent: Parent, runId: string) => {
+      const storage = agent.ctx.storage;
       const id = await openReport(env, storage, {
         line: SKILL,
         runId,
-        sourceKey: `s:${crypto.randomUUID()}`
+        sourceKey: `s:${crypto.randomUUID()}`,
+        owner: agent.callerKey()
       });
       fileReport(storage, id);
       return id;
@@ -1772,8 +1933,8 @@ describe("a discovery run", () => {
 
     it("answers this caller's pages, newest first, as links", async () => {
       const listed = await onParent(async (agent) => {
-        const older = await filed(agent.ctx.storage, "run-1");
-        const newer = await filed(agent.ctx.storage, "run-2");
+        const older = await filed(agent, "run-1");
+        const newer = await filed(agent, "run-2");
         return { text: await list(agent.ctx.storage), older, newer };
       });
 
@@ -1792,7 +1953,7 @@ describe("a discovery run", () => {
 
     it("gives no link before a turn has said what this deployment is called", async () => {
       const text = await onParent(async (agent) => {
-        await filed(agent.ctx.storage, "run-1");
+        await filed(agent, "run-1");
         return list(agent.ctx.storage, () => undefined);
       });
 
@@ -1819,7 +1980,8 @@ describe("a discovery run", () => {
       const id = await openReport(env, agent.ctx.storage, {
         line: SKILL,
         runId: "detached:call_1",
-        sourceKey: `s:${crypto.randomUUID()}`
+        sourceKey: `s:${crypto.randomUUID()}`,
+        owner: agent.callerKey()
       });
       fileReport(agent.ctx.storage, id);
       return {

@@ -414,10 +414,13 @@ only if the task asks for it. Only one level of submodules is checked out.`
 /**
  * What a **revising** session is told about the branches it was sent back to.
  *
- * The host put it on the branch the work is on, as it puts a `continue` there.
- * Any other listed branch it checks out itself, in whichever repository holds
- * it, because a dependency's pull request in a release train may be under
- * another name; it comes back after, since the worktree is found by `branch`.
+ * The host put it on the branch the work is on, as it puts a `continue` there,
+ * which keeps the local branch as the worktree left it: a push since, from a
+ * person or from a worktree that held it while this one did not, is the
+ * session's to merge in before it reads what landed against older code. Any
+ * other listed branch it checks out itself, in whichever repository holds it,
+ * because a dependency's pull request in a release train may be under another
+ * name; it comes back after, since the worktree is found by `branch`.
  */
 function branchesNote(
   branch: string,
@@ -428,6 +431,11 @@ function branchesNote(
 
 You are on \`${branch}\`, the branch this work is on, in a worktree nobody else is working in
 while you are.${continues ? " It already holds earlier work: read its log before you start, unless this conversation wrote it." : ""}
+
+Before anything else, bring \`${branch}\` level with its remote in each repository it is in:
+somebody may have pushed to it since this worktree last held it. Where \`origin/${branch}\`
+has moved, merge it in (a fast-forward where it can be, never a reset that drops a commit
+nobody pushed), and stop and say so if it does not merge cleanly.
 
 The branches to work on are listed at the top, and a branch may be in more than one
 repository here. Find each one's pull requests with \`gh pr list --head <branch>\` in each

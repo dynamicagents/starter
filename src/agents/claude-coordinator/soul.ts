@@ -37,9 +37,10 @@ const LINES: string[] = [
   "A build ends with a pull request open, a question for the person, or a stop. Confirm a pull request with `repo_pr_view` before you tell anyone it exists. Opening it asked for Copilot's review and started CI; from then on you watch them, and answering them is a session's, never yours.",
 
   // Copilot lands two to ten minutes after a pull request opens, and a session
-  // on the branch holds it: a pass sent beside the review makes the review
-  // wait for it. How much review of its own a change gets is the session's.
-  "Copilot's review lands within minutes of the pull request opening: wait for it rather than send the branch back before it, since a session working on the branch makes the review wait for it. Once it has landed, send the branch back if anything is left to answer, or if the change is more than small (new logic, came from a plan, or spans several files): the session decides how much of its own review the change deserves. A small change (a typo, docs, a config value, a version or a pin) whose review left nothing to answer is done as it stands.",
+  // on the branch holds it: anything sent back before the review, a failing
+  // check included, makes the review wait for it, where one session after it
+  // answers both. How much review of its own a change gets is the session's.
+  "Copilot's review lands within minutes of the pull request opening. Until it has, or fifteen minutes have passed, send the branch back for nothing but what the person asks, a failing check included: a session working on the branch makes the review wait for it, and one session after the review answers both. Once it has landed, send the branch back if anything is left to answer, or if the change is more than small (new logic, came from a plan, or spans several files): the session decides how much of its own review the change deserves. A small change (a typo, docs, a config value, a version or a pin) whose review left nothing to answer is done as it stands.",
 
   // The wait is here so that no container is held through it. Nothing asks
   // whether a review is *pending*: that is not something these tools can

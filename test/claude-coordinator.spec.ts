@@ -1340,6 +1340,32 @@ describe("carrying a plan on from the session that wrote it", () => {
     expect(await stub.sessionOf("run-1")).toBeUndefined();
   });
 
+  /**
+   * A branch built once and revised twice names one conversation three times:
+   * found gone by the latest, the older two would hand the next lookup the
+   * same missing conversation, one refused round each.
+   */
+  it("forgets every run that carried a gone conversation on, and no other", async () => {
+    const stub = sandboxAt(`claude-coordinator-spec:${crypto.randomUUID()}`);
+    await stub.noteSession("build", { sessionId: "s1" });
+    await stub.noteSession("revise-1", {
+      sessionId: "s1",
+      transcript: "build"
+    });
+    await stub.noteSession("revise-2", {
+      sessionId: "s1",
+      transcript: "build"
+    });
+    await stub.noteSession("other", { sessionId: "s2" });
+
+    await stub.forgetSession("revise-2");
+
+    expect(await stub.sessionOf("build")).toBeUndefined();
+    expect(await stub.sessionOf("revise-1")).toBeUndefined();
+    expect(await stub.sessionOf("revise-2")).toBeUndefined();
+    expect(await stub.sessionOf("other")).toEqual({ sessionId: "s2" });
+  });
+
   it("tells a conversation that is gone apart from a session that failed", () => {
     const ended = (errors: string[]) =>
       ({
@@ -2315,6 +2341,12 @@ describe("the branch a writing session is told about", () => {
       "You are on `claude-coordinator/r`, the branch this work is on"
     );
     expect(flat).toContain("It already holds earlier work");
+    // A `continue` keeps the local branch, and somebody may have pushed since.
+    expect(flat).toContain(
+      "Before anything else, bring `claude-coordinator/r` level with its remote"
+    );
+    expect(flat).toContain("never a reset that drops a commit nobody pushed");
+    expect(flat).toContain("stop and say so if it does not merge cleanly");
     expect(flat).toContain(
       "go back to `claude-coordinator/r` when you are done"
     );
@@ -3517,9 +3549,9 @@ describe("what the coordinator does with a session's question", () => {
  * about how to answer it.
  */
 describe("what the coordinator sends back to a pull request", () => {
-  it("waits for Copilot's review rather than sending a pass beside it", () => {
+  it("waits for Copilot's review rather than sending anything beside it, a failing check included", () => {
     expect(SOUL).toContain(
-      "wait for it rather than send the branch back before it"
+      "Until it has, or fifteen minutes have passed, send the branch back for nothing but what the person asks, a failing check included"
     );
     expect(SOUL).not.toContain("it runs while Copilot reviews");
     expect(SOUL).toContain("is done as it stands");

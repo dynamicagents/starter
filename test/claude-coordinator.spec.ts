@@ -793,10 +793,15 @@ describe("a plan", () => {
    * from `filingRun` on the run. A swap of the two typechecks, and
    * {@link FilingRun} is where what it would cost is written down.
    *
-   * The child's `callerKey` is stubbed, because a spec runs no turn and the
-   * real one answers off the dispatch that started one. What the stub makes
-   * visible is which field is which: the run id would pass as an owner against
-   * a stub that answered the name.
+   * The child's `callerKey` falls back to a stub here, because a spec runs no
+   * turn and the real one answers off the dispatch that started one. What the
+   * stub makes visible is which field is which: the run id would pass as an
+   * owner against a stub that answered the name.
+   *
+   * So what no spec here reaches is the equality the change rests on: that the
+   * owner a parent's `prepare` stamps is the one core puts on the dispatch the
+   * child reads back. Core owns both ends of that and pins it; a starter spec
+   * that drove it would be asserting core's envelope.
    */
   it("files as the caller the run is for, keyed by the run", async () => {
     const ns = (env as unknown as Record<string, DurableObjectNamespace>)
@@ -810,6 +815,12 @@ describe("a plan", () => {
     expect(run).toEqual({ owner: `caller-of:${runId}`, runId });
   });
 
+  /**
+   * The pages below are opened under no owner on purpose. What settles a plan
+   * is the `isNew` guard, and core's `lock` asserts no owner, so an owned page
+   * would pass these the same way and show nothing: see `closeUnwritten` in
+   * `@/agents/claude-coordinator/children`.
+   */
   it("marks a new plan its session never wrote as failed, and leaves a written one open", async () => {
     const artifacts = requireArtifactsStub(env);
     const settle = (id: string, isNew: boolean) =>

@@ -400,13 +400,23 @@ export class TestClaudeCoordinatorPlannerChild extends ClaudeCoordinatorPlannerC
   }
 
   /**
-   * A caller key answered without a turn: the real one is read off the dispatch
-   * that started one and throws between turns, which is where a spec calling
-   * `filingRun` stands. Distinct from `this.name` on purpose, so a `filingRun`
+   * The real caller key wherever there is a turn to read it off, and a
+   * stand-in only where there is not: core reads it from the dispatch and
+   * throws between turns, which is where a spec calling `filingRun` stands.
+   * Answering the stand-in inside a turn as well would give this child an
+   * owner the parent's `prepare` never stamped, so a spec driving a filing
+   * write through it would read a refused write as a session that could not
+   * file.
+   *
+   * The stand-in is distinct from `this.name` on purpose, so a `filingRun`
    * answering the run id as its owner fails here rather than matching a stub.
    */
   protected override callerKey(): string {
-    return `caller-of:${this.name}`;
+    try {
+      return super.callerKey();
+    } catch {
+      return `caller-of:${this.name}`;
+    }
   }
 }
 

@@ -233,8 +233,9 @@ function ensure(storage: DurableObjectStorage): void {
  * holds its link and put to nobody for approval. Required rather than optional
  * so no call site can leave a plan unapprovable by forgetting it. The row below
  * records the same fact for {@link ownsPlan} and {@link lookUpPlan}, which read
- * this table and not the artifact; folding the two into one is a change of its
- * own.
+ * this table and not the artifact, and records it by being in this caller's own
+ * storage rather than in a column: the row is the id and when it was opened.
+ * Folding the two into one is a change of its own.
  *
  * `sourceKey` names what opens it — a planning run — so opening it again for
  * the same one, as a replayed `prepare` does, finds the plan it opened rather

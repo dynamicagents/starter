@@ -351,11 +351,17 @@ export async function prepareWriter(
  * worked on it — in that worktree, which is where the conversation is — and
  * without a fork: one conversation accumulating is what going back means.
  * Anywhere else it starts fresh, told the branch holds earlier work.
+ *
+ * `revising` is what else a revision works on, held by the same claim.
  */
 async function placeOnBranch(
-  ctx: SubAgentPrepareContext<{ task: string }, Env>,
+  ctx: Pick<
+    SubAgentPrepareContext<unknown, Env>,
+    "taskId" | "runId" | "parent"
+  >,
   branch: string,
-  workspaces: SubtaskWorkspaces
+  workspaces: SubtaskWorkspaces,
+  revising: readonly string[] = []
 ): Promise<Record<string, unknown>> {
   const last = await branchSession(
     ctx.parent.storage,
@@ -368,7 +374,8 @@ async function placeOnBranch(
     taskId: ctx.taskId,
     runId: ctx.runId,
     continue: branch,
-    ...(last?.near ? { near: last.near } : {})
+    ...(last?.near ? { near: last.near } : {}),
+    ...(revising.length > 0 ? { revising } : {})
   });
   noteBranchRun(ctx, place);
   const resume = carryOn(last, place, { fork: false });
@@ -425,9 +432,11 @@ function noteBranchRun(
  * says so. The worst of it is one container start; a revising session pushes
  * only the branches it was named and never merges.
  *
- * Then the session gets a worktree of the root at its base, and checks each
- * branch out itself. It starts fresh: its branches may come from several
- * conversations, and none of them is the one to carry on.
+ * Then the session is placed on `branch` as a `continue` is, carrying on the
+ * conversation that last worked on it (see {@link placeOnBranch}), and checks
+ * out any other listed branch itself. Only `branch`'s conversation is carried
+ * on: the others are a dependency's pull requests, written as part of the same
+ * change or by somebody else.
  */
 export async function prepareReviser(
   ctx: SubAgentPrepareContext<ReviseInput, Env>,
@@ -440,18 +449,28 @@ export async function prepareReviser(
       "claude_code_revise: there is no repository checked out. Clone the one the branches are in with `repo_clone` first."
     );
   }
-  const seen = new Set<string>();
-  const checked = ctx.input.revisions.map(({ branch }) => {
-    const refuse = (why: string) => ({ branch, why });
-    if (!isBranchName(branch)) return refuse("not a branch name");
-    if (seen.has(branch)) return refuse("named more than once");
-    seen.add(branch);
+  const home = ctx.input.branch;
+  const check = (branch: string): string | undefined => {
+    if (!isBranchName(branch)) return "not a branch name";
     if (workspaces.working(branch)) {
-      return refuse("a session is working on it now; wait for its report");
+      return "a session is working on it now; wait for its report";
     }
-    return { branch };
-  });
-  const refused = checked.filter((check) => "why" in check);
+    return undefined;
+  };
+  const seen = new Set<string>();
+  const refused: { branch: string; why: string }[] = [];
+  const homeWhy = check(home);
+  if (homeWhy) refused.push({ branch: home, why: homeWhy });
+  for (const { branch } of ctx.input.revisions) {
+    if (seen.has(branch)) {
+      refused.push({ branch, why: "named more than once" });
+      continue;
+    }
+    seen.add(branch);
+    // `branch` is checked once, as the branch the work is on.
+    const why = branch === home ? undefined : check(branch);
+    if (why) refused.push({ branch, why });
+  }
   if (refused.length > 0) {
     throw new Error(
       [
@@ -460,13 +479,14 @@ export async function prepareReviser(
       ].join("\n")
     );
   }
-  const revisions: Revision[] = checked.map(({ branch }) => ({ branch }));
-  const place = await claimPlace(workspaces, {
-    taskId: ctx.taskId,
-    runId: ctx.runId,
-    revising: revisions.map((revision) => revision.branch)
-  });
-  return { ...runtimeOf(place), [REVISIONS_KEY]: revisions };
+  const revisions: Revision[] = [...seen].map((branch) => ({ branch }));
+  const runtime = await placeOnBranch(
+    ctx,
+    home,
+    workspaces,
+    [...seen].filter((branch) => branch !== home)
+  );
+  return { ...runtime, [REVISIONS_KEY]: revisions };
 }
 
 /** A branch a revising session was sent back to. */
@@ -485,11 +505,13 @@ function revisionsOf(
 }
 
 /**
- * What a revising session leaves. Completed, its worktree is freed: it pushed
- * what it kept, and the worktree's own branch never held any of it. Stopped
- * before that, what it had not pushed is kept in the worktree, which stays
- * held — and the note says so, rather than `keep`'s, which names the branch
- * the worktree holds and none of the session's work is on.
+ * What a revising session leaves. Completed, its worktree is released on the
+ * branch the work is on, where the next revision finds it and the conversation
+ * it carries on. Stopped before that, what it had not pushed is kept in the
+ * worktree, which stays held. The note says so itself rather than pass on
+ * `keep`'s, which tells the parent to `continue` a branch that has a pull
+ * request, and names the worktree's branch for work left on another one the
+ * session had checked out.
  */
 export async function settleReviser(
   ctx: Pick<
@@ -501,7 +523,7 @@ export async function settleReviser(
 ): Promise<void> {
   const run = { taskId: ctx.taskId, runId: ctx.runId };
   if (ctx.result.status === "completed") {
-    return workspaces.release(run, { forgetBranch: true });
+    return workspaces.release(run, { follow: true });
   }
   await workspaces.keep(run);
   const branch = placeOf(ctx.runtime).branch;
@@ -510,7 +532,8 @@ export async function settleReviser(
     ctx.taskId,
     ctx.runId,
     "What it pushed is on the pull requests. What it had not is kept in its " +
-      `worktree, which \`repo_worktree\` with \`${branch}\` points your reads at.`
+      `worktree, which \`repo_worktree\` with \`${branch}\` points your reads at, ` +
+      `and \`claude_code_revise\` with \`${branch}\` as its branch carries on.`
   );
   await workspaces.release(run, { hold: true });
 }
@@ -1018,7 +1041,9 @@ abstract class ClaudeCodeRun extends SubAgent<Env> {
       report: async (outcome) => {
         if (resume && notResumable(outcome)) {
           await this.#forgetSession(place, resume.fromRun);
-          return unresumableReport(plan ? "plan" : "write");
+          return unresumableReport(
+            plan ? "plan" : resume.fork ? "write" : "branch"
+          );
         }
         if (plan) {
           return reportPlan(
@@ -1277,8 +1302,9 @@ abstract class ClaudeCodeRun extends SubAgent<Env> {
       ? { files: [], failed: false }
       : await this.#discard(place, repos);
     if (revisions) {
-      // A worktree left on a revised branch is held from the next session.
-      // Only over a clean tree: one that would not clean is held as it is.
+      // A worktree left on another listed branch is held from the next
+      // session. Only over a clean tree: one that would not clean is held as
+      // it is.
       if (!stopped && !discarded.failed)
         await this.#returnToStart(place, repos);
       return sessionReport(
@@ -1504,8 +1530,8 @@ export class ClaudeCoordinatorWriterChild extends ClaudeCodeRun {
 }
 
 /**
- * A writing session sent back to branches with open pull requests, in a fresh
- * worktree of the root — see {@link prepareReviser}.
+ * A writing session sent back to branches with open pull requests, carrying on
+ * the conversation of the branch the work is on: see {@link prepareReviser}.
  */
 export class ClaudeCoordinatorReviserChild extends ClaudeCodeRun {
   static override spec = {
@@ -1517,7 +1543,8 @@ export class ClaudeCoordinatorReviserChild extends ClaudeCodeRun {
     prepare: (ctx: SubAgentPrepareContext<ReviseInput, Env>) =>
       prepareReviser(ctx),
     settle: (ctx: SubAgentSettleContext<Env>) =>
-      settleReviser(ctx, sessionWorkspaces(ctx.parent), ctx.parent.storage)
+      settleReviser(ctx, sessionWorkspaces(ctx.parent), ctx.parent.storage),
+    transcriptKey: carriedTranscript
   } as SubAgentSpec<never, never>;
   protected readonly kind = "revise";
 }

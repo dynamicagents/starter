@@ -111,9 +111,28 @@ export class ClaudeCoordinatorSandbox
     return await this.ctx.storage.get<SessionNote>(`${SESSION_KEY}${runId}`);
   }
 
-  /** A session whose conversation turned out to be gone, so none resumes it. */
+  /**
+   * A session whose conversation turned out to be gone, so none resumes it.
+   *
+   * **Every run that carried it on is forgotten with it.** A carry-on without a
+   * fork records the same session under its own run, so a branch revised a
+   * dozen times names one conversation a dozen times; forgetting only the run
+   * that found it gone hands the next lookup an older record of the same
+   * missing conversation, and each one costs a refused round.
+   */
   async forgetSession(runId: string): Promise<void> {
-    await this.ctx.storage.delete(`${SESSION_KEY}${runId}`);
+    const key = `${SESSION_KEY}${runId}`;
+    const gone = (await this.ctx.storage.get<SessionNote>(key))?.sessionId;
+    const same = [key];
+    if (gone !== undefined) {
+      const notes = await this.ctx.storage.list<SessionNote>({
+        prefix: SESSION_KEY
+      });
+      for (const [other, note] of notes) {
+        if (note.sessionId === gone) same.push(other);
+      }
+    }
+    await this.ctx.storage.delete(same);
   }
 }
 

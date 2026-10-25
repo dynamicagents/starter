@@ -63,6 +63,7 @@ import {
   ownsPlan,
   PLAN_LABEL,
   PLAN_OUTPUT,
+  REVISER_DESCRIPTION,
   revisionsText,
   type ReviseInput
 } from "@/agents/claude-coordinator/plans";
@@ -1451,6 +1452,32 @@ describe("carrying a plan on from the session that wrote it", () => {
     expect(await stub.sessionOf("run-1")).toBeUndefined();
   });
 
+  /**
+   * A branch built once and revised twice names one conversation three times:
+   * found gone by the latest, the older two would hand the next lookup the
+   * same missing conversation, one refused round each.
+   */
+  it("forgets every run that carried a gone conversation on, and no other", async () => {
+    const stub = sandboxAt(`claude-coordinator-spec:${crypto.randomUUID()}`);
+    await stub.noteSession("build", { sessionId: "s1" });
+    await stub.noteSession("revise-1", {
+      sessionId: "s1",
+      transcript: "build"
+    });
+    await stub.noteSession("revise-2", {
+      sessionId: "s1",
+      transcript: "build"
+    });
+    await stub.noteSession("other", { sessionId: "s2" });
+
+    await stub.forgetSession("revise-2");
+
+    expect(await stub.sessionOf("build")).toBeUndefined();
+    expect(await stub.sessionOf("revise-1")).toBeUndefined();
+    expect(await stub.sessionOf("revise-2")).toBeUndefined();
+    expect(await stub.sessionOf("other")).toEqual({ sessionId: "s2" });
+  });
+
   it("tells a conversation that is gone apart from a session that failed", () => {
     const ended = (errors: string[]) =>
       ({
@@ -1468,6 +1495,12 @@ describe("carrying a plan on from the session that wrote it", () => {
       /Delegate again with the same plan/
     );
     expect(unresumableReport("plan")).toMatch(/claude_code_plan again/);
+    // A `continue` or a revision went back to a branch, not to a plan.
+    expect(unresumableReport("branch")).toMatch(
+      /last worked on this branch is gone/
+    );
+    expect(unresumableReport("branch")).toMatch(/starts fresh on the branch/);
+    expect(unresumableReport("branch")).not.toMatch(/plan/);
   });
 });
 
@@ -2241,10 +2274,11 @@ describe("a writing session's worktree", () => {
   });
 
   /**
-   * A revision's worktree holds none of its work on the branch the worktree
-   * is on: what it kept it pushed, and the rest is wherever it was when stopped.
+   * A revision's worktree is on the branch the work is on, where the next
+   * revision finds it and its conversation. Stopped, what it had not pushed is
+   * wherever it was, which may be another branch it had checked out.
    */
-  it("frees a completed revision's worktree, and holds a stopped one's with a note saying where", async () => {
+  it("releases a completed revision on its branch, and holds a stopped one's with a note saying where", async () => {
     const place = worktree();
     const runtime = {
       [SANDBOX_RUNTIME_KEY]: place.workspaceName,
@@ -2278,10 +2312,13 @@ describe("a writing session's worktree", () => {
       return keptNote(agent.ctx.storage, "detached:call_2");
     });
 
-    expect(done.calls).toEqual(["release, forgetting its branch"]);
+    expect(done.calls).toEqual(["release"]);
     expect(stopped.calls).toEqual(["keep", "release, held"]);
     expect(note).toContain("What it pushed is on the pull requests.");
     expect(note).toContain("`repo_worktree` with `claude-coordinator/p`");
+    expect(note).toContain(
+      "`claude_code_revise` with `claude-coordinator/p` as its branch carries on"
+    );
   });
 
   it("tells the parent where a failed run's work was kept, once, in its follow-up", async () => {
@@ -2447,29 +2484,42 @@ describe("the branch a writing session is told about", () => {
     expect(brief).not.toContain("## Pull request #");
   });
 
-  it("tells a revision to check its branches out itself, and how to answer what landed", () => {
+  it("tells a revision it is on the branch the work is on, to come back to it, and how to answer what landed", () => {
     const brief = sessionBrief(
       "Work on these branches:\n\n- `feat/x`: Copilot has reviewed it.",
       undefined,
       {
         branch: "claude-coordinator/r",
         submodules: ["core"],
-        continues: false,
+        continues: true,
         revising: true
       }
     );
+    const flat = brief.replace(/\s+/g, " ");
 
     expect(brief.startsWith("Work on these branches:")).toBe(true);
     expect(brief).toContain("## Your branches");
-    expect(brief).toMatch(
-      /on `claude-coordinator\/r`: a place to\s+start from, not a branch to push/
+    expect(flat).toContain(
+      "You are on `claude-coordinator/r`, the branch this work is on"
     );
+    expect(flat).toContain("It already holds earlier work");
+    // A `continue` keeps the local branch, and somebody may have pushed since.
+    expect(flat).toContain(
+      "Before anything else, bring `claude-coordinator/r` level with its remote"
+    );
+    expect(flat).toContain("never a reset that drops a commit nobody pushed");
+    expect(flat).toContain("stop and say so if it does not merge cleanly");
+    expect(flat).toContain(
+      "go back to `claude-coordinator/r` when you are done"
+    );
+    expect(flat).toContain("`claude-coordinator/r` included");
     expect(brief).toContain("gh pr list --head <branch>");
     expect(brief).toContain("stop and say so rather than switch over them");
     expect(brief).toContain("Push those branches and no others");
     expect(brief).toContain("### Submodules");
+    expect(flat).toContain("on `claude-coordinator/r` too");
     expect(brief).toContain("## What brought you back");
-    expect(brief).toContain("resolve it either way");
+    expect(flat).toContain("and resolve it (`resolveReviewThread`");
     expect(brief).toContain(
       "look once at each pull request's review and checks"
     );
@@ -2510,29 +2560,98 @@ describe("the branch a writing session is told about", () => {
   });
 
   /**
-   * The two halves of a revision that pull in opposite directions: a
-   * self-review makes what is there better without going looking for work,
-   * while a point answered by adding behaviour or redesigning is asked about.
-   * The narrowing is pinned too — a correctness fix changes behaviour by
-   * definition, and reading it as a deviation would stop the one pass.
+   * The two halves of a revision that pull in opposite directions: its own
+   * pass makes what is there better without going looking for work, while a
+   * point answered by adding behaviour, redesigning, or paying far more than
+   * it prevents is asked about. The narrowing is pinned too — a correctness fix
+   * changes behaviour by definition, and reading it as a deviation would stop
+   * the one pass.
    */
-  it("aims a self-review at the diff, and asks about a review point that is not a fix", () => {
-    const brief = sessionBrief("A self-review, please.", undefined, {
+  it("aims its own pass at the diff, and asks about a review point that is not a fix", () => {
+    const flat = sessionBrief("Copilot has reviewed it.", undefined, {
       branch: "claude-coordinator/r",
       submodules: [],
       continues: false,
       revising: true
-    });
+    }).replace(/\s+/g, " ");
 
-    expect(brief).toContain("**The diff is the subject**");
-    expect(brief).toMatch(
-      /does not go looking for work elsewhere or for behaviour to add/
+    expect(flat).toContain("**The diff is the subject**");
+    expect(flat).toContain(
+      "does not go looking for work elsewhere or for behaviour to add"
     );
-    expect(brief).toMatch(/A point you would answer by adding/);
-    expect(brief).toMatch(/is not a fix: ask rather than/);
-    expect(brief).toMatch(
-      /Correcting what a point\n  shows is wrong is a fix, however visibly the behaviour changes/
+    expect(flat).toContain("A point you would answer by adding");
+    expect(flat).toContain("is not a fix: ask rather than");
+    expect(flat).toContain(
+      "costs far more than what it prevents, such as many lines for a case that will not happen in practice: ask whether to skip it"
     );
+    expect(flat).toContain(
+      "A thread waiting on a question you are asking stays open until it is answered"
+    );
+    expect(flat).toContain(
+      "Correcting what a point shows is wrong is a fix, however visibly the behaviour changes"
+    );
+  });
+
+  /**
+   * What keeps a pull request from being mergeable goes first: a conflict
+   * leaves CI and review nothing current to check, so its merge goes up
+   * before anything runs.
+   */
+  it("works through what landed in order, a conflict first and pushed before anything runs", () => {
+    const flat = sessionBrief("A merge conflict.", undefined, {
+      branch: "claude-coordinator/r",
+      submodules: [],
+      continues: false,
+      revising: true
+    }).replace(/\s+/g, " ");
+    const order = [
+      "1. **A merge conflict.**",
+      "2. **A review.**",
+      "3. **A failing check.**",
+      "4. **What the person asked for.**",
+      "5. **A review of your own**"
+    ].map((step) => flat.indexOf(step));
+
+    expect(order.every((at) => at >= 0)).toBe(true);
+    expect([...order].sort((a, b) => a - b)).toEqual(order);
+    expect(flat).toContain("Read each one's state yourself before you start");
+    expect(flat).toContain(
+      "push the merge as soon as it is committed, before you run anything"
+    );
+    expect(flat).toContain(
+      "Where the task says to do only that, do only that, and leave out the review below"
+    );
+  });
+
+  /**
+   * Copilot reviews every pull request, so its own review is sized: none for
+   * what is mechanical, its own for the rest, subagents only to work in
+   * parallel where the risk is high — and recorded, so a later pass covers
+   * only what came after.
+   */
+  it("sizes its own review, and records what it covered for the next pass", () => {
+    const flat = sessionBrief("Copilot has reviewed it.", undefined, {
+      branch: "claude-coordinator/r",
+      submodules: [],
+      continues: false,
+      revising: true
+    }).replace(/\s+/g, " ");
+
+    expect(flat).toContain(
+      "**None** where it is small or mechanical: docs, comments, a config value, a version, a lockfile or a pin"
+    );
+    expect(flat).toContain(
+      "**A pass of your own** otherwise, by you rather than a subagent"
+    );
+    expect(flat).toContain(
+      "**Subagents as well** only where the change is high-risk"
+    );
+    expect(flat).toContain("only to work in parallel");
+    expect(flat).toContain("review only what came after them");
+    expect(flat).toContain(
+      "add a line to the description's `## Review` section"
+    );
+    expect(flat).not.toContain("subagent with none of this conversation");
   });
 
   /** Each full run is minutes of the person's wait, and a baseline it was given is one. */
@@ -2549,6 +2668,33 @@ describe("the branch a writing session is told about", () => {
     );
     expect(brief).toMatch(/instead of running the base\nagain/);
     expect(sessionBrief(TASK)).not.toContain("## Checking your work");
+  });
+
+  /**
+   * A revision pushes what it is confident in before the checks, since every
+   * push runs CI and a fix held back keeps the pull request unmergeable; the
+   * checks still run once before it finishes.
+   */
+  it("has a revision push what it is confident in first, and check once at the end", () => {
+    const brief = sessionBrief(TASK, undefined, {
+      branch: "claude-coordinator/r",
+      submodules: [],
+      continues: false,
+      revising: true
+    });
+    const flat = brief.replace(/\s+/g, " ");
+
+    expect(brief).toContain("## Pushing and checking");
+    expect(brief).not.toContain("## Checking your work");
+    expect(flat).toContain(
+      "Push a fix you are confident in as soon as it is committed: a merge of the base always"
+    );
+    expect(flat).toContain(
+      "A fix you are not confident in, check before you push it"
+    );
+    expect(flat).toContain(
+      "run the project's checks once on the tree you finish with"
+    );
   });
 
   it("tells a continuing session the branch already holds work", () => {
@@ -3007,9 +3153,11 @@ describe("going back to a branch", () => {
 });
 
 /**
- * A revision names branches, and the host checks only what it can answer from
- * its own state: a name git would take, named once, with nobody working on it.
- * The session checks the branches out itself, so nothing here places it on one.
+ * A revision names the branch the work is on and every branch of the change,
+ * and the host checks only what it can answer from its own state: a name git
+ * would take, named once, with nobody working on it. The session is placed on
+ * the branch the work is on, as a `continue` is, and checks the others out
+ * itself.
  *
  * **Nothing asks GitHub whether a pull request is open.** That check cost a
  * call per branch per repository on the path of every revision, to prevent a
@@ -3017,11 +3165,14 @@ describe("going back to a branch", () => {
  * request is merged, closed or absent is dispatched and says so.
  */
 describe("sending branches back to be revised", () => {
-  /** `revisions` sent back, with the parent on `POOL_REPO`. */
+  const HOME = "claude-coordinator/abcde";
+
+  /** `input` sent back, with the parent on `POOL_REPO` and the run placed in `place`. */
   const revising = (
     agent: Parent,
-    revisions: ReviseInput["revisions"],
-    working: string[] = []
+    input: ReviseInput,
+    working: string[] = [],
+    place: SessionPlace = { ...worktree(), branch: input.branch }
   ) => {
     const active = activeRepo(agent.ctx.storage);
     active.set(POOL_REPO);
@@ -3033,7 +3184,7 @@ describe("sending branches back to be revised", () => {
       },
       { repo: POOL_REPO, submodules: ["acme/core"] }
     );
-    const placing = placingPool(worktree());
+    const placing = placingPool(place);
     const reached: string[] = [];
     const watch = vi
       .spyOn(globalThis, "fetch")
@@ -3041,11 +3192,12 @@ describe("sending branches back to be revised", () => {
         reached.push(String(input));
         return new Response("{}", { status: 200 });
       });
+    const runId = `detached:${crypto.randomUUID()}`;
     return prepareReviser(
       {
-        input: { revisions },
+        input,
         taskId: "task-1",
-        runId: `detached:${crypto.randomUUID()}`,
+        runId,
         parent: agent.pluginContext()
       },
       { ...placing.pool, working: (branch) => working.includes(branch) }
@@ -3053,12 +3205,14 @@ describe("sending branches back to be revised", () => {
       .then(
         (runtime) => ({
           runtime,
+          runId,
           placed: placing.asked,
           reached,
           refused: ""
         }),
         (err: unknown) => ({
           runtime: undefined,
+          runId,
           placed: placing.asked,
           reached,
           refused: String(err)
@@ -3067,12 +3221,33 @@ describe("sending branches back to be revised", () => {
       .finally(() => watch.mockRestore());
   };
 
-  it("claims one fresh worktree for every branch, asking GitHub nothing", async () => {
+  /** A run on `branch` placed in `place`, whose session its workspace recorded. */
+  async function worked(
+    agent: Parent,
+    branch: string,
+    place: SessionPlace,
+    sessionId: string
+  ) {
+    const runId = `detached:${crypto.randomUUID()}`;
+    recordBranchRun(agent.ctx.storage, {
+      runId,
+      branch,
+      workspaceName: place.workspaceName,
+      ...(place.slot ? { slot: place.slot } : {})
+    });
+    await sandboxAt(place.workspaceName).noteSession(runId, { sessionId });
+    return runId;
+  }
+
+  it("places it on the branch the work is on, holding the others, asking GitHub nothing", async () => {
     const { runtime, placed, reached } = await onParent((agent) =>
-      revising(agent, [
-        { branch: "feat/x", task: "Copilot has reviewed it." },
-        { branch: "feat/y", task: "The test check failed." }
-      ])
+      revising(agent, {
+        branch: HOME,
+        revisions: [
+          { branch: HOME, task: "Copilot has reviewed it." },
+          { branch: "feat/dep", task: "The test check failed." }
+        ]
+      })
     );
 
     // The whole point of deleting the gate: dispatch costs no network at all.
@@ -3081,13 +3256,77 @@ describe("sending branches back to be revised", () => {
       {
         taskId: "task-1",
         runId: expect.any(String),
-        revising: ["feat/x", "feat/y"]
+        continue: HOME,
+        revising: ["feat/dep"]
       }
     ]);
     expect(runtime).toMatchObject({
-      revisions: [{ branch: "feat/x" }, { branch: "feat/y" }]
+      branch: HOME,
+      revisions: [{ branch: HOME }, { branch: "feat/dep" }]
     });
-    // A fresh session: its branches are not one conversation to carry on.
+    // Nothing worked on the branch before, so there is nothing to carry on.
+    expect(runtime).not.toHaveProperty("resume");
+  });
+
+  it("carries on the branch's conversation, in its worktree, without a fork, and records itself for the next", async () => {
+    const place = { ...worktree(3), branch: HOME };
+    const { runtime, placed, wrote, runId, next } = await onParent(
+      async (agent) => {
+        const wrote = await worked(agent, HOME, place, "s-build");
+        const sent = await revising(
+          agent,
+          {
+            branch: HOME,
+            revisions: [{ branch: HOME, task: "Copilot has reviewed it." }]
+          },
+          [],
+          place
+        );
+        // The next round finds this run as the branch's latest.
+        const next = await branchSession(
+          agent.ctx.storage,
+          HOME,
+          { repo: POOL_REPO },
+          async () => ({ sessionId: "any" })
+        );
+        return { ...sent, wrote, next };
+      }
+    );
+
+    expect(placed[0]).toMatchObject({
+      continue: HOME,
+      near: { repo: POOL_REPO, slot: 3 }
+    });
+    expect(runtime).toMatchObject({
+      resume: { sessionId: "s-build", fromRun: wrote }
+    });
+    expect(
+      (runtime as { resume: Record<string, unknown> }).resume
+    ).not.toHaveProperty("fork");
+    expect(carriedTranscript({ runtime })).toBe(wrote);
+    expect(next?.runId).toBe(runId);
+  });
+
+  /**
+   * A release train's dependency is a branch this session pushes, written as
+   * part of the change or by somebody else: its conversation is not the one
+   * that wrote the change.
+   */
+  it("carries on no conversation but the branch the work is on", async () => {
+    const place = { ...worktree(3), branch: HOME };
+    const { runtime } = await onParent(async (agent) => {
+      await worked(agent, "feat/dep", place, "s-dep");
+      return revising(
+        agent,
+        {
+          branch: HOME,
+          revisions: [{ branch: "feat/dep", task: "Copilot has reviewed it." }]
+        },
+        [],
+        place
+      );
+    });
+
     expect(runtime).not.toHaveProperty("resume");
   });
 
@@ -3097,7 +3336,10 @@ describe("sending branches back to be revised", () => {
    */
   it("starts a session for a branch whose pull request is gone", async () => {
     const { runtime, placed, refused } = await onParent((agent) =>
-      revising(agent, [{ branch: "feat/merged", task: "t" }])
+      revising(agent, {
+        branch: "feat/merged",
+        revisions: [{ branch: "feat/merged", task: "t" }]
+      })
     );
 
     expect(refused).toBe("");
@@ -3109,28 +3351,47 @@ describe("sending branches back to be revised", () => {
     const { refused, placed } = await onParent((agent) =>
       revising(
         agent,
-        [
-          { branch: "feat/ok", task: "t" },
-          { branch: "not a branch", task: "t" },
-          { branch: "feat/ok", task: "again" },
-          { branch: "feat/busy", task: "t" }
-        ],
-        ["feat/busy"]
+        {
+          branch: "feat/home",
+          revisions: [
+            { branch: "feat/ok", task: "t" },
+            { branch: "not a branch", task: "t" },
+            { branch: "feat/ok", task: "again" },
+            { branch: "feat/busy", task: "t" }
+          ]
+        },
+        ["feat/busy", "feat/home"]
       )
     );
 
     expect(placed).toEqual([]);
     expect(refused).toContain("nothing was started");
+    expect(refused).toContain("`feat/home`: a session is working on it now");
     expect(refused).toContain("`not a branch`: not a branch name.");
     expect(refused).toContain("`feat/ok`: named more than once.");
     expect(refused).toContain("`feat/busy`: a session is working on it now");
+  });
+
+  it("refuses a branch to work from that git would not take", async () => {
+    const { refused, placed } = await onParent((agent) =>
+      revising(agent, {
+        branch: "not a branch",
+        revisions: [{ branch: "feat/x", task: "t" }]
+      })
+    );
+
+    expect(placed).toEqual([]);
+    expect(refused).toContain("`not a branch`: not a branch name.");
   });
 
   it("refuses with nothing checked out", async () => {
     const refused = await onParent((agent) =>
       prepareReviser(
         {
-          input: { revisions: [{ branch: "feat/x", task: "t" }] },
+          input: {
+            branch: "feat/x",
+            revisions: [{ branch: "feat/x", task: "t" }]
+          },
           taskId: "task-1",
           runId: "detached:call_1",
           parent: agent.pluginContext()
@@ -3147,6 +3408,7 @@ describe("sending branches back to be revised", () => {
   it("hands the session each branch and what brought it back", () => {
     expect(
       revisionsText({
+        branch: "feat/x",
         revisions: [
           { branch: "feat/x", task: "Copilot has reviewed it. " },
           { branch: "feat/y", task: "The test check failed." }
@@ -3438,5 +3700,41 @@ describe("what the coordinator does with a session's question", () => {
       "a planning session's, `claude_code_plan` with its plan's id"
     );
     expect(SOUL).toContain("not answering what a session asks");
+  });
+});
+
+/**
+ * When the coordinator sends a pull request back, and what it says. Copilot
+ * lands within minutes and a session on the branch makes it wait, so nothing
+ * goes back before it; and a brief that prescribes a review or checks is one
+ * the session has to obey, so the coordinator says what landed and nothing
+ * about how to answer it.
+ */
+describe("what the coordinator sends back to a pull request", () => {
+  it("waits for Copilot's review rather than sending anything beside it, a failing check included", () => {
+    expect(SOUL).toContain(
+      "Until it has, or fifteen minutes have passed, send the branch back for nothing but what the person asks, a failing check included"
+    );
+    expect(SOUL).not.toContain("it runs while Copilot reviews");
+    expect(SOUL).toContain("is done as it stands");
+  });
+
+  it("sends a merge conflict back, and nothing when nothing landed", () => {
+    expect(SOUL).toContain("`mergeable_state dirty`");
+    expect(SOUL).toContain(
+      "Never send a branch back when nothing has landed and the person asked for nothing"
+    );
+  });
+
+  it("names the branch the work is on, and says what landed but never how to answer it", () => {
+    expect(SOUL).toContain("`branch` is the one the work is on");
+    expect(SOUL).toContain(
+      "`revisions` lists every branch of the change with what landed on each"
+    );
+    expect(SOUL).toContain("Never say how to answer it");
+    expect(REVISER_DESCRIPTION).toContain(
+      "carrying on the conversation that last worked"
+    );
+    expect(REVISER_DESCRIPTION).not.toContain("a self-review");
   });
 });

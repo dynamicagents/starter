@@ -249,11 +249,13 @@ Between sessions the agent watches the
 pull request with `check_back`, `repo_pr_view`, `repo_pr_threads` and `repo_pr_checks`
 — none of which starts a container, and all of which read GitHub through its hosted
 MCP server — and sends it back with **`claude_code_revise`** when a review, an
-unresolved thread or a failing check lands, or for a self-review it judges worth one.
+unresolved thread, a failing check or a merge conflict lands, or once Copilot has reviewed
+a change too large to leave at that, for the session to review as far as the change deserves.
 Nothing asks whether a review is still _pending_: that is not a question this surface
 answers, so a wait with nothing landing ends on the clock. A revision carries
-on the conversation that last worked on the branch, in its worktree, so the session
-that answers a review is the one that wrote the code. A worktree's container stops as
+on the conversation that last worked on the branch the work is on, in its worktree, so the
+session that answers a review is the one that wrote the code; a dependency's pull request
+in the same train is one more branch it pushes, never a conversation it carries on. A worktree's container stops as
 soon as its session settles, so nothing idles through the wait.
 
 The agent's file reads follow the latest session into its worktree, and stay there

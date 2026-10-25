@@ -133,10 +133,10 @@ When you have a question, do not guess. Commit and push what you have, and answe
 you see: you are resumed with their answers, and what you committed is kept.`;
 
 /**
- * How often a **writing** session runs the project's checks: on the tree it
+ * How often a **building** session runs the project's checks: on the tree it
  * commits, against the base its brief or plan already gives. Each full run is
  * minutes of container time the caller waits through, and unsaid a session
- * repeats them.
+ * repeats them. A revising session has {@link REVISE_CHECK_NOTE} instead.
  */
 const CHECK_NOTE = `## Checking your work
 
@@ -167,30 +167,79 @@ do — push nothing and open nothing.`;
  * How a **revising** session works on the branches it was sent back to. What
  * brought each back is in its task, in the coordinator's words; how to answer
  * each kind of thing is said here once, so the coordinator never has to.
+ *
+ * **Ordered by what keeps the pull request from being mergeable.** A conflict
+ * leaves CI and review nothing current to check, so its merge goes up before
+ * anything runs, and what the person is waiting on comes before what nobody
+ * is. The session reads what landed for itself: the task is a model's
+ * retelling of it.
+ *
+ * **Its own review is sized, not owed.** Copilot reviews every pull request,
+ * and a pass over a lockfile, a pin or a comment buys nothing that review does
+ * not. The `## Review` section is how a pass knows what an earlier one covered,
+ * since the session may have started without the conversation that did it.
  */
 const REVISE_NOTE = `## What brought you back
 
 Each branch above says what landed on it. Its pull requests are yours: there may be one in
-each repository the branch is in.
+each repository the branch is in. Read each one's state yourself before you start, whatever
+the task says (\`gh pr view <number> --json mergeable,reviews,statusCheckRollup\`, and its
+review threads), then work through it in this order:
 
-- **A self-review**: have a subagent with none of this conversation review the pull
-  request's diff against what it was for, then improve what holds up — correctness and
-  tests first, then the shape of what was written: modularity, the idiom of the code
-  around it, duplication and debt it added. **The diff is the subject**: this pass makes
-  what is there better, and does not go looking for work elsewhere or for behaviour to add.
-- **A review**: answer it in one pass. Read the review's body as well as its threads,
-  since a review can raise points that are not threads, and read each point against the
-  code — a reviewer is sometimes confidently wrong. A point you would answer by adding
-  behaviour the pull request was not for, or by materially changing its design or scope,
-  is not a fix: ask rather than build it under cover of a review. Correcting what a point
-  shows is wrong is a fix, however visibly the behaviour changes. Fix what holds up and
-  push, then reply on every thread, naming the commit or saying why not, and
-  resolve it either way (\`resolveReviewThread\`, through \`gh api graphql\`).
-- **A failing check**: read its log (\`gh run view --log-failed\`), fix the cause, push.
-- **Something the person asked for**: do it, on that branch.
+1. **A merge conflict.** Merge the base branch in and push the merge as soon as it is
+   committed, before you run anything or start on anything else.
+2. **A review.** Answer it in one pass. Read the review's body as well as its threads,
+   since a review can raise points that are not threads, and read each point against the
+   code: a reviewer is sometimes confidently wrong. A point you would answer by adding
+   behaviour the pull request was not for, or by materially changing its design or scope,
+   is not a fix: ask rather than build it under cover of a review. Nor is a point that is
+   right but whose fix costs far more than what it prevents, such as many lines for a case
+   that will not happen in practice: ask whether to skip it, saying what the fix would take.
+   Correcting what a point shows is wrong is a fix, however visibly the behaviour changes.
+   Fix what holds up, then reply on every thread, naming the commit or saying why not, and
+   resolve it (\`resolveReviewThread\`, through \`gh api graphql\`). A thread waiting on a
+   question you are asking stays open until it is answered.
+3. **A failing check.** Read its log (\`gh run view --log-failed\`), fix the cause, push.
+4. **What the person asked for.** Do it, on that branch. Where the task says to do only
+   that, do only that, and leave out the review below.
+5. **A review of your own**, of what no earlier pass covered. The pull request's description
+   may have a \`## Review\` section naming the commits earlier passes covered: review only
+   what came after them, and how deeply depends on what it is.
+   - **None** where it is small or mechanical: docs, comments, a config value, a version, a
+     lockfile or a pin. Copilot's review is enough for those.
+   - **A pass of your own** otherwise, by you rather than a subagent. Review the diff against
+     what it was for: correctness and tests first, then the shape of what was written, its
+     modularity, the idiom of the code around it, and the duplication and debt it added.
+     **The diff is the subject**: this pass makes what is there better, and does not go
+     looking for work elsewhere or for behaviour to add.
+   - **Subagents as well** only where the change is high-risk (durable state, cancellation
+     or concurrency, security, a migration, a published contract), and only to work in
+     parallel: give each one area, or one hypothesis to test deeply, such as a failing test
+     to write for a suspected race.
+
+   After a pass, add a line to the description's \`## Review\` section, starting the section
+   if there is none: the commits it covered, how deep it went, and what it changed.
 
 Before you finish, look once at each pull request's review and checks, and answer whatever
 landed while you worked. Then stop: do not wait for anything still running.`;
+
+/**
+ * How a **revising** session orders pushing and checking, in place of
+ * {@link CHECK_NOTE}. Every push to a pull request runs CI, so a fix held back
+ * for a local run keeps the pull request unmergeable for minutes and checks
+ * nothing CI will not; the session's confidence decides the order, never
+ * whether the checks run.
+ */
+const REVISE_CHECK_NOTE = `## Pushing and checking
+
+Push a fix you are confident in as soon as it is committed: a merge of the base always, a
+change to docs or comments, a fix small enough to see whole. CI checks every push, and a fix
+held back for a local run is time the pull request cannot be merged. A fix you are not
+confident in, check before you push it.
+
+Either way, run the project's checks once on the tree you finish with, when what you
+changed is something they cover, and if they fail, fix it and push again. A full run takes
+minutes in this container: do not repeat one for nothing.`;
 
 export { WRITE_OUTPUT } from "./schemas";
 
@@ -365,23 +414,30 @@ only if the task asks for it. Only one level of submodules is checked out.`
 /**
  * What a **revising** session is told about the branches it was sent back to.
  *
- * Nothing put it on them: it checks each out itself, in whichever repository
- * holds it, because a branch of a set kept together may be in several. The
- * worktree's own branch is only where it starts.
+ * The host put it on the branch the work is on, as it puts a `continue` there.
+ * Any other listed branch it checks out itself, in whichever repository holds
+ * it, because a dependency's pull request in a release train may be under
+ * another name; it comes back after, since the worktree is found by `branch`.
  */
-function branchesNote(start: string, submodules: readonly string[]): string {
+function branchesNote(
+  branch: string,
+  submodules: readonly string[],
+  continues: boolean
+): string {
   const note = `## Your branches
 
-You are in a worktree nobody else is working in while you are, on \`${start}\`: a place to
-start from, not a branch to push.
+You are on \`${branch}\`, the branch this work is on, in a worktree nobody else is working in
+while you are.${continues ? " It already holds earlier work: read its log before you start, unless this conversation wrote it." : ""}
 
 The branches to work on are listed at the top, and a branch may be in more than one
-repository here. For each, find where it is (\`git ls-remote --heads origin <branch>\` in
-each repository), fetch it and check it out there, and find its pull requests
-(\`gh pr list --head <branch>\`). If a repository has uncommitted changes when you come to
-it, stop and say so rather than switch over them.
+repository here. Find each one's pull requests with \`gh pr list --head <branch>\` in each
+repository. A listed branch other than \`${branch}\`: find where it is
+(\`git ls-remote --heads origin <branch>\` in each repository), fetch it and check it out
+there, and go back to \`${branch}\` when you are done with it. If a repository has uncommitted
+changes when you come to it, stop and say so rather than switch over them.
 
-**Push each branch when you are done with it.** Only what you push leaves this session.
+**Push each branch when you are done with it**, \`${branch}\` included. Only what you push
+leaves this session.
 
 ${ownershipNote(true)}`;
   if (submodules.length === 0) return note;
@@ -389,7 +445,10 @@ ${ownershipNote(true)}`;
 
 ${submodulesNote(
   submodules,
-  "Each is a repository of its own. Only one level of submodules is checked out."
+  `Each is a repository of its own, on \`${branch}\` too. **Commit inside each one you
+change**, since only a submodule's own commits are kept, and push it there under the same
+branch name. Recording the new commit in the superproject is a separate commit, and
+only if the task asks for it. Only one level of submodules is checked out.`
 )}`;
 }
 
@@ -563,12 +622,12 @@ export function sessionBrief(
     parts.push(
       "",
       writing.revising
-        ? branchesNote(writing.branch, writing.submodules)
+        ? branchesNote(writing.branch, writing.submodules, writing.continues)
         : branchNote(writing.branch, writing.submodules, writing.continues),
       "",
       DESIGN_NOTE,
       "",
-      CHECK_NOTE,
+      writing.revising ? REVISE_CHECK_NOTE : CHECK_NOTE,
       "",
       writing.revising ? REVISE_NOTE : DELIVERY_NOTE
     );
@@ -887,12 +946,17 @@ export function notResumable(outcome: SessionOutcome): boolean {
 /**
  * What the parent is told when the conversation a run was to carry on from is
  * gone. Nothing ran and nothing was spent, and its record is forgotten, so the
- * same call again starts fresh from the plan's text.
+ * same call again starts fresh: from the plan's text for a plan or a build of
+ * one (`write`), and from the branch for a run that went back to one.
  */
-export function unresumableReport(kind: "plan" | "write"): string {
-  return kind === "plan"
-    ? "**The conversation that wrote this plan is gone from its workspace, so nothing was revised.** Nothing was spent. Call claude_code_plan again with the same plan and comment: the next session starts from the plan's text, and what you give it."
-    : "**The planning session's conversation is gone from its workspace, so nothing was built.** Nothing was spent and no branch has work on it. Delegate again with the same plan: the next session starts from the plan's text.";
+export function unresumableReport(kind: "plan" | "write" | "branch"): string {
+  if (kind === "plan") {
+    return "**The conversation that wrote this plan is gone from its workspace, so nothing was revised.** Nothing was spent. Call claude_code_plan again with the same plan and comment: the next session starts from the plan's text, and what you give it.";
+  }
+  if (kind === "write") {
+    return "**The planning session's conversation is gone from its workspace, so nothing was built.** Nothing was spent and no branch has work on it. Delegate again with the same plan: the next session starts from the plan's text.";
+  }
+  return "**The conversation that last worked on this branch is gone from its workspace, so nothing ran.** Nothing was spent, and the branch is as it was. Make the same call again: the next session starts fresh on the branch, from what you give it.";
 }
 
 /** Each listed repository and the commit it is on. */

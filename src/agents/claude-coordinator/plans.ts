@@ -91,26 +91,39 @@ export const WRITER_DESCRIPTION = [
   "nothing: it pushes nothing and opens nothing."
 ].join("\n");
 
-/** `claude_code_revise`'s input: which branches, and what brought each back. */
+/**
+ * `claude_code_revise`'s input: the branch the work is on, and every branch of
+ * the change with what brought it back.
+ *
+ * The two differ for a release train: its pull requests are in several
+ * repositories, and one of them may be a dependency's under another name. The
+ * conversation carried on is `branch`'s alone, which is the one that wrote the
+ * change; a dependency's branch is only somewhere this session pushes.
+ */
 export const REVISE_INPUT = z.object({
+  branch: z
+    .string()
+    .describe(
+      "The branch the work is on, in the checkout's root: the one the writing session's report named, or the head branch `repo_pr_view` shows. The session works from it, carrying on the conversation that last worked on it."
+    ),
   revisions: z
     .array(
       z.object({
         branch: z
           .string()
           .describe(
-            "A branch with a pull request: one a session's report named, or the head branch `repo_pr_view` shows."
+            "A branch with pull requests to work on: usually `branch` itself, whose pull requests may be in several repositories here, or another branch of the same change, such as a dependency's pull request under another name."
           ),
         task: z
           .string()
           .describe(
-            "What brought it back, in a sentence: a self-review, Copilot's review having landed, a check that failed (by name), or what the person asked for, in their words. Say what happened, not how to answer it."
+            "What landed on it, in a sentence: Copilot's review, a check that failed (by name), a merge conflict, or what the person asked for, in their words and with any limit they set. Say what happened, never how to answer it: the session reads the pull requests itself and decides how much to review and what to run."
           )
       })
     )
     .min(1)
     .describe(
-      "Each branch to send back, with what brought it back. Several go in one call when several have something landed: one session answers them all."
+      "Every branch of this change with something to answer, and what landed on each. One session answers them all."
     )
 });
 
@@ -129,28 +142,32 @@ export function revisionsText(input: ReviseInput): string {
 
 /** What the parent model is told `claude_code_revise` does. */
 export const REVISER_DESCRIPTION = [
-  "Send a Claude Code session back to branches with open pull requests to work on",
-  "them: a self-review, Copilot's review once it has landed, a failing check, or",
-  "something the person asked for. Name each branch and what brought it back.",
-  "Several go in one call, and one session answers them all — every pull request",
-  "from each branch, in whichever repositories it is in.",
+  "Send a Claude Code session back to a change with open pull requests: Copilot's",
+  "review once it has landed, a failing check, a merge conflict, or something the",
+  "person asked for. `branch` is the branch the work is on: the session works from",
+  "it, in the worktree that holds it, carrying on the conversation that last worked",
+  "on it. List every branch of the change in `revisions` with what landed on each,",
+  "and one session answers every pull request from each, in whichever repositories",
+  "it is in. A change of its own goes back in a call of its own.",
   "",
   "No session may be working on a branch you name. A call naming one that is, or",
   "a name git would not take, is refused with the reason, and nothing starts.",
   "Whether a pull request is still open is not checked here: name a branch whose",
   "pull request is merged or gone and the session will tell you so.",
   "",
-  "It already knows how to answer each of those — a review in one pass, every",
-  "thread replied to and resolved, CI's logs read and fixed — so tell it what",
-  "landed, not what to do about it. Before it finishes it looks once at the",
-  "reviews and the checks, and answers whatever landed while it worked.",
+  "It reads the pull requests itself and works through them in order: a merge",
+  "conflict first, pushed at once; the review, in one pass, every thread replied to",
+  "and resolved; failing checks; what the person asked; and last a review of its",
+  "own, sized to what no earlier pass covered, which a small or mechanical change",
+  "does not get. So tell it what landed and what the person said, never how to",
+  "answer it. Before it finishes it looks once at the reviews and the checks, and",
+  "answers whatever landed while it worked.",
   "",
-  "A self-review pass improves the pull request it already has: the shape of that",
-  "diff, its modularity, the debt in it — not new behaviour and not work elsewhere.",
   "It stops and asks where answering a review point would add behaviour this pull",
-  "request was not for, or materially change its design or scope, rather than build",
-  "that under cover of a review. Correcting what a point shows is wrong is a fix,",
-  "however visibly the behaviour changes, and it makes those in the one pass.",
+  "request was not for, materially change its design or scope, or cost far more",
+  "than what it prevents, rather than build that under cover of a review.",
+  "Correcting what a point shows is wrong is a fix, however visibly the behaviour",
+  "changes, and it makes those in the one pass.",
   "",
   "One session at a time on a branch: while one is running, wait for its report",
   "rather than start another."

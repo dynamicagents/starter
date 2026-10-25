@@ -87,7 +87,7 @@ import {
   unresumableReport,
   warningPrompt,
   writingNote,
-  type FilingRun,
+  type ArtifactWriteContext,
   type RepoStart,
   type Uncommitted,
   type WritingOutcome
@@ -731,13 +731,13 @@ async function closeUnwritten(ctx: SubAgentSettleContext<Env>): Promise<void> {
  *
  * The version filed below asserts `run.owner` against the plan's own, so a
  * page this caller did not open, and one owned by nobody, take no version from
- * it. {@link ClaudeCodeRun.filingRun} is where that owner is read, and says
- * why it is read there rather than carried in {@link PlanPlace}.
+ * it. {@link ClaudeCodeRun.artifactWriteContext} is where that owner is read,
+ * and says why it is read there rather than carried in {@link PlanPlace}.
  */
 export async function reportPlan(
   env: Env,
   plan: PlanPlace,
-  run: FilingRun,
+  run: ArtifactWriteContext,
   outcome: SessionOutcome,
   onSession?: (
     sessionId: string,
@@ -926,17 +926,17 @@ abstract class ClaudeCodeRun extends SubAgent<Env> {
   protected abstract readonly kind: "write" | "revise" | "plan" | "discover";
 
   /**
-   * This run, as a filing write names it: see {@link FilingRun}.
+   * This run, as an artifact write names it: see {@link ArtifactWriteContext}.
    *
-   * The one place that decides which value is the owner, so no filing write
+   * The one place that decides which value is the owner, so no artifact write
    * can disagree with another about it. The owner is read here rather than
    * carried in the {@link PlanPlace} or {@link ReportPlace} that `prepare`
    * parked, because a parked place is runtime a replay hands back and the
    * authority for a write is established by the write. `callerKey` answers off
    * the turn and throws outside one, so this is callable only from within a
-   * turn, which is where a filing write runs.
+   * turn, which is where an artifact write runs.
    */
-  protected filingRun(): FilingRun {
+  protected artifactWriteContext(): ArtifactWriteContext {
     return { owner: this.callerKey(), runId: this.name };
   }
 
@@ -1024,7 +1024,7 @@ abstract class ClaudeCodeRun extends SubAgent<Env> {
           return reportPlan(
             this.env,
             plan,
-            this.filingRun(),
+            this.artifactWriteContext(),
             outcome,
             (sessionId, filed) =>
               this.#noteSession(
@@ -1224,7 +1224,12 @@ abstract class ClaudeCodeRun extends SubAgent<Env> {
     ) {
       await this.#discard(place, await this.#starts());
     }
-    return reportDiscovery(this.env, report, this.filingRun(), outcome);
+    return reportDiscovery(
+      this.env,
+      report,
+      this.artifactWriteContext(),
+      outcome
+    );
   }
 
   /**

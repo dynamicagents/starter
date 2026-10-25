@@ -242,9 +242,9 @@ function ensure(storage: DurableObjectStorage): void {
  * than a second one.
  *
  * `owner` and `sourceKey` arrive as one argument because both are strings and
- * either reads as the other, which is `FilingRun`'s reason in `./session.ts`:
- * the swap opens one shared page per caller for every planning run, each owned
- * by a run id and so writable and approvable by nobody.
+ * either reads as the other, which is `ArtifactWriteContext`'s reason in
+ * `./session.ts`: the swap opens one shared page per caller for every planning
+ * run, each owned by a run id and so writable and approvable by nobody.
  */
 export async function createPlan(
   env: Env,

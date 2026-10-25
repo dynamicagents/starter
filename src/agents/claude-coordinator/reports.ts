@@ -11,7 +11,7 @@ import {
   sessionFooter,
   sessionReport,
   SessionQuestions,
-  type FilingRun
+  type ArtifactWriteContext
 } from "./session";
 
 /**
@@ -358,14 +358,15 @@ const API_ERROR_KEPT = 300;
  * through `--json-schema` that message is the answer it failed to make, report
  * and all.
  *
- * The filing write asserts `run.owner` against the page's own, so it lands
+ * The artifact write asserts `run.owner` against the page's own, so it lands
  * only on a page this caller opened. `reportPlan` in `./children.ts` asserts a
- * plan's version the same way, and {@link FilingRun} says what the pair is.
+ * plan's version the same way, and {@link ArtifactWriteContext} says what the
+ * pair is.
  */
 export async function reportDiscovery(
   env: Env,
   report: { id: string; line?: string },
-  run: FilingRun,
+  run: ArtifactWriteContext,
   outcome: SessionOutcome
 ): Promise<string> {
   const result = outcome.session.result;

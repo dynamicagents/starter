@@ -301,8 +301,8 @@ export function answerText(answer: WriteAnswer): string {
 }
 
 /**
- * The run behind a filing write: whose page it may write on, and which write
- * this is.
+ * What an artifact write is made under: whose page it may write on, and which
+ * write this is.
  *
  * One argument rather than two parameters because both are strings and either
  * reads as the other, so a swap typechecks. It would ship a total failure: an
@@ -315,7 +315,7 @@ export function answerText(answer: WriteAnswer): string {
  * entry key, which is what makes a redelivered write a replay rather than a
  * second note.
  */
-export interface FilingRun {
+export interface ArtifactWriteContext {
   owner: string;
   runId: string;
 }

@@ -81,7 +81,7 @@ import {
   warningPrompt,
   WRITE_OUTPUT,
   writingNote,
-  type FilingRun
+  type ArtifactWriteContext
 } from "@/agents/claude-coordinator/session";
 import {
   DISCOVERY_OUTPUT,
@@ -469,7 +469,7 @@ describe("a plan", () => {
    * The caller a plan below is opened for, and the one its version is filed by.
    * A literal because the store compares it verbatim, so these specs pin what
    * the write does with an owner and never where the owner comes from: that is
-   * `filingRun`'s, under "files as the caller the run is for" below.
+   * `artifactWriteContext`'s, under "files as the caller the run is for" below.
    */
   const PLAN_OWNER = "plan-spec-caller";
 
@@ -505,8 +505,8 @@ describe("a plan", () => {
     expect(runtime).not.toHaveProperty("resume");
     expect(owned).toBe(true);
     // Both records of whose plan it is: the table `lookUpPlan` reads, and the
-    // artifact's own column, which core's approval gate and every filing write
-    // assert against. The specs below show what a write does with a given
+    // artifact's own column, which core's approval gate and every artifact
+    // write assert against. The specs below show what a write does with a given
     // owner and never which owner is stamped here, so a plan stamped with
     // anything else passes them and is refused by both in production.
     expect(stamped).toBe(caller);
@@ -788,10 +788,10 @@ describe("a plan", () => {
   });
 
   /**
-   * Which value each filing write passes, which the specs above cannot see:
+   * Which value each artifact write passes, which the specs above cannot see:
    * they hand `reportPlan` an owner of their own, while production reads it
-   * from `filingRun` on the run. A swap of the two typechecks, and
-   * {@link FilingRun} is where what it would cost is written down.
+   * from `artifactWriteContext` on the run. A swap of the two typechecks, and
+   * {@link ArtifactWriteContext} is where what it would cost is written down.
    *
    * The child's `callerKey` falls back to a stub here, because a spec runs no
    * turn and the real one answers off the dispatch that started one. What the
@@ -810,7 +810,11 @@ describe("a plan", () => {
     const run = await runInDurableObject(
       ns.get(ns.idFromName(runId)),
       (instance) =>
-        (instance as unknown as { filingRun(): FilingRun }).filingRun()
+        (
+          instance as unknown as {
+            artifactWriteContext(): ArtifactWriteContext;
+          }
+        ).artifactWriteContext()
     );
     expect(run).toEqual({ owner: `caller-of:${runId}`, runId });
   });
@@ -1704,7 +1708,7 @@ describe("a discovery run", () => {
   });
 
   /**
-   * The filing write asserts the page is this caller's, as a plan's version
+   * The artifact write asserts the page is this caller's, as a plan's version
    * does: see "files no version on" above. A report is the half a reader of the
    * link would read, so a page some other caller opened takes neither the
    * report nor the lock that would close it.

@@ -33,7 +33,8 @@ import { hostScratch } from "@/workspace/scratch";
  * So the parent gets git, a browser, and read-only access to the checkout — enough
  * to check a claim rather than take it on trust. No shell, no writer, no editor:
  * `restrictTools` keeps only `grep` of the computer plugin's own tools, and
- * `./agent.ts` switches off Think's shell and its file writers.
+ * `./agent.ts` leaves Think's file writers out of the turn and installs a
+ * workspace with no runtime, which is what denies it a shell at all.
  */
 
 /**
@@ -151,7 +152,7 @@ export const parentPlugins = (
  * sharing the parent's checkout must not also share its ability to rewrite it.
  * `repo_commit` and `repo_push` would otherwise sit behind prose alone. Anything
  * a sub-agent legitimately needs from git (`git status`, `git diff`, `git log`)
- * it runs through `bash`, which leaves no credential anywhere near it.
+ * it runs through `exec`, which leaves no credential anywhere near it.
  */
 export const childPlugins = (env: Env): AgentPlugin<Env>[] => [
   computer(SANDBOX_TOOLS),

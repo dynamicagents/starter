@@ -3,7 +3,7 @@ import type { AgentPlugin, SubAgentSpec } from "@dynamicagents/core";
 import { SubAgent } from "@dynamicagents/core/subagent";
 import { z } from "zod";
 import { GENERIC } from "@/config";
-import { agentModel, turnTask } from "@/model";
+import { agentModel, transientChatError, turnTask } from "@/model";
 import { generic } from "./definition";
 import { plugins } from "./plugins";
 import { GENERAL_SOUL } from "./soul";
@@ -32,6 +32,14 @@ const GENERAL: SubAgentSpec<{ task: string }> = {
 
 export class GenericChild extends SubAgent<Env> {
   static override spec = GENERAL as SubAgentSpec<never, never>;
+
+  /**
+   * A turn the platform cut is continued rather than failed. `src/model.ts`
+   * holds the why, and what it costs.
+   */
+  override classifyChatError(error: unknown) {
+    return transientChatError(error) ?? super.classifyChatError(error);
+  }
 
   override getModel(): ThinkModel {
     return agentModel(

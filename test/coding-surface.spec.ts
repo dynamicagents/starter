@@ -13,11 +13,11 @@ import { SANDBOX_TOOLS } from "@/workspace/container";
  * This agent's parent and its sub-agent install **different** plugin lists: the
  * parent orchestrates and reviews with git, a browser and read-only eyes on the
  * container, and every edit is delegated to a sub-agent that holds the shell.
- * That split is held by things a typechecker cannot see — an allowlist of tool
- * *names* passed to `restrictTools`, the `activeTools` a turn runs with, and
- * Think's own `bash` switched off — and each fails quietly: a renamed tool
- * leaves the parent missing one it thinks it has, or holding one it must not.
- * So they are asserted here, on the real classes.
+ * That split is held by things a typechecker cannot see: an allowlist of tool
+ * *names* passed to `restrictTools`, the `activeTools` a turn runs with, and a
+ * workspace carrying no runtime, which is what leaves Think no `exec` to offer.
+ * Each fails quietly, leaving the parent missing a tool it thinks it has or
+ * holding one it must not, so they are asserted here, on the real classes.
  */
 
 interface Surface {
@@ -25,7 +25,7 @@ interface Surface {
   getActions(): Record<string, unknown>;
   configureContext(): ContextConfig[];
   beforeTurn(ctx: TurnContext): Promise<TurnConfig | void>;
-  workspaceBash: boolean;
+  workspace: { runtime?: unknown };
 }
 
 const onParent = <T>(read: (agent: Surface) => T | Promise<T>) => {
@@ -48,7 +48,7 @@ const onChild = <T>(read: (agent: Surface) => T | Promise<T>) => {
 describe("the parent's tools", () => {
   /**
    * The exact list, not a subset check. A `toContain` here would pass just as
-   * happily if `bash` reappeared, which is the single thing this split exists
+   * happily if `exec` reappeared, which is the single thing this split exists
    * to prevent.
    */
   it("is git, a scratchpad, a browser, grep, and its sub-agent", async () => {
@@ -93,20 +93,28 @@ describe("the parent's tools", () => {
   });
 
   it("has no way to run a command, write a file, or edit one", async () => {
-    const { bash, active } = await onParent(async (agent) => {
-      const think = ["read", "write", "edit", "delete", "list", "find", "grep"];
+    const { runtime, active } = await onParent(async (agent) => {
+      // Think's own set, which the agent does not list: it arrives from the
+      // workspace. `exec` is in it only for a workspace with a runtime, which
+      // is the next assertion.
+      const think = ["read", "write", "edit", "delete", "ls", "find", "grep"];
       const tools = Object.fromEntries(
         [...think, ...Object.keys(agent.getTools())].map((name) => [name, {}])
       );
       const turn = await agent.beforeTurn({ tools } as unknown as TurnContext);
-      return { bash: agent.workspaceBash, active: turn?.activeTools ?? [] };
+      return {
+        runtime: agent.workspace.runtime,
+        active: turn?.activeTools ?? []
+      };
     });
 
-    expect(bash).toBe(false);
-    for (const forbidden of ["bash", "write", "edit", "delete"]) {
+    // No runtime, so Think builds no `exec` over this checkout. There is no
+    // switch to assert instead: the workspace is the whole of what decides it.
+    expect(runtime).toBeUndefined();
+    for (const forbidden of ["exec", "write", "edit", "delete"]) {
       expect(active).not.toContain(forbidden);
     }
-    for (const kept of ["read", "list", "find", "grep", "code"]) {
+    for (const kept of ["read", "ls", "find", "grep", "code"]) {
       expect(active).toContain(kept);
     }
   });
@@ -133,7 +141,7 @@ describe("the parent's tools", () => {
     expect(text).toContain(
       "You can read the checkout the `code` sub-agents work in"
     );
-    expect(text).not.toMatch(/`bash`/);
+    expect(text).not.toMatch(/`exec`/);
   });
 });
 
@@ -143,12 +151,12 @@ describe("the sub-agent's tools", () => {
       Object.keys(agent.getTools()).sort()
     );
     expect(tools).toEqual([
-      "bash",
       "browser_extract",
       "browser_links",
       "browser_markdown",
       "browser_scrape",
       "edit",
+      "exec",
       "grep"
     ]);
   });

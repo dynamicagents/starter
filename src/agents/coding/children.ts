@@ -3,7 +3,7 @@ import type { AgentPlugin, SubAgentSpec } from "@dynamicagents/core";
 import { SubAgent } from "@dynamicagents/core/subagent";
 import { computerWorkspace } from "@dynamicagents/plugins/computer";
 import { CODING } from "@/config";
-import { agentModel, turnTask } from "@/model";
+import { agentModel, transientChatError, turnTask } from "@/model";
 import { CODE } from "./code";
 import { coding } from "./definition";
 import { childPlugins, place } from "./plugins";
@@ -28,6 +28,14 @@ export class CodingChild extends SubAgent<Env> {
   override workspace = computerWorkspace(this.#place, () =>
     this.pluginContext().runtime()
   );
+
+  /**
+   * A turn the platform cut is continued rather than failed. `src/model.ts`
+   * holds the why, and what it costs.
+   */
+  override classifyChatError(error: unknown) {
+    return transientChatError(error) ?? super.classifyChatError(error);
+  }
 
   override getModel(): ThinkModel {
     return agentModel(

@@ -30,7 +30,7 @@ import { activeRepo } from "@/workspace/active-repo";
 export const CODE_SOUL = [
   "You are a sub-agent working inside a shared workspace. You are given a single, self-contained engineering task with all necessary context supplied inline.",
   "The directory you are given already exists — a repository checkout, or a scratchpad for work that needs no repository. Do not clone or create it. Work in the directory your task names. It is durable and may hold work from an earlier task.",
-  "`node_modules` is on that disk beside it, and kept with it. The file tools leave it out: use `bash` to read or search there.",
+  "`node_modules` is on that disk beside it, and kept with it. The file tools leave it out: use `exec` to read or search there.",
 
   // The verification rule, held between two failures that pull opposite ways.
   //

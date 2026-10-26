@@ -22,18 +22,25 @@ type V3 = Extract<LanguageModel, { specificationVersion: "v3" }>;
 
 /** What one model call asked of the binding. */
 interface Dispatch {
+  /**
+   * Which method on the binding the call arrived on, and the whole of what says
+   * which arm built the model: a Workers AI id is dispatched through `run`,
+   * while a catalog slug is dispatched down AI Gateway's provider-native path,
+   * which is the binding's own `fetch`. Nothing else separates them: every arm
+   * passes the model id through untouched, every arm carries the same gateway
+   * attribution, and `returnRawResponse` is set on every `run` whatever the id.
+   * Each arm is wrong in its own silent way without this: a slug on the Workers
+   * AI arm reaches a provider nothing serves, and a `@cf/` id on the catalog arm
+   * still works but routes off its own re-sent prefix.
+   */
+  via: "run" | "fetch";
+  /**
+   * The configured id as the arm spells it to the gateway: whole on `run`, and
+   * on the native path the provider taken from the route rejoined to the body's
+   * own half, because between them they are what AI Gateway routes on.
+   */
   model: string;
   gateway: unknown;
-  /**
-   * `returnRawResponse`, which only the catalog arm sets, and the prefix-cache
-   * key, which only the Workers AI arm sends. Between them they are the whole
-   * of what says which arm built the model: every arm passes the model id
-   * through untouched and every arm passes a `gateway`, so those say nothing
-   * about it. Each arm is wrong in its own silent way without these — a slug
-   * on the Workers AI arm reaches a provider nothing serves, and a `@cf/` id on
-   * the catalog arm still works but routes off its own re-sent prefix.
-   */
-  raw: boolean;
   affinity: unknown;
   /**
    * The catalog arm's prefix-cache key, which an `openai/*` slug sends in the
@@ -43,16 +50,37 @@ interface Dispatch {
 }
 
 /**
+ * The route the provider-native path addresses, as the binding's own `fetch`
+ * spells it: `/ai-gateway/gateways/<id>/<provider>/<endpoint>`. The gateway id
+ * and the provider are in the path and nowhere else, so they are read back from
+ * it rather than from the body.
+ */
+function nativeRoute(url: string): {
+  gateway: string;
+  provider: string;
+  endpoint: string;
+} {
+  const parts = new URL(url).pathname.split("/").filter(Boolean);
+  const at = parts.indexOf("gateways");
+  return {
+    gateway: decodeURIComponent(parts[at + 1] ?? ""),
+    provider: parts[at + 2] ?? "",
+    endpoint: parts.slice(at + 3).join("/")
+  };
+}
+
+/**
  * A binding that records what each call asked of AI Gateway.
  *
- * Both of `src/model.ts`'s arms land here, and they want different answers: a
- * Workers AI id is called for its parsed output, while a catalog slug is
- * dispatched with `returnRawResponse` and parsed by an `@ai-sdk` provider, so
- * for that one the binding has to answer an HTTP response in the provider's own
- * wire format: Responses for an `openai/*` slug, whose body carries `input`,
- * and Chat Completions otherwise. No `cf-aig-run-id` on it, deliberately — the header is what puts
- * the delegate's resumable-stream engine in the path, and a resume has nothing
- * to do with what this spec is watching.
+ * Both of `src/model.ts`'s arms land here, on different methods and in
+ * different wire formats, and each has to be answered in the one its caller
+ * parses. A Workers AI id arrives on `run` with `returnRawResponse`, so that
+ * answer is an HTTP response carrying Chat Completions. A catalog slug arrives
+ * on `fetch`, against the gateway's provider-native route, and is answered in
+ * the provider's own format: Responses for an `openai/*` slug, whose body
+ * carries `input`. No `cf-aig-run-id` on either, deliberately: the header is
+ * what puts the delegate's resumable-stream engine in the path, and a resume
+ * has nothing to do with what this spec is watching.
  */
 function recordingAI() {
   const calls: Dispatch[] = [];
@@ -62,24 +90,16 @@ function recordingAI() {
       inputs: Record<string, unknown>,
       options: {
         gateway?: unknown;
-        returnRawResponse?: boolean;
         extraHeaders?: Record<string, string>;
       }
     ) => {
-      const raw = options.returnRawResponse === true;
       calls.push({
+        via: "run",
         model,
         gateway: options.gateway,
-        raw,
         affinity: options.extraHeaders?.["x-session-affinity"],
         cacheKey: inputs.prompt_cache_key
       });
-      if (!raw) {
-        return {
-          response: "ok",
-          usage: { prompt_tokens: 1, completion_tokens: 1 }
-        };
-      }
       return Response.json(
         "input" in inputs
           ? {
@@ -116,6 +136,49 @@ function recordingAI() {
               usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 }
             }
       );
+    },
+    fetch: async (url: string, init: RequestInit) => {
+      const { gateway, provider } = nativeRoute(url);
+      const headers = new Headers(init.headers);
+      const body = JSON.parse(String(init.body ?? "{}")) as {
+        model?: string;
+        prompt_cache_key?: unknown;
+      };
+      const metadata = headers.get("cf-aig-metadata");
+      calls.push({
+        via: "fetch",
+        model: `${provider}/${body.model ?? ""}`,
+        // Rebuilt as the options object the other arm passes, because what this
+        // spec is about is the attribution and not the transport: the id comes
+        // from the route and the metadata from the header the gateway reads it
+        // from. Another `cf-aig-*` option arriving would go unnoticed here, and
+        // attribution moving off this header would not.
+        gateway: {
+          id: gateway,
+          ...(metadata === null
+            ? {}
+            : { metadata: JSON.parse(metadata) as unknown })
+        },
+        affinity: headers.get("x-session-affinity") ?? undefined,
+        cacheKey: body.prompt_cache_key
+      });
+      return Response.json({
+        id: "resp_attribution",
+        object: "response",
+        created_at: 0,
+        status: "completed",
+        model: body.model,
+        output: [
+          {
+            type: "message",
+            id: "msg_attribution",
+            role: "assistant",
+            status: "completed",
+            content: [{ type: "output_text", text: "ok", annotations: [] }]
+          }
+        ],
+        usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 }
+      });
     }
   } as unknown as Ai;
   return { AI, calls };
@@ -156,9 +219,8 @@ async function gatewayOf(
  * The id is read at the binding rather than off the built model, because for a
  * catalog slug the model's own `modelId` is the provider-native half (`gpt-…`)
  * and it is the whole slug that has to arrive for AI Gateway to route it. The
- * id alone would not catch an arm chosen wrongly, though — every arm passes it
- * through untouched — so what pins the arm is `raw` and `affinity`, which no
- * arm sets both of.
+ * id alone would not catch an arm chosen wrongly, though, since every arm
+ * passes it through untouched, so what pins the arm is the method it arrived on.
  */
 function expectConfiguredId(
   dispatch: Dispatch | undefined,
@@ -170,7 +232,7 @@ function expectConfiguredId(
 ): void {
   expect(dispatch).toMatchObject({
     model: modelId,
-    raw: catalog,
+    via: catalog ? "fetch" : "run",
     // The object's name on whichever arm, each in its own spelling.
     affinity: catalog ? undefined : name,
     cacheKey: catalog ? name : undefined

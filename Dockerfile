@@ -14,7 +14,7 @@
 
 # `sandbox-shim`, which `@cloudflare/sandbox`'s `Files` and `DirectoryBackup`
 # run through. Its tag follows the `@cloudflare/sandbox` the plugins install.
-FROM docker.io/cloudflare/sandbox:1.0.1 AS shim
+FROM docker.io/cloudflare/sandbox:1.0.3 AS shim
 
 FROM docker.io/node:24-trixie-slim
 

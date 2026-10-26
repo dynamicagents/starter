@@ -136,7 +136,7 @@ interface Parent {
   getSubAgents(): { name: string }[];
   configureContext(): ContextConfig[];
   beforeTurn(ctx: TurnContext): Promise<TurnConfig | void>;
-  workspaceBash: boolean;
+  workspace: { runtime?: unknown };
   pluginContext(): PluginContext<Env>;
   formatDetachedCompletion(
     run: AgentToolRunInfo,
@@ -164,8 +164,9 @@ const { freshStub: freshWorkspace } = makeDoHelpers<ClaudeCoordinatorSandbox>(
 
 /**
  * The tool split, which no typechecker can see: an allowlist of tool *names*
- * passed to `restrictTools`, the `activeTools` a turn runs with, and Think's own
- * `bash` switched off. Each fails quietly.
+ * passed to `restrictTools`, the `activeTools` a turn runs with, and a workspace
+ * carrying no runtime, which is what leaves Think no `exec` to offer. Each
+ * fails quietly.
  */
 describe("the parent's surface", () => {
   it("is a checkout to open, pull requests to watch, worktrees to read, a scratchpad, a browser, grep, and the sessions", async () => {
@@ -291,17 +292,20 @@ describe("the parent's surface", () => {
   });
 
   it("has no shell, no writer and no editor", async () => {
-    const { bash, active } = await onParent(async (agent) => {
-      const think = ["read", "write", "edit", "delete", "list", "find", "grep"];
+    const { runtime, active } = await onParent(async (agent) => {
+      const think = ["read", "write", "edit", "delete", "ls", "find", "grep"];
       const tools = Object.fromEntries(
         [...think, ...Object.keys(agent.getTools())].map((name) => [name, {}])
       );
       const turn = await agent.beforeTurn({ tools } as unknown as TurnContext);
-      return { bash: agent.workspaceBash, active: turn?.activeTools ?? [] };
+      return {
+        runtime: agent.workspace.runtime,
+        active: turn?.activeTools ?? []
+      };
     });
 
-    expect(bash).toBe(false);
-    for (const forbidden of ["bash", "write", "edit", "delete"]) {
+    expect(runtime).toBeUndefined();
+    for (const forbidden of ["exec", "write", "edit", "delete"]) {
       expect(active).not.toContain(forbidden);
     }
   });

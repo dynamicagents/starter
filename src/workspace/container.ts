@@ -7,7 +7,7 @@ import {
 import { gitIdentity } from "./git-identity";
 
 /**
- * How long `bash` waits on an install in flight before running the command
+ * How long `exec` waits on an install in flight before running the command
  * anyway. See `installGateMs` below for why it is above the plugin's default.
  */
 const INSTALL_GATE_MS = 180_000;
@@ -27,7 +27,7 @@ const INSTALL_GATE_MS = 180_000;
  */
 export function parentWorkspaceContext(delegate: string): string {
   return [
-    `You can read the checkout ${delegate} work in, but not change it: \`read\` a file, \`list\` a directory, \`find\` files by name, and \`grep\` their contents.`,
+    `You can read the checkout ${delegate} work in, but not change it: \`read\` a file, \`ls\` a directory, \`find\` files by name, and \`grep\` their contents.`,
     "Use these to check a report against what is actually on disk — read the file it says it changed. You cannot run commands, write, edit or delete; that is what delegation is for.",
     "`node_modules` is on the container's disk beside the checkout, and these tools leave it out. A sub-agent's shell can read it."
   ].join("\n");
@@ -36,8 +36,9 @@ export function parentWorkspaceContext(delegate: string): string {
 /**
  * The tools a read-only parent keeps from its model: Think's own file writers,
  * over the same checkout its sub-agents work in. Its `activeTools` leave these
- * out; the computer plugin's own `bash` and `edit` are not installed on it at
- * all, and Think's `bash` is switched off.
+ * out; the computer plugin's own `exec` and `edit` are not installed on it at
+ * all, and the workspace it does install carries no runtime, so Think offers it
+ * no `exec` of its own either.
  */
 export const WORKSPACE_WRITERS: ReadonlySet<string> = new Set([
   "write",

@@ -49,13 +49,16 @@ export class CodingAgent extends StepAgent<Env> {
     sandboxName(this.callerKey(), this.#active.get())
   );
 
-  /** Think's file tools, over the checkout rather than this object's SQLite. */
-  override workspace = computerWorkspace(this.#place);
   /**
-   * Off, because the parent has no shell: Think's own `bash` would run over the
-   * same workspace and could write anything the file tools are kept from.
+   * Think's file tools, over the checkout rather than this object's SQLite.
+   *
+   * This agent gets no shell from it, and needs no switch to say so: the
+   * computer plugin's workspace carries no runtime, and Think offers `exec`
+   * only for a workspace that has one. The plugin's own module states that
+   * coupling; what matters here is that the parent reads the tree its
+   * sub-agents write and never runs commands over it.
    */
-  override workspaceBash = false as const;
+  override workspace = computerWorkspace(this.#place);
 
   /**
    * A turn the platform cut is continued rather than failed. `src/model.ts`

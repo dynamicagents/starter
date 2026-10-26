@@ -23,15 +23,23 @@ type V3 = Extract<LanguageModel, { specificationVersion: "v3" }>;
 /** What one model call asked of the binding. */
 interface Dispatch {
   /**
-   * Which method on the binding the call arrived on, and the whole of what says
-   * which arm built the model: a Workers AI id is dispatched through `run`,
-   * while a catalog slug is dispatched down AI Gateway's provider-native path,
-   * which is the binding's own `fetch`. Nothing else separates them: every arm
-   * passes the model id through untouched, every arm carries the same gateway
-   * attribution, and `returnRawResponse` is set on every `run` whatever the id.
-   * Each arm is wrong in its own silent way without this: a slug on the Workers
-   * AI arm reaches a provider nothing serves, and a `@cf/` id on the catalog arm
-   * still works but routes off its own re-sent prefix.
+   * Which method on the binding the call arrived on: the Workers AI arm's id
+   * is dispatched through `run`, while the catalog arm's slug goes down AI
+   * Gateway's provider-native path, which is the binding's own `fetch`. It is
+   * the transport each arm chose for the id it was given, so it separates the
+   * two for the ids this Worker configures, and `returnRawResponse` no longer
+   * does: that is set on every `run` whatever the id.
+   *
+   * It is **not** on its own enough to catch an id sent down the wrong arm. A
+   * `@cf/` id handed to the catalog arm still arrives on `run`, because the
+   * transport reads the id rather than the arm that built it. What catches that
+   * is {@link Dispatch.affinity} against {@link Dispatch.cacheKey}: each arm
+   * sends the object's name in its own place and neither sends the other's, so
+   * a mismatch leaves both empty. Each arm is wrong in its own silent way
+   * without that pair. A slug on the Workers AI arm reaches a provider nothing
+   * serves, and a `@cf/` id on the catalog arm still answers but routes off its
+   * own re-sent prefix, which is why `expectConfiguredId` asserts all of these
+   * together rather than any one of them.
    */
   via: "run" | "fetch";
   /**
@@ -220,7 +228,13 @@ async function gatewayOf(
  * catalog slug the model's own `modelId` is the provider-native half (`gpt-…`)
  * and it is the whole slug that has to arrive for AI Gateway to route it. The
  * id alone would not catch an arm chosen wrongly, though, since every arm
- * passes it through untouched, so what pins the arm is the method it arrived on.
+ * passes it through untouched. What catches that is the whole object asserted
+ * at once, and the pair that carries the object's name is the part that bites:
+ * {@link Dispatch.via} says which transport the id took, and
+ * {@link Dispatch.affinity} against {@link Dispatch.cacheKey} says which arm
+ * asked for it. Measured against the mismatch rather than assumed: forcing a
+ * `@cf/` id onto the catalog arm leaves `via` reading `run`, and it is the
+ * empty affinity that fails.
  */
 function expectConfiguredId(
   dispatch: Dispatch | undefined,

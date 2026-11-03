@@ -32,9 +32,7 @@ export const hostManifest: AgentManifest = {
     "pull requests), `claude-coordinator` (the same, for larger changes, taking " +
     "the pull request through its review and CI).",
   version: "0.1.0",
-  // `extensions` is a required (repeated) protobuf field in v1.0 — we declare no
-  // protocol extensions, so it stays empty. `extendedAgentCard` is set by core,
-  // which owns that contract.
+  // `extensions` empty, `extendedAgentCard` unset: core's `AgentManifest`.
   capabilities: { streaming: false, pushNotifications: true, extensions: [] },
   defaultInputModes: ["text/plain"],
   defaultOutputModes: ["text/plain"],

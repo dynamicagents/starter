@@ -19,8 +19,7 @@ export const manifest: AgentManifest = {
     "with a durable per-caller memory (one continuous, self-compacting " +
     "conversation).",
   version: "0.1.0",
-  // `extensions` is a required (repeated) protobuf field in v1.0 — we declare no
-  // protocol extensions, so it stays empty.
+  // `extensions` empty, `extendedAgentCard` unset: core's `AgentManifest`.
   capabilities: { streaming: false, pushNotifications: true, extensions: [] },
   defaultInputModes: ["text/plain"],
   defaultOutputModes: ["text/plain"],

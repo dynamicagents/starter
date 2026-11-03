@@ -11,8 +11,7 @@ export const manifest: AgentManifest = {
   description:
     "A senior software engineer. Give it a repository and a change to make; it clones into a Linux sandbox, implements the change, runs the project's own tests, pushes a work branch and opens a pull request. Replies with the pull request URL. Never commits to a default branch.",
   version: "0.1.0",
-  // `extensions` is a required (repeated) protobuf field in v1.0 — we declare no
-  // protocol extensions, so it stays empty.
+  // `extensions` empty, `extendedAgentCard` unset: core's `AgentManifest`.
   capabilities: { streaming: false, pushNotifications: true, extensions: [] },
   defaultInputModes: ["text/plain"],
   defaultOutputModes: ["text/plain"],

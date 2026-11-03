@@ -16,8 +16,7 @@ export const manifest: AgentManifest = {
   description:
     "Carries a change through a repository to a pull request ready for you to merge. For anything substantial it has a plan written and sends you its link to approve, comment on or reject — unless you have told it you do not approve plans. Long-running coding sessions then build it in isolated checkouts, open the pull request, and answer its review and CI, while it watches the pull request between them and brings you only the questions nobody else can answer. Replies with the pull request's URL and what is left for you. Never merges, and never commits to a default branch.",
   version: "0.1.0",
-  // `extensions` is a required (repeated) protobuf field in v1.0 — we declare no
-  // protocol extensions, so it stays empty.
+  // `extensions` empty, `extendedAgentCard` unset: core's `AgentManifest`.
   capabilities: { streaming: false, pushNotifications: true, extensions: [] },
   defaultInputModes: ["text/plain"],
   defaultOutputModes: ["text/plain"],

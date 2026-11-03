@@ -140,8 +140,8 @@
           // the tarball.
           "build_vars": {
             "CLAUDE_CODE_VERSION": "2.1.310",
-            "GH_VERSION": "2.101.0",
-            "GH_SHA256": "9bca2d1c16825f109907a23307628a2f0698fbf99662b73a5cf0b020293072b8"
+            "GH_VERSION": "2.103.3",
+            "GH_SHA256": "4c806978ffce1cec70853302a56d70ac6da4f19bae7adca4e1a8ab00633dd91d"
           }
         }
       },

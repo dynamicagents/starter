@@ -139,7 +139,7 @@
           // carries why. The checksum is pinned because the build downloads
           // the tarball.
           "build_vars": {
-            "CLAUDE_CODE_VERSION": "2.1.310",
+            "CLAUDE_CODE_VERSION": "2.1.317",
             "GH_VERSION": "2.103.3",
             "GH_SHA256": "4c806978ffce1cec70853302a56d70ac6da4f19bae7adca4e1a8ab00633dd91d"
           }
@@ -161,11 +161,20 @@
 
   // `@dynamicagents/plugins/browser` — used by every agent.
   // NOTE: requires a PAID Workers plan; Browser Rendering is not on the free
-  // tier. `remote: true` is required for Quick Actions under `wrangler dev`.
+  // tier. `remote: true` is required to reach it under `wrangler dev`.
   "browser": {
     "binding": "BROWSER",
     "remote": true
   },
+
+  // The Dynamic Worker the browser tool runs the model's code in: a fresh one
+  // per call, with no network of its own. The plugin declares this beside
+  // `BROWSER` in its `requires`, so an agent holding one and not the other
+  // fails at start rather than at its first browser call.
+  //
+  // Not inherited by a named environment — wrangler's own schema says so — so a
+  // named environment here would need a copy of this line.
+  "worker_loaders": [{ "binding": "LOADER" }],
 
   // --- the agents ----------------------------------------------------------
   // Each tenant's task host, which holds a caller's A2A tasks, and the step

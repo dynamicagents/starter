@@ -53,7 +53,7 @@ export const manifest: AgentManifest = {
       id: "browse",
       name: "Browse the web",
       description:
-        "Read and scrape live web pages — render a page as Markdown, extract structured data, or list its links.",
+        "Drive a real browser to read and interact with live web pages, writing code against a session that keeps its tabs, cookies and logins between calls.",
       tags: ["web", "browser"],
       examples: [],
       inputModes: [],

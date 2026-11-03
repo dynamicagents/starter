@@ -43,9 +43,10 @@ const plugin = (name) => `@dynamicagents/plugins/dist/${name}/`;
  * Every agent and sub-agent extends Think, and `@cloudflare/think` imports
  * eagerly: just-bash, two model providers, the MCP client, yaml and the chat
  * SDK, on top of the `agents` SDK's own `Lifecycle`. So each entry below
- * carries all of it, used or not — about 1.7 MB gzipped for one agent, which is
- * why these ceilings are what they are. Each entry is built on its own, so
- * Think is counted once per entry. That share moves with Think and `agents`, so
+ * carries all of it, used or not — an agent entry measures about 3570 KiB, or
+ * 0.95 MB gzipped, which is why these ceilings are what they are. Each entry is
+ * built on its own, so Think is counted once per entry. That share moves with
+ * Think and `agents`, so
  * a bump of either moves every ceiling here at once, and that is not a leak:
  * `forbidden` is the check that would catch one.
  *
@@ -53,9 +54,10 @@ const plugin = (name) => `@dynamicagents/plugins/dist/${name}/`;
  * `core/dist/job` — and *only* such an agent, which is the isolation this file
  * exists to assert still holding.
  *
- * Each tenant's task host and pipeline are entries too, and each carries the
- * `agents` SDK on its own: about 1.3 MB apiece, counted once per entry like
- * Think.
+ * Each tenant's task host and pipeline are entries too. The host carries the
+ * `agents` SDK on its own, about 1329 KiB, counted once per entry like Think; a
+ * pipeline is far thinner, about 236 KiB, because it reaches its step agents by
+ * binding name and so pulls in no agent class.
  *
  * Every ceiling below is its measurement plus the ~8% headroom this file runs
  * with.
@@ -78,9 +80,9 @@ const AGENTS = [
       plugin("scratch"),
       plugin("claude-code")
     ],
-    // Measured 11722 KiB, and nearly all of it is Think and the `agents` SDK:
+    // Measured 8668 KiB, and nearly all of it is Think and the `agents` SDK:
     // see "What every agent carries" above.
-    maxBytes: 12_940_000
+    maxBytes: 9_580_000
   },
   {
     name: "coding",
@@ -103,9 +105,9 @@ const AGENTS = [
     // would also put an Anthropic credential path in an agent that has no
     // business with one.
     forbidden: [plugin("claude-code")],
-    // Measured 12492 KiB: generic's, plus the plugins this agent installs and
+    // Measured 9439 KiB: generic's, plus the plugins this agent installs and
     // the `/alarm` and `/job` its sandbox runs on.
-    maxBytes: 13_750_000
+    maxBytes: 10_430_000
   },
   {
     name: "claude-coordinator",
@@ -123,8 +125,8 @@ const AGENTS = [
     // Nothing to forbid: this agent installs every plugin in this repo, and
     // `coding`'s entry above is the other half of the `/claude-code` pair.
     forbidden: [],
-    // Measured 12603 KiB: `coding`'s, plus `/claude-code`.
-    maxBytes: 13_880_000
+    // Measured 9458 KiB: `coding`'s, plus `/claude-code`.
+    maxBytes: 10_450_000
   }
 ];
 

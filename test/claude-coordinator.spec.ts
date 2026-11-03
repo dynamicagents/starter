@@ -175,10 +175,7 @@ describe("the parent's surface", () => {
     );
     expect(tools).toEqual([
       "ask_user",
-      "browser_extract",
-      "browser_links",
-      "browser_markdown",
-      "browser_scrape",
+      "browser",
       "check_back",
       "claude_code",
       "claude_code_discover",

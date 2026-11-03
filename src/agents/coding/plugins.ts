@@ -139,7 +139,7 @@ export const parentPlugins = (
     // Full surface, for reading documentation an unfamiliar dependency needs.
     // Deliberately last — an agent that reaches for the web before reading the
     // repository in front of it is usually about to solve the wrong problem.
-    browser({ binding: env.BROWSER })
+    browser({ binding: env.BROWSER, loader: env.LOADER })
   ];
 };
 
@@ -156,5 +156,5 @@ export const parentPlugins = (
  */
 export const childPlugins = (env: Env): AgentPlugin<Env>[] => [
   computer(SANDBOX_TOOLS),
-  browser({ binding: env.BROWSER })
+  browser({ binding: env.BROWSER, loader: env.LOADER })
 ];

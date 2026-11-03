@@ -19,5 +19,5 @@ import { browser } from "@dynamicagents/plugins/browser";
  */
 export const plugins = (env: Env): AgentPlugin<Env>[] => [
   // Read web pages. Requires the `BROWSER` binding and a paid Workers plan.
-  browser({ binding: env.BROWSER })
+  browser({ binding: env.BROWSER, loader: env.LOADER })
 ];

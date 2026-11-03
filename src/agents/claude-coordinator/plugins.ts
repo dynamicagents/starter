@@ -241,6 +241,6 @@ export const parentPlugins = (
     }),
     // Deliberately last — an agent that reaches for the web before reading the
     // repository in front of it is usually about to solve the wrong problem.
-    browser({ binding: env.BROWSER })
+    browser({ binding: env.BROWSER, loader: env.LOADER })
   ];
 };

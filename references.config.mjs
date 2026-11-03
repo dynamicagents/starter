@@ -21,11 +21,10 @@ export default {
   /**
    * Paths that are deliberately not this repo's, with the reason.
    *
-   * Empty, and it was not always: the entries it used to need were all paths
-   * inside strings, two of them example filenames in a sub-agent's prompt copy.
-   * Reading comments and not data is what retired them. Add to this only for a
-   * path that genuinely lives elsewhere, never to silence one that has gone
-   * stale: that one is the finding.
+   * Add to this only for a path that genuinely lives elsewhere, never to
+   * silence one that has gone stale: that one is the finding. A path inside a
+   * string is not a reference at all and needs no entry, an example filename in
+   * a sub-agent's prompt copy included; core's engine header says why.
    */
   external: new Map()
 };

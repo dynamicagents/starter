@@ -2994,8 +2994,8 @@ describe("the sessions' GitHub token", () => {
 
 /**
  * A session sent back to a branch carries on the conversation that last worked
- * on it — see `./branches.ts` — so the one that answers a review is the one that
- * wrote the code.
+ * on it (see `src/agents/claude-coordinator/branches.ts`), so the one that
+ * answers a review is the one that wrote the code.
  */
 describe("going back to a branch", () => {
   const BRANCH = "claude-coordinator/abcde";

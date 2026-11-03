@@ -105,7 +105,7 @@ It has caught a real leak: a shared base class living in one agent's directory.
 ## Working here
 
 ```bash
-npm run check              # wrangler types, prettier, eslint, tsc, comment path refs
+npm run check              # wrangler types, prettier, eslint, tsc, comment paths (relative and rooted)
 npm test                   # vitest, inside real workerd
 npm run verify:isolation   # per-agent module graphs + size ceilings
 npx wrangler deploy --dry-run --outdir dist
@@ -198,7 +198,12 @@ changes a decision. Not what changed, not when, not what a previous version said
   specs", module counts, spec counts. Every one of these was wrong within a
   release. Name the thing, not how many there are.
 - **Cross-file references name a real path**, and a path in a comment is
-  checkable — so check it before you write it.
+  checkable — so `check` checks it, through `npm run verify:references`. That is
+  core's `da-verify-references`, and core is where what it reads is explained;
+  this repo scans what `references.config.mjs` says. Both classes are covered
+  now, a path from the repo root and a relative one, and the relative one is
+  what a comment in `test/` gets wrong: a sibling of the spec is not a sibling
+  of the module it tests.
 
 If a comment is longer than the code it explains, ask what decision it is
 protecting. Usually one paragraph of that is doing the work.

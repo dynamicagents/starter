@@ -9,15 +9,17 @@ import {
 } from "@dynamicagents/plugins/computer";
 import { repo } from "@dynamicagents/plugins/repo-github";
 import { browser } from "@dynamicagents/plugins/browser";
-import { activeRepo, type ActiveRepo } from "@/workspace/active-repo";
 import {
   gitmodulesOf,
+  sqlPoolStore,
   submoduleRepos,
   subtaskWorkspaces,
-  type SubtaskWorkspaces
-} from "@/workspace/subtask-workspace";
-import { sqlPoolStore } from "@/workspace/worktree-pool";
-import { worktreeSwitch } from "@/workspace/worktrees";
+  worktreeSwitch,
+  type SubtaskWorkspaces,
+  type WorktreeCopy
+} from "@dynamicagents/plugins/worktrees";
+import { SANDBOX_RECLAIM_MS } from "@/config";
+import { activeRepo, type ActiveRepo } from "@/workspace/active-repo";
 import {
   parentWorkspaceContext,
   SANDBOX_TOOLS,
@@ -90,7 +92,34 @@ export async function admitSession(env: Env, sandbox: string): Promise<void> {
 }
 
 /**
- * Where a writing session works, and what becomes of it — built from the
+ * What the worktrees say that names this agent's own tools: `claude_code`, its
+ * `continue`, and the tools a session needs opened first. Every other sentence
+ * about a worktree is `@dynamicagents/plugins/worktrees`' own.
+ */
+const WORKTREE_COPY: WorktreeCopy = {
+  noCheckout:
+    "there is no checkout in this workspace yet, so there is nothing to work " +
+    "on. Clone a repository with `repo_clone`, or open a scratchpad with " +
+    "`scratch_open`, before delegating.",
+  held: (branch) =>
+    `a worktree already holds ${branch}. Delegate with \`continue\` set to ` +
+    "it to add to that work, or name another branch.",
+  neverPushed: (branch) =>
+    `no worktree holds ${branch}, and it is on the remote in no repository: ` +
+    "it was never pushed, and the worktree that held it was released or " +
+    "deleted. Its commits are gone; delegate without `continue` to do the " +
+    "work again.",
+  kept: (branch, wip) =>
+    `Its work up to that point is kept on \`${branch}\`` +
+    (wip ? ", with what it had not committed in a WIP commit on top." : ".") +
+    ` Delegate again with \`continue\` set to \`${branch}\` to pick up from ` +
+    "there rather than start over.",
+  resume:
+    "`claude_code` with `continue` set to a branch puts a session back on it."
+};
+
+/**
+ * Where a writing session works, and what becomes of it, built from the
  * parent's context, which is what `prepare` and `settle` are handed.
  *
  * A fresh selection each time rather than the agent's own instance: this reads
@@ -113,8 +142,9 @@ export function sessionWorkspaces(ctx: PluginContext<Env>): SubtaskWorkspaces {
     active: activeRepo(ctx.storage),
     pool: sqlPoolStore(ctx.storage),
     // The tenant id is where this name lives; `./agent.ts` spells its own log
-    // prefix from the same place.
-    label: claudeCoordinator.tenant
+    // prefix from the same place. It also names a session's branch.
+    label: claudeCoordinator.tenant,
+    copy: WORKTREE_COPY
   });
 }
 
@@ -132,12 +162,14 @@ export const parentPlugins = (
   at: SandboxComputerConfig
 ): AgentPlugin<Env>[] => {
   const binding = env.CLAUDE_COORDINATOR_SANDBOX;
-  /** The writing sessions' worktrees — see `@/workspace/worktrees`. */
+  /** The writing sessions' worktrees: see `worktreeSwitch` in `@dynamicagents/plugins/worktrees`. */
   const worktrees = worktreeSwitch({
     active,
     pool: sqlPoolStore(ctx.storage),
     binding,
-    callerKey: ctx.callerKey
+    callerKey: ctx.callerKey,
+    reclaimMs: SANDBOX_RECLAIM_MS,
+    copy: WORKTREE_COPY
   });
   const sandbox = () => binding.getByName(at.sandboxName());
   const shell = sandboxShell(binding, at.sandboxName);

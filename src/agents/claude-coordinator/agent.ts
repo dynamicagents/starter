@@ -11,6 +11,14 @@ import type { SubAgentClass } from "@dynamicagents/core/subagent";
 import type { StepJob } from "@dynamicagents/core/workflow";
 import { computerWorkspace } from "@dynamicagents/plugins/computer";
 import { sandboxName } from "@dynamicagents/plugins/sandbox";
+import {
+  forgetWorktree,
+  idleWorktrees,
+  parseWorktreeRepo,
+  reconcileWorktrees,
+  slotOf,
+  sqlPoolStore
+} from "@dynamicagents/plugins/worktrees";
 import type { AgentToolLifecycleResult, AgentToolRunInfo } from "agents";
 import type { ContextConfig } from "agents/context";
 import type { LanguageModel, ToolSet } from "ai";
@@ -20,14 +28,7 @@ import { agentModel, transientChatError } from "@/model";
 import { activeRepo } from "@/workspace/active-repo";
 import { WORKSPACE_WRITERS } from "@/workspace/container";
 import { sweepIdleWorkspaces } from "@/workspace/lifecycle";
-import {
-  forgetWorktree,
-  idleWorktrees,
-  parseWorktreeRepo,
-  reconcileWorktrees,
-  slotOf,
-  sqlPoolStore
-} from "@/workspace/worktree-pool";
+
 import {
   ClaudeCoordinatorDiscoveryChild,
   ClaudeCoordinatorPlannerChild,
@@ -318,7 +319,7 @@ export class ClaudeCoordinatorAgent extends StepAgent<Env> {
    * **Reads left in a worktree stay there**: a person's follow-up is usually
    * about the same work, and moving them here would leave the model's last
    * `repo_worktree` answer describing a place they no longer are — see
-   * `@/workspace/worktrees`. Every worktree no session is in has its container
+   * `worktreeSwitch` in `@dynamicagents/plugins/worktrees`. Every worktree no session is in has its container
    * released — a backstop, since the pool releases one when its session
    * settles. A read starts it again.
    *

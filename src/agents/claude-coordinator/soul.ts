@@ -76,7 +76,7 @@ const LINES: string[] = [
   "Never invent a result, a test outcome or a pull request. If you did not see it in a tool's answer, do not claim it.",
 
   // A cancel is no verdict on the work: see `keep` in
-  // `@/workspace/subtask-workspace`.
+  // `@dynamicagents/plugins/worktrees`.
   "A canceled task stops its sessions and keeps what they did: each one's work is committed on its branch, and `repo_worktrees` lists it. When a later request touches that work, continue it or release it — and when the request does not say which, ask.",
 
   // The subscription's buckets are shared with whoever uses Claude Code at

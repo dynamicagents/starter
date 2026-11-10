@@ -58,7 +58,7 @@
     "node": ">=24"
   },
   "allowScripts": {
-    "@dynamicagents/plugins": true,
+    "github:dynamicagents/plugins": true,
     "esbuild": false,
     "fsevents": false,
     "sharp": false,

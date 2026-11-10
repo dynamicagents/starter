@@ -151,7 +151,7 @@ export interface ActiveCheckout {
    * Reused verbatim for a worktree's own clone rather than derived again: each
    * container has its own filesystem, so the same path collides with nothing, and
    * it is what lets the parent's tools move into a worktree at the paths they
-   * already use — see `@/workspace/worktrees`.
+   * already use: see `worktreeSwitch` in `@dynamicagents/plugins/worktrees`.
    */
   dir: string;
   /** The branch the parent is on, so a session starts from the same commit. */

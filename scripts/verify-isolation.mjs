@@ -78,7 +78,8 @@ const AGENTS = [
       plugin("sandbox"),
       plugin("repo-github"),
       plugin("scratch"),
-      plugin("claude-code")
+      plugin("claude-code"),
+      plugin("worktrees")
     ],
     // Measured 8668 KiB, and nearly all of it is Think and the `agents` SDK:
     // see "What every agent carries" above.
@@ -104,7 +105,10 @@ const AGENTS = [
     // the shared base has grown an import that belongs in a plugin — which
     // would also put an Anthropic credential path in an agent that has no
     // business with one.
-    forbidden: [plugin("claude-code")],
+    //
+    // `/worktrees` is the coordinator's writing sessions' and only theirs: this
+    // agent installs `/repo-github`, which it builds on, and must not carry it.
+    forbidden: [plugin("claude-code"), plugin("worktrees")],
     // Measured 9439 KiB: generic's, plus the plugins this agent installs and
     // the `/alarm` and `/job` its sandbox runs on.
     maxBytes: 10_430_000

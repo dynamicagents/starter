@@ -22,15 +22,15 @@ import {
 import { CLAUDE_CODE_SESSION } from "@/config";
 import { transientChatError } from "@/model";
 import { sandboxShell } from "@/workspace/container";
+import { isBranchName } from "@dynamicagents/plugins/repo-github";
 import {
   placementRepo,
   readSubmodules,
   type RunRef,
   type SessionPlace,
   type SubtaskWorkspaces
-} from "@/workspace/subtask-workspace";
+} from "@dynamicagents/plugins/worktrees";
 import { activeRepo } from "@/workspace/active-repo";
-import { isBranchName } from "@/workspace/worktree-pool";
 import { branchSession, recordBranchRun, type BranchScope } from "./branches";
 import {
   createPlan,
@@ -234,6 +234,33 @@ async function releaseUnused(
 }
 
 /**
+ * Refuse a `continue` or `branch` this tool cannot use, before anything is
+ * claimed: a name git would not take, or both at once. An empty name is no
+ * name, as {@link claimSession} reads it.
+ */
+function refuseBranchInput(input: WriteInput): void {
+  if (input.continue && input.branch) {
+    throw new Error(
+      "claude_code: pass `continue` to add to a branch, or `branch` to name a new one, not both."
+    );
+  }
+  if (input.continue && !isBranchName(input.continue)) {
+    throw new Error(
+      `claude_code: \`continue\` names ${JSON.stringify(input.continue)}, which is ` +
+        "not a branch name. Pass the branch to add to (the one an earlier " +
+        "session's report named, or a pull request's head branch), or leave " +
+        "it out to start a new one."
+    );
+  }
+  if (input.branch && !isBranchName(input.branch)) {
+    throw new Error(
+      `claude_code: \`branch\` names ${JSON.stringify(input.branch)}, which ` +
+        "git would not take as a branch name. Pass another, or leave it out."
+    );
+  }
+}
+
+/**
  * A writing session's worktree, on the branch its input names or one of its
  * own — in the worktree `near` names when that one is free.
  */
@@ -261,7 +288,7 @@ export async function claimSession(
  * What a writing session leaves: a run that did not complete — failed or
  * canceled — keeps its work where a `continue` will find it, and every run's
  * worktree is recorded and freed. One whose work could not be secured is held
- * instead. See `keep` in `@/workspace/subtask-workspace`.
+ * instead. See `keep` in `subtaskWorkspaces`, `@dynamicagents/plugins/worktrees`.
  *
  * A session that worked on a branch takes the parent's reads with it, so the
  * report and the files it describes are in front of the parent together. A
@@ -309,14 +336,10 @@ export async function prepareWriter(
   ctx: SubAgentPrepareContext<WriteInput, Env>,
   workspaces: SubtaskWorkspaces = sessionWorkspaces(ctx.parent)
 ): Promise<Record<string, unknown>> {
+  refuseBranchInput(ctx.input);
   const plan = ctx.input.plan;
   let planned: PlannedSession | undefined;
   if (plan === undefined && ctx.input.continue) {
-    if (ctx.input.branch) {
-      throw new Error(
-        "claude_code: pass `continue` to add to a branch, or `branch` to name a new one — not both."
-      );
-    }
     return await placeOnBranch(ctx, ctx.input.continue, workspaces);
   }
   if (plan !== undefined) {
@@ -388,10 +411,10 @@ async function placeOnBranch(
 
 /**
  * Which of this caller's runs on a branch name are *this* branch's: the ones
- * placed where this session will be. Read the way `resolve` in
- * `@/workspace/subtask-workspace.ts` places the session — a worktree of the
- * selected repository's root, or the parent's own workspace when the selection
- * names no repository. See {@link BranchScope}.
+ * placed where this session will be. Read the way `resolve` places the session
+ * (see `subtaskWorkspaces` in `@dynamicagents/plugins/worktrees`): a worktree
+ * of the selected repository's root, or the parent's own workspace when the
+ * selection names no repository. See {@link BranchScope}.
  */
 function branchScope(parent: {
   storage: DurableObjectStorage;
@@ -1293,7 +1316,7 @@ abstract class ClaudeCodeRun extends SubAgent<Env> {
    *
    * Nothing is discarded for a session stopped from outside: it did not choose
    * what it left, and whoever stopped it decides. `keep` in
-   * `@/workspace/subtask-workspace` commits it, and a discard here would race
+   * `@dynamicagents/plugins/worktrees` commits it, and a discard here would race
    * that commit and lose the work it exists to keep.
    */
   async #report(

@@ -101,16 +101,15 @@ import {
   type SweptNamespace
 } from "@/workspace/lifecycle";
 import { SCRATCH_REPO } from "@/workspace/scratch";
-import { sqlPoolStore, worktreeRepo } from "@/workspace/worktree-pool";
 import { gitIdentity } from "@/workspace/git-identity";
 import { sandboxEnv } from "@/workspace/container";
 import {
-  gitmodulesOf,
-  submoduleRepos,
+  sqlPoolStore,
+  worktreeRepo,
   type KeptWork,
   type SessionPlace,
   type SubtaskWorkspaces
-} from "@/workspace/subtask-workspace";
+} from "@dynamicagents/plugins/worktrees";
 
 /**
  * `claude-coordinator`'s wiring, pinned.
@@ -3459,80 +3458,6 @@ describe("the checkouts a caller has recorded", () => {
       "acme/other",
       "/workspace/Acme/Super"
     ]);
-  });
-});
-
-/**
- * A superproject's submodules, read from the sandbox's files — `gitmodulesOf`
- * says why as a file, and why a failed read records nothing.
- */
-describe("a checkout's .gitmodules", () => {
-  /** A sandbox as the file read sees it: `null` is a file that is not there. */
-  const sandboxHolding = (
-    files: Record<string, string | { throws: unknown }>
-  ) => ({
-    readFile: async (path: string) => {
-      const held = files[path];
-      if (held === undefined) return null;
-      if (typeof held !== "string") throw held.throws;
-      return new TextEncoder().encode(held);
-    }
-  });
-
-  const read = (files: Record<string, string | { throws: unknown }>) =>
-    gitmodulesOf(sandboxHolding(files), "/workspace/super");
-
-  it("is the file", async () => {
-    expect(await read({ "/workspace/super/.gitmodules": "[submodule]" })).toBe(
-      "[submodule]"
-    );
-  });
-
-  /**
-   * The two nothings, which must not collapse into one. "No submodules" is
-   * recorded; "could not read" is not, or a transient fault would erase a
-   * superproject's submodules from the selection and send the next session to
-   * clone the root alone.
-   */
-  it("is empty when the repository has no submodules", async () => {
-    expect(await read({})).toBe("");
-  });
-
-  it("is unknown when the file is there and will not read", async () => {
-    expect(
-      await read({
-        "/workspace/super/.gitmodules": { throws: new Error("EIO") }
-      })
-    ).toBeUndefined();
-  });
-
-  it("is unknown when the sandbox cannot be reached at all", async () => {
-    const text = await gitmodulesOf(
-      {
-        readFile: async () => {
-          throw new Error("no such object");
-        }
-      },
-      "/workspace/super"
-    );
-    expect(text).toBeUndefined();
-  });
-
-  /** The parse that turns the file into the repositories a session may work in. */
-  it("names the repositories a superproject carries", () => {
-    expect(
-      submoduleRepos(
-        [
-          '[submodule "core"]',
-          "\tpath = core",
-          "\turl = https://github.com/acme/core.git",
-          '[submodule "web"]',
-          "\tpath = web",
-          "\turl = ../web.git"
-        ].join("\n"),
-        "https://github.com/acme/super"
-      )
-    ).toEqual(["acme/core", "acme/web"]);
   });
 });
 

@@ -1,9 +1,7 @@
 import { defineConfig } from "vitest/config";
 import { cloudflareTest } from "@cloudflare/vitest-plugin";
 import path from "node:path";
-// The realm-neutral slice, deliberately. This file runs in **Node**, and the
-// `/testing` barrel pulls in `cloudflare:test` and `vitest`, which fails at load
-// before a single test runs.
+// Runs in Node: the realm-neutral slice, never the `/testing` barrel.
 import {
   GATEKEEPER_ORIGIN,
   TEST_AGENT_PRIVATE_JWK

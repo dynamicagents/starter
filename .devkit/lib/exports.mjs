@@ -56,6 +56,7 @@
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import path from "node:path";
 import { section } from "./config.mjs";
+import { lex } from "./lexer.mjs";
 import { readManifest } from "./repo.mjs";
 
 /** The section of the repository's config this checker reads. */
@@ -75,58 +76,48 @@ const NODE_REALM = /^node:/;
 const TEST_ONLY = [NODE_REALM, /^undici$/, /^cloudflare:test$/, /^vitest$/];
 
 /**
- * Drop comments, so prose is never mistaken for code.
+ * Where a module specifier may stand, as the end offsets of what can introduce
+ * one.
  *
- * The scan below is a regex over text rather than an AST walk, and a doc comment
- * is free to *discuss* an import — these checks are documented with the
- * specifiers they were written for. Without this, explaining a defect in a
- * comment is enough to re-report it, which is the fastest way to make a publish
- * gate something people learn to override.
+ * `[^\w$.]` before the keyword is what keeps `Array.from("x")` and a
+ * `myimport` out, the `.` included: a method call is not an import. The trailing
+ * `\s*\(?\s*` carries the scan across `import(` and across a newline, which is
+ * where a long `import {\n…\n} from "x"` puts its specifier.
  *
- * String-aware, because `"image/*"` is a real value in this train and a naive
- * strip would eat from there to the next `*​/`. Line comments are only recognised
- * at the start of a line, which is where every one in emitted output lives and
- * where a regex literal never is — that avoids having to lex regexes to tell
- * `/\/\//` from a comment.
+ * `require` is here although these packages are ESM: a `createRequire` call in
+ * emitted output reaches a package a consumer still has to install, and a gate
+ * that reads only `import` would not see it.
  */
-export function stripComments(source) {
-  let out = "";
-  let quote = null;
-  for (let i = 0; i < source.length; i += 1) {
-    const c = source[i];
-    if (quote) {
-      out += c;
-      if (c === "\\") {
-        out += source[++i] ?? "";
-      } else if (c === quote) {
-        quote = null;
-      }
-      continue;
-    }
-    if (c === '"' || c === "'" || c === "`") {
-      quote = c;
-      out += c;
-      continue;
-    }
-    if (c === "/" && source[i + 1] === "*") {
-      const end = source.indexOf("*/", i + 2);
-      i = end === -1 ? source.length : end + 1;
-      continue;
-    }
-    if (c === "/" && source[i + 1] === "/" && /(^|\n)[ \t]*$/.test(out)) {
-      const end = source.indexOf("\n", i);
-      i = end === -1 ? source.length : end - 1;
-      continue;
-    }
-    out += c;
-  }
-  return out;
-}
+const SPECIFIER_POSITION = /(?:^|[^\w$.])(?:from|import|require)\s*\(?\s*/g;
 
-const importsIn = (source) =>
-  [...stripComments(source).matchAll(/(?:from|import)\s*\(?\s*"([^"]+)"/g)].map(
-    (match) => match[1]
+/**
+ * Every module specifier a file names, read from its code and nowhere else.
+ *
+ * Specifiers come from the lexer's string literals rather than from a regex over
+ * the text, and that is not a refinement: a text scan reads a specifier named in
+ * a comment or quoted inside a prompt string as an import, and loses every real
+ * import below a regex literal containing `/*`, which is how a module with an
+ * undeclared dependency passes a publish gate. `lib/lexer.mjs` holds what each
+ * of those costs.
+ *
+ * A string is a specifier when the code immediately before it can introduce one.
+ * The positions are collected in one pass, so this stays linear in the size of
+ * the file rather than quadratic in the number of strings in it.
+ *
+ * An interpolated template is skipped: `import(`./${name}.js`)` names no one
+ * module, so there is nothing for any of these checks to resolve or declare.
+ */
+export function importsIn(source) {
+  const { code, strings } = lex(source);
+  const positions = new Set(
+    [...code.matchAll(SPECIFIER_POSITION)].map(
+      (match) => match.index + match[0].length
+    )
   );
+  return strings
+    .filter((string) => !string.interpolated && positions.has(string.start))
+    .map((string) => string.value);
+}
 
 /**
  * Everything reachable from `entry` through relative imports: the bare
@@ -175,10 +166,11 @@ function* walk(dir) {
 /**
  * A specifier that could actually be a package.
  *
- * A second line of defence behind {@link stripComments}: the scan is a regex
- * over text, not an AST walk, so anything that survives and does not even have
- * the shape of a package name is prose rather than a dependency. Reporting one
- * as undeclared is how a publish gate earns a reputation for crying wolf.
+ * A second line of defence behind {@link importsIn}: a specifier is whatever a
+ * module author wrote between the quotes, so anything that does not even have
+ * the shape of a package name is a path or a value rather than a dependency.
+ * Reporting one as undeclared is how a publish gate earns a reputation for
+ * crying wolf.
  */
 const PACKAGE_SPECIFIER =
   /^(@[a-z0-9-~][a-z0-9-._~]*\/)?[a-z0-9-~][a-z0-9-._~]*/i;

@@ -41,21 +41,3 @@ export function readManifest(root) {
     });
   }
 }
-
-/**
- * Print findings and exit, which is every entry script's whole body.
- *
- * `stderr` for the failures *and* the summary, because some of these run from
- * `prepack`, where `npm pack --json` expects stdout to carry nothing but its
- * own JSON. A checker that only ever runs from `check` prints its summary to
- * stdout through `pass`.
- */
-export function report({ failures, headline, summary }) {
-  if (failures.length > 0) {
-    console.error(`\n✘ ${headline}\n`);
-    for (const failure of failures) console.error(`  • ${failure}`);
-    console.error("");
-    process.exit(1);
-  }
-  console.error(`✓ ${summary}`);
-}

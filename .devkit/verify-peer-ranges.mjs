@@ -41,9 +41,9 @@ if (!process.argv.includes("--latest")) process.exit(0);
  * published somewhere else, and reports it confidently.
  */
 const view = promisify(execFile);
-const latestOf = async (name) => {
+const latestOf = async (peer) => {
   try {
-    const { stdout } = await view("npm", ["view", name, "version"], {
+    const { stdout } = await view("npm", ["view", peer, "version"], {
       encoding: "utf8"
     });
     return stdout.trim();

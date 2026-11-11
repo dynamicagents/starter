@@ -1,18 +1,19 @@
 {
-  "tree": "ddb7478dc1abb3f39e5efe86f841c6eb75d5db9a23959e14536835d5475f898f",
+  "tree": "18f058cfd4f9970df95f7b7c845899fe720678b330cba4338129e05430e1a0ac",
   "files": {
     "lib/config.mjs": "d00f7855b77c8c695d5187175bcb9cba2b53022163ae645e548820d98f8a3cce",
-    "lib/exports.mjs": "c6161efacb3499e47acf8eb67f4bbf06fb14b243439c0202979039c6014825fc",
+    "lib/exports.mjs": "bf380b0fc1e3b5a1c34a25d4720dada188d12225da4eb7098484689dba6a1d1f",
     "lib/hash.mjs": "517f9e6c4940d7ab216cfda41c50bf570a53e993d5b94a809e2ddc253de3dadd",
+    "lib/lexer.mjs": "114cc9aa5ea92969794ca0816c54a60488971cf0edd19ded01cb579505deb353",
     "lib/link-local.mjs": "4cd34fda55cdf2ac753ee34e41606838b3cbde6c83555f6612331dba5e9e6550",
     "lib/peer-ranges.mjs": "008e9b7f047e2db00d7c5b970af08ab0bae28ce89cc6e5306047fcd2add26f38",
-    "lib/references.mjs": "964fe210da1165592e42e607913105040b85b07c987904857decea1543447c19",
-    "lib/repo.mjs": "42190c917b74a8271c8ee1fab8134727239ac16818411b75faf21ba95037824e",
+    "lib/references.mjs": "e831a939db0614c4ab17abd8beb33b9b3a579dc77b3853fbc8592fded16ae1d8",
+    "lib/repo.mjs": "277130bec3d0bbe82e5613f865d0d9c9f42adb0fd639b533e4c0343f91205351",
     "lib/runtime-types.mjs": "1735dc2980a893bb133b96163a7647b2da0ef7c2792290eb293dd298fe80de44",
     "link-local.mjs": "45d46c23f50ae340ab4c391b2aa46a2f918d3a7c4c382d91f1d289b0aac8d230",
     "verify-devkit.mjs": "d761a1427d63f1707dbddd33734ee0d29a79b1e56a0615dccfc3106ddaaf0a6b",
     "verify-exports.mjs": "ff6595d3c76067d8bb76645b8348d3573739afc261580e2024ed64a23daff583",
-    "verify-peer-ranges.mjs": "3603f87521a497387dfcbaab0978b00e076d2c4815b783ebfd513f45c9b0ca99",
+    "verify-peer-ranges.mjs": "117fec326078bebcf4dbb1f5febfd8bc62f93277c5688cde0a2e14a398007c4f",
     "verify-references.mjs": "484d8b464d4f1955cb5303b51f1b7aa0b4249e435776560b20ddfeb993dba5bd",
     "verify-runtime-types.mjs": "32a2f38e9636061e5a100c7c6108c7922ee242c29db05c1a76a78f5c9ca9d996"
   }

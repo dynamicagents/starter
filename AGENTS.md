@@ -199,11 +199,12 @@ changes a decision. Not what changed, not when, not what a previous version said
   release. Name the thing, not how many there are.
 - **Cross-file references name a real path**, and a path in a comment is
   checkable — so `check` checks it, through `npm run verify:references`. That is
-  core's `da-verify-references`, and core is where what it reads is explained;
-  this repo scans what `references.config.mjs` says. Both classes are covered
-  now, a path from the repo root and a relative one, and the relative one is
-  what a comment in `test/` gets wrong: a sibling of the spec is not a sibling
-  of the module it tests.
+  the devkit's checker, vendored into `.devkit/` from dev-agents'
+  `packages/devkit`, which is where what it reads is explained; this repo scans
+  what the `references` section of `devkit.config.mjs` says. Both classes are
+  covered now, a path from the repo root and a relative one, and the relative
+  one is what a comment in `test/` gets wrong: a sibling of the spec is not a
+  sibling of the module it tests.
 
 If a comment is longer than the code it explains, ask what decision it is
 protecting. Usually one paragraph of that is doing the work.

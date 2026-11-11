@@ -10,3 +10,8 @@ worker-configuration.d.ts
 # AGENTS.md, which CLAUDE.md points at, is still checked.
 CLAUDE.md
 .claude/
+
+# A vendored copy, identified by a content hash in `.devkit/manifest.json`.
+# `prettier --write .` would rewrite it and break that hash; the source is
+# `packages/devkit/src` in dev-agents.
+.devkit/

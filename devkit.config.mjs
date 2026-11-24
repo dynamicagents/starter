@@ -1,9 +1,8 @@
 /**
  * What the devkit checkers read here, a section per checker.
  *
- * The checkers themselves are `.devkit/`, vendored from dev-agents'
- * `packages/devkit`; that package's README is the home of what each one fails
- * on and of every key below. This file is only what is this repo's.
+ * The checkers themselves are the `@dynamicagents/devkit` devDependency; its
+ * README is the home of what each one fails on and of every key below. This file is only what is this repo's.
  */
 export default {
   references: {

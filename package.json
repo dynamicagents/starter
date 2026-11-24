@@ -24,8 +24,8 @@
     "test:record": "RECORD=1 vitest run recorded.spec.ts",
     "verify:isolation": "node scripts/verify-isolation.mjs",
     "verify:container-env": "node scripts/verify-container-env.mjs",
-    "verify:references": "da-verify-references",
-    "link:local": "node scripts/link-local.mjs",
+    "verify:references": "devkit-verify-references",
+    "link:local": "devkit-link-local",
     "cf": "node scripts/cf.mjs",
     "prepare": "husky"
   },
@@ -44,6 +44,7 @@
   },
   "devDependencies": {
     "@cloudflare/vitest-plugin": "^1.4.4",
+    "@dynamicagents/devkit": "^0.1.0",
     "@types/node": "^26.5.1",
     "esbuild": "^0.28.2",
     "eslint": "^10.10.0",

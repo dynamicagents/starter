@@ -7,9 +7,14 @@ on:
   push:
     branches:
       - main
+  # Every pull request, whatever it targets. A stacked one, based on a branch
+  # that is still open, targets its parent rather than `main`, and a
+  # `branches: [main]` filter reports "no checks" on it instead of failing
+  # loudly. Nor does the filtered trigger catch up when that parent merges: the
+  # retarget GitHub performs then fires `edited`, which the default event list
+  # leaves out, so the branch can reach `main` with its suite never having run.
+  # g2a-protocol's test workflow is unfiltered for the same reason.
   pull_request:
-    branches:
-      - main
 
 jobs:
   test:
@@ -22,7 +27,8 @@ jobs:
 
       - uses: actions/setup-node@v7
         with:
-          node-version: 24
+          # One source of truth with local dev; `engines` requires >=24.
+          node-version-file: .nvmrc
 
       # From the committed lockfile, never from a sibling checkout.
       # `npm run link:local` is a development convenience, and a build that only

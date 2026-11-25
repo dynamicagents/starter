@@ -7,6 +7,15 @@ foundation) and
 capabilities) into a deployable Worker, and `agents.loopingai.org` runs from its
 `main`. A project of your own starts at `npm create dynamicagents`.
 
+**Read this with the workspace's `AGENTS.md`.** This file is what is specific to
+starter. The rules that span the train live one level up, in
+[`dev-agents`](https://github.com/dynamicagents/dev-agents/blob/main/AGENTS.md),
+the workspace these repositories are submodules of: where a change goes, how a
+release reaches npm, how a pull request and an issue are handled, and the house
+rules for prose and comments. Consult it as the general reference rather than
+assuming this file is all of it, because a session started inside this repository
+may never be shown it: each submodule is its own repository root.
+
 The single most useful thing to know: **almost nothing here is framework.** The
 turn is `@cloudflare/think`'s; the A2A task, the workflow that runs its steps,
 the step job, delegation to sub-agents — awaited or in the background — and the

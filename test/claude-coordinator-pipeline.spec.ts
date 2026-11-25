@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { env } from "cloudflare:workers";
 import { introspectWorkflowInstance } from "cloudflare:test";
-import type { HitlRequestData } from "@dynamicagents/g2a-protocol";
+import type { HitlRequestData } from "@dynamicagents/core/a2a";
 import {
   createAgentHarness,
   TERMINAL_CALLBACK_STATES,

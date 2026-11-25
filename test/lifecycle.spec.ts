@@ -6,7 +6,7 @@ import {
   type AgentHarness,
   type CapturedCallback
 } from "@dynamicagents/core/testing";
-import type { HitlRequestData } from "@dynamicagents/g2a-protocol";
+import type { HitlRequestData } from "@dynamicagents/core/a2a";
 import { copy } from "@/copy";
 import worker, { waits, type TestEnv } from "./worker";
 

@@ -73,15 +73,13 @@ live](#where-the-endpoints-live). Register whatever path this deployment actuall
 
 > **The default models need a paid Workers plan**, or prepaid AI Gateway credits. Every
 > agent takes its model from [`src/config.ts`](src/config.ts), and those are not served
-> on Workers Free. On the free tier, point each agent's `modelId` at one that is, and that
-> supports function calling. `claude-coordinator`'s is the exception: its `modelId` is
-> an AI Gateway catalog slug rather than a Workers AI model, so a paid Workers plan does
+> on Workers Free. `claude-coordinator`'s is the exception: its `modelId` is an AI
+> Gateway catalog slug rather than a Workers AI model, so a paid Workers plan does
 > nothing for it and AI Gateway credits are what it spends — which also means the
 > `default` gateway must not have **Require provider credentials** switched on with no
 > key stored for the provider, or the call is refused with `400`.
 
-> **Browser Rendering needs a paid Workers plan.** On the free tier, remove `browser()`
-> from the agents' `plugins.ts` and the `browser` binding from `wrangler.jsonc`.
+> **Browser Rendering needs a paid Workers plan.**
 
 > **The two coders' containers need a paid plan and a running Docker daemon** — Docker
 > Desktop on macOS and Windows, the Docker CLI **and engine** on Linux. `npm run deploy`

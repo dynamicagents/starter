@@ -23,10 +23,19 @@ Durable Object bodies are core's. What lives here is what core deliberately
 refuses to ship — the words, the config values, which steps each tenant's task
 runs, which plugins each agent installs, and where each sub-agent works.
 
-Each tenant is three classes in `src/agents/<tenant>/`: a task host
-(`host.ts`, core's `TaskHost`), which owns the A2A task; a pipeline (`workflow.ts`,
-core's `TaskWorkflow`), which runs it as steps; and a step agent (`agent.ts`,
-core's `StepAgent`), which runs a step's job. The mechanism is in core's README.
+A tenant's task runs on core's roles, one file each in `src/agents/<tenant>/`: a
+task host (`host.ts`, core's `TaskHost`), which owns the A2A task; a pipeline
+(`workflow.ts`, core's `TaskWorkflow`), which runs it as steps; and a step agent
+(`agent.ts`, core's `StepAgent`), which runs a step's job. The mechanism is in
+core's README.
+
+Those roles are not all a tenant exports. Every tenant also exports the
+sub-agents its steps delegate to (`children.ts`), and one whose work happens in
+a checkout exports its sandbox (`sandbox.ts`) and the entrypoint its container's
+egress is intercepted to (`egress.ts`). Every one of those is a Durable Object
+or entrypoint class the Worker entry has to export by name, so mounting a tenant
+takes a line in `src/index.ts` for each of them; "Adding and removing agents"
+below is the home of the name each one takes.
 
 If you find yourself writing durable-execution logic in this repo, that is the
 signal it belongs in core instead. If you find yourself writing the Durable

@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { env } from "cloudflare:workers";
 
+// Why this constant comes from the SDK and not through core: test/tenants.spec.ts.
 import { AGENT_CARD_PATH } from "@a2a-js/sdk";
 import { AGENT_ORIGIN, createAgentHarness } from "@dynamicagents/core/testing";
 import {

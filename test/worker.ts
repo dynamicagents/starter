@@ -238,6 +238,17 @@ export interface WaitCall {
  * Every wait so far, in call order. The Durable Objects share this module with
  * the spec, which is also how `interceptGatekeeper`'s `fetch` stub catches their
  * callbacks.
+ *
+ * **What crosses is a field each side polls, never a promise either side
+ * awaits.** A spec and a Durable Object are different I/O contexts, and handing
+ * a promise built in one to the other takes workerd down on teardown with
+ * `Promise callback destroyed itself`, a process crash that arrives after the
+ * awaits have apparently worked. Reading a field is not I/O, so each side only
+ * ever awaits a promise of its own making: the tool below mutates its
+ * `WaitCall` in place and a spec polls it (`./lifecycle.spec.ts`'s `until`),
+ * and a spec that reaches into an object awaits an RPC it issued itself. So
+ * this rendezvous never becomes a promise, a deferred or an emitter a spec
+ * awaits, however much tidier that would read.
  */
 export const waits: WaitCall[] = [];
 

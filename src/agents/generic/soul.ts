@@ -3,8 +3,10 @@ import { ASK_GUIDANCE } from "@/copy";
 /**
  * The agent's soul — its identity and operating rules.
  *
- * Core ships no prompt copy at all, deliberately: this is the one part of an
- * agent nobody else can write for you.
+ * Core ships no default for the words an agent speaks in, deliberately: this is
+ * the one part of an agent nobody else can write for you. Where that line falls,
+ * and what text core's own tools carry regardless, is core's `AGENTS.md`, under
+ * "The line core does not cross".
  *
  * **Nothing about a capability belongs here.** Every installed plugin tells the
  * model what it can do in a context block of its own, and each sub-agent in its

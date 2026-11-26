@@ -3,6 +3,12 @@ import { describe, it, expect, beforeAll, afterAll, vi } from "vitest";
 // seeded in vitest.config.ts. From `cloudflare:workers`, not `cloudflare:test` —
 // the latter's `env` is deprecated.
 import { env } from "cloudflare:workers";
+// The A2A protocol's own constants, reached from the SDK rather than through
+// `@dynamicagents/core/a2a`, which is where this repo names the rest of the wire
+// contract: core consumes both internally and re-exports neither. That import is
+// the whole reason `@a2a-js/sdk` is declared here, and it is a devDependency
+// because nothing under `src/` imports it. Core exporting them is what would
+// retire both the import and the declaration.
 import { AGENT_CARD_PATH, A2A_PROTOCOL_VERSION } from "@a2a-js/sdk";
 import {
   AGENT_ORIGIN,

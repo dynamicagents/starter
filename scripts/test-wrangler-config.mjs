@@ -44,7 +44,9 @@ const SOURCE = "wrangler.jsonc";
  * Write the pool's configuration and answer the path to pass as `configPath`.
  *
  * @param root The directory holding `wrangler.jsonc`.
- * @returns The generated file, relative to `root`, as the pool wants it.
+ * @returns The generated file's absolute path. Absolute rather than relative
+ *   because the pool resolves a relative one against Vitest's root, which is
+ *   this directory today and need not stay that way.
  */
 export function writeTestWranglerConfig(root) {
   const { rawConfig } = experimental_readRawConfig({
@@ -56,9 +58,7 @@ export function writeTestWranglerConfig(root) {
     // has in production. Only their image build is refused.
     dev: { ...rawConfig.dev, enable_containers: false }
   };
-  writeFileSync(
-    path.join(root, GENERATED),
-    `${JSON.stringify(forTests, null, 2)}\n`
-  );
-  return `./${GENERATED}`;
+  const generated = path.join(root, GENERATED);
+  writeFileSync(generated, `${JSON.stringify(forTests, null, 2)}\n`);
+  return generated;
 }

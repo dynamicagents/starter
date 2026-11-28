@@ -168,3 +168,8 @@ secrets
 
 # The sandbox daemon bundle, built before every deploy: scripts/build-daemon.mjs
 /container/
+
+# The Wrangler config the test pool reads, rewritten from `wrangler.jsonc` on
+# every run: scripts/test-wrangler-config.mjs says why it exists. Generated
+# rather than committed, because regenerating is what stops it drifting.
+/wrangler.test.json

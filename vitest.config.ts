@@ -9,18 +9,22 @@ import {
 // Node-realm half of the VCR harness: it reaches `node:fs` to read and write
 // cassettes, which workerd has no equivalent of.
 import { createVcr, recordFromEnv } from "@dynamicagents/core/testing/node";
+// Writes the configuration the pool reads, derived from `wrangler.jsonc` on
+// every run. That module is the home of why the pool needs one of its own.
+import { writeTestWranglerConfig } from "./scripts/test-wrangler-config.mjs";
 
 /**
  * The whole suite runs in the Workers runtime (workerd via miniflare) through a
  * single `cloudflareTest()` pool.
  *
- * The pool reads `wrangler.jsonc` directly (compat settings, the AI binding, and
- * the agent DOs with their SQLite migration) so this config cannot drift from
- * it; secrets are supplied via `process.env` below. Its `main` is
- * `test/worker.ts`, which is this deployment's Worker plus each agent on a
- * scripted model — Workers AI has no local mode, so a real model cannot finish
- * a turn here.
+ * The pool reads a configuration derived from `wrangler.jsonc` (compat settings,
+ * the AI binding, and the agent DOs with their SQLite migration), regenerated
+ * here before the pool starts so it cannot drift from the real one; secrets are
+ * supplied via `process.env` below. Its `main` is `test/worker.ts`, which is
+ * this deployment's Worker plus each agent on a scripted model: Workers AI has
+ * no local mode, so a real model cannot finish a turn here.
  */
+const wranglerConfigPath = writeTestWranglerConfig(import.meta.dirname);
 
 // Test defaults for the required secrets. Real env vars — from CI or the shell —
 // take precedence via `??=`. The pool sources `secrets.required`
@@ -81,7 +85,7 @@ export default defineConfig({
   },
   plugins: [
     cloudflareTest({
-      wrangler: { configPath: "./wrangler.jsonc" },
+      wrangler: { configPath: wranglerConfigPath },
       main: "./test/worker.ts",
       // Required, not just the default. Workers AI has no local execution mode
       // (Miniflare always proxies `AI` through a remote-connection worker), and

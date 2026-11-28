@@ -43,7 +43,7 @@
     "zod": "^4.6.5"
   },
   "devDependencies": {
-    "@cloudflare/vitest-plugin": "^1.4.4",
+    "@cloudflare/vitest-plugin": "^1.9.2",
     "@dynamicagents/devkit": "^0.1.0",
     "@types/node": "^26.5.1",
     "esbuild": "^0.28.2",
